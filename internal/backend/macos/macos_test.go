@@ -3,6 +3,8 @@ package macos
 import (
 	"context"
 	"flag"
+	"fmt"
+	"io"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -54,7 +56,7 @@ func TestBuildRunArgsGolden(t *testing.T) {
 	} {
 		s := base
 		c.mod(&s)
-		args, err := BuildRunArgs(s, "/usr/local/libexec/sandboxd")
+		args, err := BuildRunArgs(s, "/usr/local/libexec/sandboxd", "0123456789abcdef")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +69,7 @@ func TestBuildRunArgsGolden(t *testing.T) {
 // An allowlist this backend cannot enforce is refused, never rendered open.
 func TestBuildRunArgsRefusesAnAllowlist(t *testing.T) {
 	s := backend.Spec{ID: "sbx_1", Image: "img", Network: api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com"}}}
-	if _, err := BuildRunArgs(s, "/agent"); err == nil {
+	if _, err := BuildRunArgs(s, "/agent", "me"); err == nil {
 		t.Fatal("an allowlist was rendered")
 	}
 }
@@ -96,6 +98,21 @@ exec)
 rm)
   shift # --force
   rm -rf "$FAKE_ROOT/$1" ;;
+image)
+  # The runtime's image store, one name a line: run adds what it runs, pull
+  # adds, delete removes and fails on a name it does not have.
+  sub=$1; shift; db="$FAKE_ROOT/.images"; touch "$db"
+  case "$sub" in
+  ls)
+    printf '['; sep=''
+    while read -r n; do printf '%s{"configuration":{"name":"%s"}}' "$sep" "$n"; sep=','; done < "$db"
+    printf ']\n' ;;
+  pull) grep -qxF "$1" "$db" || echo "$1" >> "$db" ;;
+  delete)
+    [ "$1" = --force ] && shift
+    grep -qxF "$1" "$db" || { echo "image $1 not found" >&2; exit 1; }
+    grep -vxF "$1" "$db" > "$db.new" || true; mv "$db.new" "$db" ;;
+  esac ;;
 esac
 `
 
@@ -148,7 +165,7 @@ func TestConformanceThroughAFakeRuntime(t *testing.T) {
 	t.Setenv("FAKE_ROOT", roots)
 	t.Setenv("FAKE_AGENT", agent)
 
-	be, err := New(Config{Container: script, Agent: agent, Logf: t.Logf})
+	be, err := New(Config{Container: script, Agent: agent, Logf: t.Logf, Owner: "me"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +194,7 @@ func TestBuildRunArgsCarryNoEnvironmentValue(t *testing.T) {
 	const secret = "s3cret-value-in-env"
 	s := backend.Spec{ID: "sbx_0123456789abcdef", Image: "img:1", Env: map[string]string{"API_TOKEN": secret},
 		Network: api.NetworkPolicy{Mode: api.NetworkNone}}
-	args, err := BuildRunArgs(s, "/agent")
+	args, err := BuildRunArgs(s, "/agent", "me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,8 +205,10 @@ func TestBuildRunArgsCarryNoEnvironmentValue(t *testing.T) {
 
 // The runtime is shared with whatever else the user runs in it, so this
 // backend removes only what it started: on startup, the containers carrying
-// its label that an earlier sandboxd left; afterwards, only ids it created. A
-// reference to someone's `postgres` never becomes a `container rm`.
+// its own owner label that an earlier run of it left; afterwards, only ids it
+// created. The runtime is shared by every sandboxd on the Mac, so a sandbox
+// another one is running, and one from a build before owner labels, are left
+// alone. A reference to someone's `postgres` never becomes a `container rm`.
 func TestOnlyItsOwnContainersAreRemoved(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("a shell script stands in for the runtime")
@@ -200,12 +219,15 @@ func TestOnlyItsOwnContainersAreRemoved(t *testing.T) {
 	os.WriteFile(script, []byte(`#!/bin/sh
 echo "$*" >> "`+logf+`"
 case "$1" in
-ls) echo '[{"configuration":{"id":"sbx_left","labels":{"sbx.managed":"1"}}},{"configuration":{"id":"postgres","labels":{"app":"db"}}}]' ;;
+ls) echo '[{"configuration":{"id":"sbx_left","labels":{"sbx.managed":"1","sbx.owner":"me"}}},{"configuration":{"id":"sbx_theirs","labels":{"sbx.managed":"1","sbx.owner":"other"}}},{"configuration":{"id":"sbx_unlabelled","labels":{"sbx.managed":"1"}}},{"configuration":{"id":"postgres","labels":{"app":"db"}}}]' ;;
 esac
 `), 0o755)
 	agent := filepath.Join(work, "sandbox-guestd")
 	os.WriteFile(agent, []byte("x"), 0o755)
-	be, err := New(Config{Container: script, Agent: agent, Logf: t.Logf})
+	var logged strings.Builder
+	be, err := New(Config{Container: script, Agent: agent, Owner: "me", Logf: func(f string, a ...any) {
+		fmt.Fprintf(&logged, f+"\n", a...)
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +239,120 @@ esac
 	if !strings.Contains(string(calls), "rm --force sbx_left") {
 		t.Errorf("a sandbox an earlier run left was not removed:\n%s", calls)
 	}
-	if strings.Contains(string(calls), "postgres") {
-		t.Errorf("a container this backend did not start was touched:\n%s", calls)
+	for _, id := range []string{"sbx_theirs", "sbx_unlabelled", "postgres"} {
+		if strings.Contains(string(calls), "rm --force "+id) || (id == "postgres" && strings.Contains(string(calls), id)) {
+			t.Errorf("%s, which this sandboxd did not start, was touched:\n%s", id, calls)
+		}
+	}
+	if !strings.Contains(logged.String(), "left alone: sbx_unlabelled") {
+		t.Errorf("an unlabelled sandbox was not reported:\n%s", logged.String())
+	}
+}
+
+// Without an owner a restart can only remove every sandboxd's sandboxes or
+// none, so the backend refuses to start.
+func TestNewRefusesNoOwner(t *testing.T) {
+	agent := filepath.Join(t.TempDir(), "sandbox-guestd")
+	os.WriteFile(agent, []byte("x"), 0o755)
+	if _, err := New(Config{Container: "sh", Agent: agent}); err == nil || !strings.Contains(err.Error(), "owner") {
+		t.Fatalf("got %v; want a refusal naming the owner", err)
+	}
+}
+
+// Owner is stable for one state directory, through a symlink to it too, and
+// differs for another.
+func TestOwnerIsPerStateDirectory(t *testing.T) {
+	root := t.TempDir()
+	a, b := filepath.Join(root, "a"), filepath.Join(root, "b")
+	os.Mkdir(a, 0o700)
+	os.Mkdir(b, 0o700)
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(a, link); err != nil {
+		t.Skip(err)
+	}
+	oa, _ := Owner(a)
+	oa2, _ := Owner(a + "/")
+	ol, _ := Owner(link)
+	ob, _ := Owner(b)
+	if oa == "" || oa != oa2 || oa != ol || oa == ob {
+		t.Fatalf("a %q, a/ %q, link %q, b %q", oa, oa2, ol, ob)
+	}
+}
+
+// The images a sandbox can start from without a pull are the runtime's own,
+// but for snapshots, which are started from as snapshots; and the runtime is
+// asked at most every 30 seconds, not on every node status.
+func TestCachedImagesAreTheRuntimes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script stands in for the runtime")
+	}
+	work := t.TempDir()
+	calls := filepath.Join(work, "calls")
+	script := filepath.Join(work, "container")
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo "$*" >> "`+calls+`"
+case "$1 $2" in
+"ls --all") echo '[]' ;;
+"image ls") echo '[{"configuration":{"name":"sandbox-desktop:dev"}},{"configuration":{"name":"ghcr.io/you/sandbox-base:edge"}},{"configuration":{"name":"docker.io/sbx-snapshot/me/snp_1:latest"}},{"configuration":{"name":"sbx-snapshot/other/snp_2:latest"}}]' ;;
+esac
+`), 0o755)
+	agent := filepath.Join(work, "sandbox-guestd")
+	os.WriteFile(agent, []byte("x"), 0o755)
+	be, err := New(Config{Container: script, Agent: agent, Owner: "me", Logf: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(calls) // startup may list images itself (leftover snapshots)
+	got := be.CachedImages()
+	if strings.Join(got, ",") != "ghcr.io/you/sandbox-base:edge,sandbox-desktop:dev" {
+		t.Fatalf("images %v; want the runtime's, sorted, without snapshots", got)
+	}
+	be.CachedImages()
+	log, _ := os.ReadFile(calls)
+	if n := strings.Count(string(log[len(before):]), "image ls"); n != 1 {
+		t.Fatalf("the runtime was asked %d times; want once in 30 seconds", n)
+	}
+}
+
+// Usage is the runtime's counters for this backend's own sandboxes only.
+func TestParseStatsKeepsItsOwn(t *testing.T) {
+	out := `[{"id":"sbx_mine","cpuUsageUsec":47276,"memoryUsageBytes":9248768,"memoryLimitBytes":1073741824,"networkRxBytes":60916,"networkTxBytes":602,"blockReadBytes":5402624,"blockWriteBytes":0,"numProcesses":4},
+{"id":"sbx_theirs","cpuUsageUsec":1,"memoryUsageBytes":1,"memoryLimitBytes":1},{"id":"buildkit","cpuUsageUsec":1}]`
+	got, err := parseStats(out, map[string]bool{"sbx_mine": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, ok := got["sbx_mine"]
+	if len(got) != 1 || !ok || u.CPUUsec != 47276 || u.MemoryBytes != 9248768 || u.MemoryLimitBytes != 1<<30 || u.NetRxBytes != 60916 || u.DiskReadBytes != 5402624 || u.Processes != 4 {
+		t.Fatalf("usage %+v", got)
+	}
+}
+
+func TestParseDFUsed(t *testing.T) {
+	for in, want := range map[string]int64{
+		"     Used\n2260824064\n": 2260824064,
+		"Used\n-5\n":              0, // a guest's lie sizes nothing
+		"Used\n":                  0,
+		"df: not found\n":         0,
+		"Used\n12\n34\n":          0,
+	} {
+		if got := parseDFUsed(in); got != want {
+			t.Errorf("parseDFUsed(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestReportWhileEndsWithTheCount(t *testing.T) {
+	var last backend.SnapshotProgress
+	ctx := backend.WithSnapshotProgress(context.Background(), func(p backend.SnapshotProgress) { last = p })
+	c := &countingReader{r: strings.NewReader(strings.Repeat("x", 4096))}
+	stop := reportWhile(ctx, c, 8192)
+	if _, err := io.Copy(io.Discard, c); err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	stop() // twice is once
+	if last.Phase != api.SnapshotPhaseCapture || last.Bytes != 4096 || last.EstimatedBytes != 8192 {
+		t.Fatalf("last report: %+v", last)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
@@ -92,6 +93,8 @@ func (g *Gateway) create(ctx context.Context, p Principal, req api.CreateSandbox
 // (a node name and how many of the caller's replicas it already holds), as a
 // service's replicas are.
 func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateSandboxRequest, extra map[string]string, spread map[string]int) (api.Sandbox, *createFail) {
+	// Where a slow create spends its time, for the log (slowCreate).
+	t := createTimer{start: time.Now()}
 	if req.Name != "" && !spec.ValidName(req.Name) {
 		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, "name "+req.Name+": lowercase letters, digits and dashes, starting with a letter or digit, at most 63")
 	}
@@ -105,6 +108,11 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	}
 	if _, ok := g.combinedCapabilities(); !ok {
 		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
+	}
+	if err := g.applyPolicyLifetime(ctx, p, &req); errors.Is(err, ErrStore) {
+		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())
+	} else if err != nil {
+		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 	}
 
 	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, Spread: spread}
@@ -137,16 +145,33 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	// mounted or restored it for them (reproduced in
 	// TestMixedFleetVolumesAndSnapshotsStayOwned).
 	switch {
-	case req.SnapshotID != "" && g.anyNodeHas(api.CapMemorySnapshot):
-		o, ok := g.store.SnapshotOwner(req.SnapshotID)
+	//
+	// Either kind of snapshot: gated on memory_snapshot alone, a fleet of
+	// nodes that snapshot disks (macOS) skipped the check, and a create naming
+	// another user's snapshot was started from it (reproduced in
+	// TestDiskSnapshotFleetKeepsSnapshotsOwned). The node holding it is the
+	// one that can, so the create is pinned there and names no capability.
+	case req.SnapshotID != "" && (g.anyNodeHas(api.CapMemorySnapshot) || g.anyNodeHas(api.CapDiskSnapshot)):
+		o, ok := g.snapshotOwner(ctx, req.SnapshotID)
 		if !ok || !mayAct(p, o) {
 			return api.Sandbox{}, failWith(http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		}
 		want.Node = o.Node
-		want.Caps = append(want.Caps, api.CapMemorySnapshot)
+	case req.SnapshotEverySecs > 0:
+		// A schedule needs a node that snapshots; placed on one that cannot,
+		// the create is refused there though another could have kept it. A
+		// fleet with whole-machine snapshots asks for those.
+		if g.anyNodeHas(api.CapMemorySnapshot) {
+			want.Caps = append(want.Caps, api.CapMemorySnapshot)
+		} else if g.anyNodeHas(api.CapDiskSnapshot) {
+			want.Caps = append(want.Caps, api.CapDiskSnapshot)
+		}
 	case len(req.Volumes) > 0 && g.anyNodeHas(api.CapVolumes):
 		for _, m := range req.Volumes {
-			o, ok := g.store.VolumeOwner(m.Name)
+			o, ok, err := g.storeFor(p).VolumeOwner(ctx, m.Name)
+			if err != nil {
+				return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())
+			}
 			if !ok || !mayAct(p, o) {
 				return api.Sandbox{}, failWith(http.StatusNotFound, api.CodeNotFound, "no volume named "+m.Name)
 			}
@@ -180,7 +205,9 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	}
 
 	res := api.NodeResources{CPUs: want.CPUs, MemoryMB: want.MemoryMB, DiskMB: want.DiskMB}
-	hold, err := g.reserveQuota(p.Tenant, res)
+	t.mark("checks")
+	hold, err := g.reserveQuota(ctx, p.Tenant, res)
+	t.mark("quota")
 	if err != nil {
 		g.metrics.refused.Inc(refusedQuota)
 		return api.Sandbox{}, transientFail(http.StatusForbidden, api.CodeRefused, err.Error())
@@ -212,6 +239,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	var conflict []byte // the last node's refusal of the name
 	for {
 		n, pl, err := g.place(want, tried, res)
+		t.mark("placing")
 		if err != nil && conflict != nil {
 			return api.Sandbox{}, &createFail{status: http.StatusConflict, body: conflict}
 		}
@@ -224,6 +252,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 			return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, msg)
 		}
 		resp, err := n.do(ctx, http.MethodPost, "/v1/sandboxes", nil, bytes.NewReader(body), "application/json")
+		t.mark("node " + n.cfg.Name)
 		if err != nil {
 			n.finishIf(pl, false)
 			g.logf("create on %s: %v", n.cfg.Name, err)
@@ -265,7 +294,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 		if names && named != n.cfg.Name {
 			err = errors.New("the node made an id naming node " + named)
 		} else {
-			err = hold.record(sb.ID, o, sb.CPUs, sb.MemoryMB, sb.DiskMB)
+			err = hold.record(ctx, g.storeFor(p), o, sb)
 		}
 		if err != nil {
 			n.finishIf(pl, false)
@@ -276,6 +305,10 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 			return api.Sandbox{}, failWith(http.StatusInternalServerError, api.CodeInternal, "the sandbox's owner could not be recorded; it was terminated")
 		}
 		n.created(pl, sb.ID)
+		t.mark("recording")
+		if d := time.Since(t.start); d > slowCreate {
+			g.logf("create %s for %s: slow, %s (%s)", sb.ID, p.User, d.Round(time.Millisecond), t)
+		}
 		noteSandbox(ctx, sb.ID, n.cfg.Name)
 		return sb, &createFail{status: http.StatusCreated, body: data}
 	}
@@ -350,8 +383,17 @@ func (g *Gateway) listSandboxes(ctx context.Context, p Principal, filters []stri
 	for _, f := range filters {
 		q.Add("label", f)
 	}
+	// The caller's sandboxes, read once: the store decides, not the label.
+	owned := map[string]Owner{}
 	if !all {
 		q.Add("label", LabelOwner+"="+p.User)
+		rows, err := g.storeFor(p).SandboxHistory(ctx, SandboxFilter{Tenant: p.Tenant, User: p.User, Live: true})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			owned[r.ID] = r.Owner
+		}
 	}
 	var mu sync.Mutex
 	out := []api.Sandbox{}
@@ -371,7 +413,10 @@ func (g *Gateway) listSandboxes(ctx context.Context, p Principal, filters []stri
 		defer mu.Unlock()
 		for _, sb := range list.Sandboxes {
 			if !all {
-				o, ok := g.ownerOf(sb.ID)
+				o, ok := owned[sb.ID]
+				if !ok {
+					o, ok = g.tombs.get(sb.ID)
+				}
 				if !ok || o.Node != n.cfg.Name || o.User != p.User || o.Tenant != p.Tenant {
 					continue
 				}
@@ -476,12 +521,14 @@ func (g *Gateway) afterDelete(resp *http.Response, id string, o Owner) error {
 	if resp.StatusCode != http.StatusNoContent {
 		return nil
 	}
+	// Recorded even if the caller has gone: the node has terminated it.
+	ctx := context.WithoutCancel(resp.Request.Context())
 	g.tombs.add(id, o)
-	if _, held := g.store.OwnerOf(id); held {
+	if _, held, _ := g.store.OwnerOf(ctx, id); held {
 		g.metrics.terminated.Inc("delete")
 	}
-	g.roomBack(o.Node, id)
-	if err := g.store.ForgetSandbox(id); err != nil {
+	g.roomBack(ctx, o.Node, id)
+	if err := g.store.ForgetSandbox(ctx, id); err != nil {
 		g.logf("forgetting %s: %v", id, err)
 	}
 	return nil
@@ -502,7 +549,7 @@ func (g *Gateway) afterSnapshot(resp *http.Response, id string, o Owner) error {
 	if err := json.Unmarshal(data, &snap); err != nil || snap.ID == "" {
 		return errors.New("the node answered with no snapshot")
 	}
-	if err := g.store.SetSnapshot(snap.ID, o); err != nil {
+	if err := g.store.SetSnapshot(context.WithoutCancel(resp.Request.Context()), snap.ID, o); err != nil {
 		return err
 	}
 	resp.Body = io.NopCloser(bytes.NewReader(data))
@@ -544,7 +591,10 @@ func (g *Gateway) createFor(ctx context.Context, p Principal, req api.CreateSand
 	if f.status != http.StatusCreated {
 		return nil, &createError{fail: f}
 	}
-	o, _ := g.store.OwnerOf(sb.ID)
+	o, _, err := g.store.OwnerOf(ctx, sb.ID)
+	if err != nil {
+		return nil, &createError{fail: transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())}
+	}
 	return &created{sb: sb, node: o.Node}, nil
 }
 
@@ -552,12 +602,35 @@ func (g *Gateway) createFor(ctx context.Context, p Principal, req api.CreateSand
 // node has given back its room (node.released). Called after the node
 // answered the delete with 204, and before the store forgets the sandbox's
 // size; a 404 means it ended earlier, and the node's status already says so.
-func (g *Gateway) roomBack(node, id string) {
+func (g *Gateway) roomBack(ctx context.Context, node, id string) {
 	n := g.nodes.get(node)
 	if n == nil {
 		return
 	}
-	if res, ok := g.store.SizeOf(id); ok {
+	if res, ok, _ := g.store.SizeOf(ctx, id); ok {
 		n.released(id, res)
 	}
 }
+
+// slowCreate is how long a create may take before the gateway logs where its
+// time went: a create that seems stuck to its user can then be told apart —
+// the gateway's own checks, the quota, placing it, the node, recording it.
+const slowCreate = 2 * time.Second
+
+// createTimer adds up a create's time by step.
+type createTimer struct {
+	start, last time.Time
+	steps       []string
+}
+
+func (c *createTimer) mark(step string) {
+	now := time.Now()
+	from := c.last
+	if from.IsZero() {
+		from = c.start
+	}
+	c.steps = append(c.steps, fmt.Sprintf("%s %s", step, now.Sub(from).Round(time.Millisecond)))
+	c.last = now
+}
+
+func (c *createTimer) String() string { return strings.Join(c.steps, ", ") }

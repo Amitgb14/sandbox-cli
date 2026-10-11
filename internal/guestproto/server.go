@@ -35,6 +35,10 @@ type Server struct {
 	// Home is the directory a process starts in when its request names none:
 	// the sandbox user's home, where a sandbox's work happens. Empty is "/".
 	Home string
+
+	smu      sync.Mutex
+	sessions map[string]*session // kept processes, by id (session.go)
+	finished uint64
 }
 
 // Serve answers connections from l until it is closed.
@@ -79,6 +83,10 @@ func (s *Server) ServeConn(c io.ReadWriteCloser) {
 	case OpSync:
 		syncFilesystems(req.Final)
 		reply(c, Response{OK: true})
+	case OpAttach:
+		s.attach(c, br, req)
+	case OpSessions:
+		s.listSessions(c)
 	default:
 		reply(c, fail(CodeBadRequest, "unknown op "+req.Op))
 	}
@@ -278,11 +286,32 @@ func (s *Server) list(w io.Writer, req Request) {
 }
 
 // exec runs a process and streams it. The process ends with the connection: a
-// host that went away does not leave a process running in its sandbox.
+// host that went away does not leave a process running in its sandbox —
+// unless the host asked for exactly that, with Keep (session.go).
 func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 	if len(req.Argv) == 0 || req.Argv[0] == "" {
 		reply(c, fail(CodeBadRequest, "argv is required"))
 		return
+	}
+	var ks *session
+	if req.Keep {
+		if !SessionIDOK(req.Session) {
+			reply(c, fail(CodeBadRequest, "a kept process needs a session id of 1-64 letters, digits, - and _"))
+			return
+		}
+		// Reserved now, under the lock, so two requests with one id cannot
+		// both start; released if the process does not.
+		if ks = s.reserve(req.Session); ks == nil {
+			reply(c, fail(CodeBadRequest, "session "+req.Session+" exists"))
+			return
+		}
+		started := false
+		defer func() {
+			if !started {
+				s.release(ks)
+			}
+		}()
+		defer func() { started = ks.cmd != nil }()
 	}
 	cwd := "/"
 	switch {
@@ -338,7 +367,13 @@ func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 			return
 		}
 		term = t
-		defer term.close()
+		// A kept process outlives this connection, and its terminal with it:
+		// the session closes it when the process ends.
+		defer func() {
+			if !req.Keep {
+				term.close()
+			}
+		}()
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = term.slave, term.slave, term.slave
 		ttyAttr(cmd.SysProcAttr)
 		stdin, stdout = term.master, term.master
@@ -359,6 +394,10 @@ func (s *Server) exec(c io.ReadWriteCloser, br *bufio.Reader, req Request) {
 		return
 	}
 	reply(c, Response{OK: true})
+	if req.Keep {
+		s.keep(c, br, ks, cmd, stdin, stdout, stderr, term)
+		return
+	}
 
 	var wmu sync.Mutex
 	send := func(typ byte, b []byte) error {

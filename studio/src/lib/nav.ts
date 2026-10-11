@@ -5,6 +5,8 @@ import {
   Camera,
   CircleUser,
   HardDrive,
+  Layers3,
+  LayoutTemplate,
   ListChecks,
   LockKeyhole,
   Play,
@@ -46,8 +48,8 @@ export interface NavItem {
   shortcut?: string;
   /** Other paths that light this item up (a detail screen under a list). */
   also?: string[];
-  /** Only through a gateway, or only to an admin key on one. */
-  need?: "gateway" | "admin";
+  /** Only through a gateway, only to an admin key on one, or only on a plain sandboxd. */
+  need?: "gateway" | "admin" | "sandboxd";
   /** A scope without which the screen has nothing to offer. */
   scope?: Scope;
 }
@@ -99,6 +101,13 @@ export const NAV: NavGroup[] = [
         icon: HardDrive,
         hint: "Named filesystems that outlive the sandboxes they are mounted in",
       },
+      {
+        title: "Images",
+        href: "/images",
+        icon: Layers3,
+        need: "sandboxd",
+        hint: "Images sandboxes start from: what is installed and what uses it; download one ahead of use, or remove one",
+      },
     ],
   },
   {
@@ -118,6 +127,12 @@ export const NAV: NavGroup[] = [
         icon: Bot,
         hint: "The agents Studio runs, all with a verified headless mode, and whose login is saved",
         shortcut: "A",
+      },
+      {
+        title: "Templates",
+        href: "/templates",
+        icon: LayoutTemplate,
+        hint: "Sizes to launch sandboxes at, micro to xlarge or your own: vCPUs, memory and disk",
       },
     ],
   },
@@ -140,7 +155,7 @@ export const NAV: NavGroup[] = [
         title: "Settings",
         href: "/settings",
         icon: Settings,
-        hint: "The context, and what this sandboxd can deliver",
+        hint: "The context, what this sandboxd can deliver, and the egress rules every launch carries",
         shortcut: ",",
       },
     ],
@@ -150,6 +165,8 @@ export const NAV: NavGroup[] = [
 /** Whether the caller may see a nav item's screen at all. */
 export function allowed(item: Pick<NavItem, "need" | "scope">, caller: Caller): boolean {
   if (item.need === "gateway" && caller.kind !== "gateway") return false;
+  // A gateway does not route a node's images yet (its admin catalog is to come).
+  if (item.need === "sandboxd" && caller.kind !== "sandboxd") return false;
   if (item.need === "admin" && !isAdmin(caller)) return false;
   if (item.scope && !can(caller, item.scope)) return false;
   return true;

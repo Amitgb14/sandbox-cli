@@ -72,6 +72,9 @@ type Server struct {
 	Capacity api.NodeResources
 	// NodeLabels describe the node to a gateway (region, disk class, ...).
 	NodeLabels map[string]string
+	// MetricsInterval is how often sandboxes' usage is sampled, where the
+	// backend can read it; 0 is ten seconds.
+	MetricsInterval time.Duration
 
 	now func() time.Time
 
@@ -85,6 +88,17 @@ type Server struct {
 	cordoned      bool // under mu; see node.go
 	metricsOnce   sync.Once
 	nm            *nodeMetrics // metrics.go
+	images        imageJobs    // images.go
+
+	// RecordDir, when set, is where each sandbox's record is kept on disk, so
+	// a later sandboxd can take back the sandboxes this one leaves running
+	// (keep.go). It holds environment values: the operator's alone. Empty
+	// keeps records in memory only, and a restart forgets them.
+	RecordDir string
+	persistMu sync.Mutex
+	// watchers are the goroutines waiting on processes; each writes the
+	// sandbox's record when its process ends.
+	watchers sync.WaitGroup
 }
 
 type record struct {
@@ -94,6 +108,11 @@ type record struct {
 	procs      map[int]*procRecord
 	nextPID    int
 	lastActive time.Time
+	metrics    metricsState // metrics_sampler.go
+	// lastScheduled is when the snapshot schedule last ran (or started), and
+	// snapshotting is set while one of its snapshots is being taken.
+	lastScheduled time.Time
+	snapshotting  bool
 }
 
 // touch records activity: any request naming the sandbox keeps it alive.
@@ -107,6 +126,9 @@ type procRecord struct {
 	info api.Process
 	proc backend.Proc
 	log  *outputLog
+	// session is the id the process was kept under (keep.go), so a later
+	// sandboxd can take it back; empty when processes are not kept.
+	session string
 }
 
 // Handler returns the API's HTTP handler, guard included.
@@ -129,6 +151,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	route("GET /v1/capabilities", false, s.capabilities)
 	route("GET /v1/node", false, s.node)
+	route("GET /v1/images", false, s.listImages)
+	route("POST /v1/images", false, s.installImage)
+	route("DELETE /v1/images", false, s.removeImage)
 	route("POST /v1/node/cordon", false, s.cordon)
 	route("POST /v1/sandboxes", false, s.timedCreate)
 	route("GET /v1/sandboxes", false, s.listSandboxes)
@@ -146,6 +171,7 @@ func (s *Server) Handler() http.Handler {
 	route("POST /v1/sandboxes/{ref}/suspend", false, s.suspend)
 	route("POST /v1/sandboxes/{ref}/resume", false, s.resume)
 	route("POST /v1/sandboxes/{ref}/snapshots", false, s.createSnapshot)
+	route("PUT /v1/sandboxes/{ref}/snapshot-schedule", false, s.setSnapshotSchedule)
 	route("GET /v1/snapshots", false, s.listSnapshots)
 	route("DELETE /v1/snapshots/{id}", false, s.deleteSnapshot)
 	route("GET /v1/sandboxes/{ref}/tunnel", false, s.tunnel)
@@ -154,10 +180,15 @@ func (s *Server) Handler() http.Handler {
 	route("DELETE /v1/sandboxes/{ref}/files", false, s.removeFile)
 	route("GET /v1/sandboxes/{ref}/dirs", false, s.listDir)
 	route("GET /v1/sandboxes/{ref}/events", false, s.events)
+	route("GET /v1/sandboxes/{ref}/metrics", false, s.sandboxMetrics)
 	route("POST /v1/volumes", false, s.createVolume)
 	route("GET /v1/volumes", false, s.listVolumes)
 	route("DELETE /v1/volumes/{name}", false, s.deleteVolume)
-	s.reaper.Do(func() { go s.reapIdle() })
+	s.reaper.Do(func() {
+		go s.reapIdle()
+		go s.runMetrics()
+		go s.runSchedules()
+	})
 	s.poolsOnce.Do(s.startPools)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")
@@ -213,6 +244,8 @@ func (s *Server) caps() api.Capabilities {
 		caps[k] = v
 	}
 	caps[api.CapAudit] = s.Audit != nil
+	_, caps[api.CapMetrics] = s.usageReader()
+	_, caps[api.CapImages] = s.imageStore()
 	return api.Capabilities{
 		APIVersion:   api.Version,
 		Backend:      s.Backend.Name(),
@@ -228,7 +261,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.SnapshotID != "" {
-		if !s.Backend.Capabilities()[api.CapMemorySnapshot] {
+		if !canSnapshot(s.Backend.Capabilities()) {
 			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot start from a snapshot")
 			return
 		}
@@ -251,6 +284,12 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bs.FromSnapshot = req.SnapshotID
+	// Refused before anything is made, as any control that cannot be
+	// delivered is: a schedule that never takes a snapshot is worse than none.
+	if status, code, msg := s.scheduleRefusal(api.SnapshotSchedule{EverySecs: bs.SnapshotEverySecs, Keep: bs.SnapshotKeep}, bs.Volumes); status != 0 {
+		writeErr(w, status, code, msg)
+		return
+	}
 	if len(bs.Volumes) > 0 {
 		if bs.FromSnapshot != "" {
 			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "a sandbox started from a snapshot cannot mount volumes")
@@ -263,18 +302,29 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 
 	// The name is claimed before the backend is asked, under the lock, so two
 	// concurrent creates with one name cannot both pass a check-then-create.
+	created := s.now().UTC()
+	var expires *time.Time
+	if bs.LifetimeSecs > 0 {
+		at := created.Add(time.Duration(bs.LifetimeSecs) * time.Second)
+		expires = &at
+	}
 	rec := &record{
 		sbx: api.Sandbox{
 			ID: id, Name: req.Name, State: api.StatePending, Image: bs.Image,
 			CPUs: bs.CPUs, MemoryMB: bs.MemoryMB, DiskMB: bs.DiskMB,
-			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: s.now().UTC(),
-			IdleTimeoutSecs: bs.IdleTimeoutSecs,
-			Labels:          copyLabels(req.Labels),
-			Volumes:         bs.Volumes,
+			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: created,
+			IdleTimeoutSecs:   bs.IdleTimeoutSecs,
+			LifetimeSecs:      bs.LifetimeSecs,
+			ExpiresAt:         expires,
+			SnapshotEverySecs: bs.SnapshotEverySecs,
+			SnapshotKeep:      bs.SnapshotKeep,
+			Labels:            copyLabels(req.Labels),
+			Volumes:           bs.Volumes,
 		},
-		env:        bs.Env,
-		procs:      map[int]*procRecord{},
-		lastActive: s.now(),
+		env:           bs.Env,
+		procs:         map[int]*procRecord{},
+		lastActive:    s.now(),
+		lastScheduled: s.now(),
 	}
 	s.mu.Lock()
 	// Checked under the same lock that registers the sandbox, so once a cordon
@@ -335,6 +385,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	rec.sbx.State = api.StateRunning
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	ev := api.Event{Type: api.EventSandboxCreated, Sandbox: id, Name: out.Name, Image: out.Image,
 		Labels: out.Labels, Network: &out.Network, EnvNames: out.EnvNames, Snapshot: req.SnapshotID, Volumes: out.Volumes,
 		Reason: from}
@@ -493,42 +544,157 @@ func (s *Server) getSandbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rec.snapshot())
 }
 
+// updateSandbox changes a live sandbox: its network (on its VM, where the
+// backend can), and its name, labels and idle timeout (this server's records
+// of it, which no backend sees). Everything asked is checked before anything
+// is changed, so a request with one bad field changes nothing; then the
+// network, the one part that can fail on the backend; then the records.
 func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 	var req api.UpdateSandboxRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	rec, ok := s.live(w, r)
-	if !ok {
-		return
-	}
-	if req.Network == nil {
+	if req.Network == nil && req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.LifetimeSecs == nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "nothing to update")
 		return
 	}
-	if !s.Backend.Capabilities()[api.CapNetworkPolicyUpdate] {
-		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot change a running sandbox's network policy")
+	rec, ok := s.lookup(r.PathValue("ref"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
 		return
 	}
-	pol, err := spec.ResolveNetworkUpdate(req.Network, s.Policy)
-	if err != nil {
-		writeSpecErr(w, err)
+	switch st := rec.snapshot().State; {
+	case st == api.StateTerminated:
+		writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is terminated")
+		return
+	case req.Network != nil && st != api.StateRunning:
+		writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is not running")
 		return
 	}
-	if !s.canEnforce(w, pol) {
-		return
+	if req.Name != nil {
+		if err := spec.CheckName(*req.Name); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+	}
+	if req.Labels != nil {
+		if err := spec.ValidateLabels(*req.Labels); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+	}
+	var idle int
+	if req.IdleTimeoutSecs != nil {
+		var err error
+		if idle, err = spec.ResolveIdleUpdate(*req.IdleTimeoutSecs, s.Policy); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+	}
+	var life int
+	if req.LifetimeSecs != nil {
+		var err error
+		if life, err = spec.ResolveLifetimeUpdate(*req.LifetimeSecs, s.Policy); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
 	}
 	id := rec.snapshot().ID
-	if err := s.Backend.UpdateNetwork(r.Context(), id, pol); err != nil {
-		writeBackendErr(w, err)
+	if req.Name != nil && s.nameTaken(*req.Name, id) {
+		writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+*req.Name+" already exists")
 		return
 	}
-	rec.mu.Lock()
-	rec.sbx.Network = pol
-	out := rec.sbx
-	rec.mu.Unlock()
-	s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
-	writeJSON(w, http.StatusOK, out)
+
+	if req.Network != nil {
+		if !s.Backend.Capabilities()[api.CapNetworkPolicyUpdate] {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot change a running sandbox's network policy")
+			return
+		}
+		pol, err := spec.ResolveNetworkUpdate(req.Network, s.Policy)
+		if err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+		if !s.canEnforce(w, pol) {
+			return
+		}
+		if err := s.Backend.UpdateNetwork(r.Context(), id, pol); err != nil {
+			writeBackendErr(w, err)
+			return
+		}
+		rec.mu.Lock()
+		rec.sbx.Network = pol
+		rec.mu.Unlock()
+		s.persist(rec)
+		s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
+	}
+
+	if req.Name != nil || req.Labels != nil || req.IdleTimeoutSecs != nil || req.LifetimeSecs != nil {
+		// The name is checked again and set under the lock create registers
+		// names under, so two renames, or a rename and a create, cannot both
+		// take one name.
+		s.mu.Lock()
+		if req.Name != nil && s.nameTakenLocked(*req.Name, id) {
+			s.mu.Unlock()
+			writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+*req.Name+" already exists")
+			return
+		}
+		rec.mu.Lock()
+		if req.Name != nil {
+			rec.sbx.Name = *req.Name
+		}
+		if req.Labels != nil {
+			rec.sbx.Labels = copyLabels(*req.Labels)
+		}
+		if req.IdleTimeoutSecs != nil {
+			rec.sbx.IdleTimeoutSecs = idle
+		}
+		if req.LifetimeSecs != nil {
+			// From creation, as at create, so a change says when it ends and
+			// not how long from whenever the request happened to land. The
+			// reaper reads ExpiresAt; a past one ends it on its next look.
+			at := rec.sbx.CreatedAt.Add(time.Duration(life) * time.Second)
+			rec.sbx.LifetimeSecs, rec.sbx.ExpiresAt = life, &at
+		}
+		after := rec.sbx
+		rec.mu.Unlock()
+		s.mu.Unlock()
+		s.persist(rec)
+		ev := api.Event{Type: api.EventSandboxUpdated, Sandbox: id}
+		if req.Name != nil {
+			ev.Name = after.Name
+		}
+		if req.Labels != nil {
+			ev.Labels = copyLabels(after.Labels)
+		}
+		if req.IdleTimeoutSecs != nil {
+			ev.IdleTimeoutSecs = &after.IdleTimeoutSecs
+		}
+		if req.LifetimeSecs != nil {
+			ev.LifetimeSecs = &after.LifetimeSecs
+		}
+		s.event(ev)
+	}
+	writeJSON(w, http.StatusOK, rec.snapshot())
+}
+
+// nameTaken reports whether a live sandbox other than id has name.
+func (s *Server) nameTaken(name, id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nameTakenLocked(name, id)
+}
+
+func (s *Server) nameTakenLocked(name, id string) bool {
+	if name == "" {
+		return false
+	}
+	for oid, o := range s.sandboxes {
+		if sb := o.snapshot(); oid != id && sb.Name == name && sb.State != api.StateTerminated {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) terminateSandbox(w http.ResponseWriter, r *http.Request) {
@@ -546,6 +712,7 @@ func (s *Server) terminateSandbox(w http.ResponseWriter, r *http.Request) {
 		rec.mu.Lock()
 		rec.sbx.State = api.StateTerminated
 		rec.mu.Unlock()
+		s.forget(sb.ID)
 		s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: sb.ID, Reason: "request"})
 		s.forgetOldTerminated()
 	}
@@ -591,43 +758,61 @@ func (s *Server) canEnforce(w http.ResponseWriter, p api.NetworkPolicy) bool {
 // reapIdle terminates sandboxes that have been idle past their timeout: no
 // request has named them and no process is running in them. A running process
 // is activity even with nobody watching — a build left to finish is not idle.
+//
+// It also ends a sandbox at its lifetime, busy or not, running or suspended:
+// a lifetime is a promise about when the machine gets it back, and a
+// sandbox that kept a process going, or was suspended, would otherwise outlive
+// it. The clock is the wall clock from creation, so time sandboxd was down
+// counts: a sandbox kept across a restart (keep.go) is ended at the next tick
+// if its time ran out meanwhile.
 func (s *Server) reapIdle() {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for range t.C {
-		now := s.now()
-		s.mu.Lock()
-		var due []*record
-		for _, rec := range s.sandboxes {
-			rec.mu.Lock()
-			idle := rec.sbx.IdleTimeoutSecs
-			live := rec.sbx.State == api.StateRunning
-			busy := false
-			for _, pr := range rec.procs {
-				busy = busy || pr.info.State == api.ProcessRunning
-			}
-			if busy {
-				rec.lastActive = now
-			}
-			if live && idle > 0 && now.Sub(rec.lastActive) >= time.Duration(idle)*time.Second {
-				due = append(due, rec)
-			}
-			rec.mu.Unlock()
+		s.reapOnce(s.now())
+	}
+}
+
+// reapOnce is one pass of reapIdle.
+func (s *Server) reapOnce(now time.Time) {
+	s.mu.Lock()
+	var due []*record
+	reason := map[*record]string{}
+	for _, rec := range s.sandboxes {
+		rec.mu.Lock()
+		idle := rec.sbx.IdleTimeoutSecs
+		live := rec.sbx.State == api.StateRunning
+		busy := false
+		for _, pr := range rec.procs {
+			busy = busy || pr.info.State == api.ProcessRunning
 		}
-		s.mu.Unlock()
-		for _, rec := range due {
-			id := rec.snapshot().ID
-			if err := s.Backend.Terminate(context.Background(), id); err != nil {
-				continue
-			}
-			rec.mu.Lock()
-			rec.sbx.State = api.StateTerminated
-			rec.mu.Unlock()
-			s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: id, Reason: "idle"})
+		if busy {
+			rec.lastActive = now
 		}
-		if len(due) > 0 {
-			s.forgetOldTerminated()
+		expired := rec.sbx.ExpiresAt != nil && !now.Before(*rec.sbx.ExpiresAt) &&
+			(rec.sbx.State == api.StateRunning || rec.sbx.State == api.StateSuspended)
+		switch {
+		case expired:
+			due, reason[rec] = append(due, rec), "lifetime"
+		case live && idle > 0 && now.Sub(rec.lastActive) >= time.Duration(idle)*time.Second:
+			due, reason[rec] = append(due, rec), "idle"
 		}
+		rec.mu.Unlock()
+	}
+	s.mu.Unlock()
+	for _, rec := range due {
+		id := rec.snapshot().ID
+		if err := s.Backend.Terminate(context.Background(), id); err != nil {
+			continue
+		}
+		rec.mu.Lock()
+		rec.sbx.State = api.StateTerminated
+		rec.mu.Unlock()
+		s.forget(id)
+		s.event(api.Event{Type: api.EventSandboxTerminated, Sandbox: id, Reason: reason[rec]})
+	}
+	if len(due) > 0 {
+		s.forgetOldTerminated()
 	}
 }
 
@@ -670,6 +855,11 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 
 	log := newOutputLog()
 	ps := backend.ProcSpec{Argv: append([]string(nil), req.Argv...), Env: env, Cwd: req.Cwd, Tty: req.Tty, Rows: req.Rows, Cols: req.Cols}
+	// A server that keeps its sandboxes keeps their processes too, where the
+	// backend can take them back: a restart then ends none of them.
+	if _, ok := s.Backend.(backend.Reattacher); ok && s.RecordDir != "" {
+		ps.Keep, ps.Session = true, newSessionID()
+	}
 	// The process outlives this request, so it gets a context of its own; it is
 	// ended by its own exit, a signal, or the sandbox being terminated.
 	proc, err := s.Backend.Start(context.WithoutCancel(r.Context()), id, ps, log.writer("stdout"), log.writer("stderr"))
@@ -681,26 +871,41 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 	rec.mu.Lock()
 	rec.nextPID++
 	pr := &procRecord{
-		info: api.Process{PID: rec.nextPID, Tty: ps.Tty, Argv: ps.Argv, State: api.ProcessRunning, StartedAt: s.now().UTC()},
-		proc: proc,
-		log:  log,
+		info:    api.Process{PID: rec.nextPID, Tty: ps.Tty, Argv: ps.Argv, State: api.ProcessRunning, StartedAt: s.now().UTC()},
+		proc:    proc,
+		log:     log,
+		session: ps.Session,
 	}
 	rec.procs[pr.info.PID] = pr
+	pid := pr.info.PID
+	rec.mu.Unlock()
+	s.persist(rec) // the process number and session, so a restart can take it back
+	s.event(processStarted(id, pid, ps, sortedKeys(extra)))
+	s.watch(rec, pr, id)
+	return pr, true
+}
+
+// watch starts waiting on a process in the background.
+func (s *Server) watch(rec *record, pr *procRecord, id string) {
+	s.watchers.Add(1)
+	go func() {
+		defer s.watchers.Done()
+		s.watchProcess(rec, pr, id)
+	}()
+}
+
+// watchProcess records a process's exit when it comes.
+func (s *Server) watchProcess(rec *record, pr *procRecord, id string) {
+	code := pr.proc.Wait()
+	rec.mu.Lock()
+	pr.info.State = api.ProcessExited
+	pr.info.ExitCode = &code
 	pid, started := pr.info.PID, pr.info.StartedAt
 	rec.mu.Unlock()
-	s.event(processStarted(id, pid, ps, sortedKeys(extra)))
-
-	go func() {
-		code := proc.Wait()
-		rec.mu.Lock()
-		pr.info.State = api.ProcessExited
-		pr.info.ExitCode = &code
-		rec.mu.Unlock()
-		log.finish(code)
-		s.event(api.Event{Type: api.EventProcessExited, Sandbox: id, PID: pid, ExitCode: &code,
-			DurationMS: s.now().Sub(started).Milliseconds()})
-	}()
-	return pr, true
+	pr.log.finish(code)
+	s.persist(rec) // no longer one to take back
+	s.event(api.Event{Type: api.EventProcessExited, Sandbox: id, PID: pid, ExitCode: &code,
+		DurationMS: s.now().Sub(started).Milliseconds()})
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
@@ -1050,6 +1255,10 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "the sandbox is busy")
 	case errors.Is(err, backend.ErrUnsupported):
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, err.Error())
+	case errors.Is(err, backend.ErrNoSpace):
+		// Said plainly: "the backend failed" after two minutes of a snapshot
+		// left a full disk to be guessed at.
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, err.Error())
 	default:
 		// The message is generic on purpose: a backend error can carry host paths
 		// and engine detail that are the operator's to read, not the caller's.

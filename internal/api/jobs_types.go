@@ -42,6 +42,11 @@ type JobSpec struct {
 	// Name is for people; jobs are found by id. Optional.
 	Name  string `json:"name,omitempty"`
 	Image string `json:"image,omitempty"`
+	// Labels are the client's own metadata, bounded as a sandbox's are (up
+	// to 32 keys of lowercase letters, digits and . _ / -, printable values
+	// up to 256 bytes). They decide nothing about the job's runs; they are
+	// returned with it, so a list of jobs can be told apart and filtered.
+	Labels map[string]string `json:"labels,omitempty"`
 	// Command is the argv each run starts; or Agent and Prompt (or Prompts)
 	// name an agent, started in its verified headless mode. Exactly one of
 	// Command and Agent.

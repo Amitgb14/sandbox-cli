@@ -42,7 +42,10 @@ function Mark({ value }: { value: string }) {
 export function PlatformTable({ className }: { className?: string }) {
   return (
     <div className={cn("overflow-hidden rounded-2xl border bg-card", className)}>
-      <div className="overflow-x-auto">
+      {/* relative: the cells' sr-only labels are absolutely positioned, and
+          without a positioned ancestor here they escape this scroller and
+          widen the whole page on a phone. */}
+      <div className="relative overflow-x-auto">
         <table className="w-full min-w-[42rem] border-collapse text-left">
           <thead>
             <tr className="border-b">

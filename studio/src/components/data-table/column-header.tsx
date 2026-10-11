@@ -22,7 +22,7 @@ export function ColumnHeader<TData, TValue>({
   className?: string;
 }) {
   if (!column.getCanSort()) {
-    return <span className={cn("text-xs font-medium", className)}>{title}</span>;
+    return <span className={className}>{title}</span>;
   }
 
   const sorted = column.getIsSorted();
@@ -34,7 +34,7 @@ export function ColumnHeader<TData, TValue>({
           <Button
             variant="ghost"
             size="sm"
-            className="-ml-2 h-7 gap-1 px-2 text-xs font-medium data-[state=open]:bg-accent"
+            className="-ml-2 h-7 gap-1 px-2 font-mono text-[11px] font-normal tracking-[0.06em] text-muted-foreground uppercase data-[state=open]:bg-accent"
           >
             {title}
             {sorted === "desc" ? (

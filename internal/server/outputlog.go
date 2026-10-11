@@ -56,6 +56,15 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// markTruncated records that output from before what the log holds was
+// lost — a process taken back after a restart, whose sandbox kept only the
+// newest of it.
+func (l *outputLog) markTruncated() {
+	l.mu.Lock()
+	l.truncated = true
+	l.mu.Unlock()
+}
+
 // finish records the exit code and wakes every follower for the last time.
 func (l *outputLog) finish(code int) {
 	l.mu.Lock()

@@ -81,11 +81,18 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"NetworkDenyIsKeptAndNormalized", testNetworkDeny},
 		{"NetworkAllowOutsideMayAllowIsRefused", testNetworkMayAllow},
 		{"NetworkUpdateFollowsTheSameRules", testNetworkUpdate},
+		{"ALiveSandboxCanBeRenamedRelabelledAndRetimed", testUpdateRecords},
+		{"ImagesAreListedInstalledAndPinned", testImages},
 		{"IdleSandboxIsTerminated", testIdleTimeout},
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
+		{"ABusySandboxEndsAtItsLifetime", testLifetime},
+		{"LifetimeAboveTheLimitIsInvalid", testLifetimeLimit},
+		{"AShortenedLifetimeEndsTheSandbox", testLifetimeUpdate},
 		{"AttachStreamsInputAndOutput", testAttach},
 		{"SuspendKeepsTheSandbox", testSuspend},
 		{"ASnapshotForksTheSandbox", testSnapshot},
+		{"MetricsSampleARunningSandbox", testMetrics},
+		{"AScheduleKeepsTheNewestSnapshots", testSnapshotSchedule},
 		{"ATunnelReachesAGuestPort", testTunnel},
 		{"LabelsAreKeptAndFilterTheListing", testLabels},
 		{"TheAuditLogRecordsWhatHappened", testAudit},
@@ -621,6 +628,150 @@ func testNetworkUpdate(t *testing.T, e *env) {
 	}
 }
 
+// The images an endpoint manages (capability images): the default image is
+// listed once a sandbox starts from it, as in use and pinned; installing it
+// again runs to installed; and what is not an image, or not installed, is
+// refused. Nothing else is installed or removed, so the test is safe against
+// a real server's registry and disk. Without the capability every call is
+// unsupported.
+func testImages(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapImages) {
+		_, err := e.c.Images(ctx)
+		wantCode(t, err, api.CodeUnsupported)
+		_, err = e.c.InstallImage(ctx, "example.com/a:1")
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	e.newSandbox(t, api.CreateSandboxRequest{})
+	find := func() (api.Image, bool) {
+		list, err := e.c.Images(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, img := range list {
+			if img.Default {
+				return img, true
+			}
+		}
+		return api.Image{}, false
+	}
+	def, ok := find()
+	if !ok || def.InUse < 1 {
+		t.Fatalf("the default image is not listed as in use by the sandbox started from it: %+v, %v", def, ok)
+	}
+	_, err := e.c.RemoveImage(ctx, def.Image)
+	wantCode(t, err, api.CodeConflict)
+
+	got, err := e.c.InstallImage(ctx, def.Image)
+	if err != nil || got.Image != def.Image {
+		t.Fatalf("installing the default image again: %+v, %v", got, err)
+	}
+	deadline := time.Now().Add(3 * time.Minute)
+	for {
+		img, _ := find()
+		if img.State == api.ImageInstalled {
+			break
+		}
+		if img.State == api.ImageFailed || time.Now().After(deadline) {
+			t.Fatalf("the default image did not install again: %+v", img)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	_, err = e.c.InstallImage(ctx, "Not An Image!")
+	wantCode(t, err, api.CodeInvalidRequest)
+	_, err = e.c.RemoveImage(ctx, "registry.invalid/never/installed:"+uniqueName("tag"))
+	wantCode(t, err, api.CodeNotFound)
+}
+
+// clientLabels is a sandbox's labels without those a gateway keeps for
+// itself (gateway.*), which an update neither shows nor touches.
+func clientLabels(l map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range l {
+		if !strings.HasPrefix(k, "gateway.") {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// A live sandbox's name, labels and idle timeout change in place, under the
+// rules they were set by at create: a name stays unique among live
+// sandboxes and resolves at once, labels are replaced whole and filter the
+// listing, and the idle timeout stays within the limit. A request with one
+// bad field changes nothing.
+func testUpdateRecords(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Name: uniqueName("before"), Labels: map[string]string{"suite.keep": "no", "team": "a"}})
+	str := func(s string) *string { return &s }
+	labels := func(m map[string]string) *map[string]string { return &m }
+	num := func(n int) *int { return &n }
+
+	name := uniqueName("after")
+	mark := uniqueName("mark")
+	got, err := e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{Name: &name, Labels: labels(map[string]string{"suite.mark": mark})})
+	if err != nil {
+		t.Fatalf("rename and relabel: %v", err)
+	}
+	if got.Name != name || len(clientLabels(got.Labels)) != 1 || got.Labels["suite.mark"] != mark {
+		t.Fatalf("after the update: name %q labels %v", got.Name, got.Labels)
+	}
+	if byName, err := e.c.Sandbox(ctx, name); err != nil || byName.ID != sb.ID {
+		t.Errorf("the new name resolves to %+v, %v", byName, err)
+	}
+	if list, err := e.c.Sandboxes(ctx, "suite.mark="+mark); err != nil || len(list) != 1 || list[0].ID != sb.ID {
+		t.Errorf("listing by the new label: %d, %v", len(list), err)
+	}
+
+	// The name is unique among live sandboxes, as at create.
+	other := e.newSandbox(t, api.CreateSandboxRequest{Name: uniqueName("other")})
+	_, err = e.c.UpdateSandbox(ctx, other.ID, api.UpdateSandboxRequest{Name: &name})
+	wantCode(t, err, api.CodeConflict)
+
+	// One bad field and nothing changes, the good ones included.
+	limit := e.caps.Limits.MaxIdleTimeoutSecs
+	for what, req := range map[string]api.UpdateSandboxRequest{
+		"an invalid name":  {Name: str("Upper Case"), Labels: labels(map[string]string{"x": "y"})},
+		"an invalid label": {Name: str(uniqueName("ok")), Labels: labels(map[string]string{"k": "esc\x1b[2J"})},
+		"a negative idle":  {Name: str(uniqueName("ok")), IdleTimeoutSecs: num(-1)},
+		"nothing at all":   {},
+	} {
+		_, err := e.c.UpdateSandbox(ctx, sb.ID, req)
+		wantCode(t, err, api.CodeInvalidRequest)
+		after, _ := e.c.Sandbox(ctx, sb.ID)
+		if after.Name != name || after.Labels["suite.mark"] != mark {
+			t.Errorf("%s changed the sandbox: name %q labels %v", what, after.Name, after.Labels)
+		}
+	}
+
+	// The idle timeout, within the limit; "never" only without one.
+	got, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{IdleTimeoutSecs: num(120)})
+	if err != nil || got.IdleTimeoutSecs != 120 {
+		t.Fatalf("idle timeout: %d, %v", got.IdleTimeoutSecs, err)
+	}
+	if limit > 0 {
+		_, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{IdleTimeoutSecs: num(limit + 1)})
+		wantCode(t, err, api.CodeInvalidRequest)
+		_, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{IdleTimeoutSecs: num(0)})
+		wantCode(t, err, api.CodeInvalidRequest)
+	}
+
+	// {} removes every label a client set; "" removes the name.
+	got, err = e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{Name: str(""), Labels: labels(map[string]string{})})
+	if err != nil || got.Name != "" || len(clientLabels(got.Labels)) != 0 {
+		t.Fatalf("clearing: name %q labels %v, %v", got.Name, got.Labels, err)
+	}
+
+	// A terminated sandbox is past changing.
+	if err := e.c.TerminateSandbox(ctx, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.c.UpdateSandbox(ctx, other.ID, api.UpdateSandboxRequest{Labels: labels(map[string]string{"late": "x"})})
+	wantCode(t, err, api.CodeConflict)
+}
+
 func testIdleTimeout(t *testing.T, e *env) {
 	sb := e.newSandbox(t, api.CreateSandboxRequest{IdleTimeoutSecs: 2})
 	if sb.IdleTimeoutSecs != 2 {
@@ -642,6 +793,73 @@ func testIdleTimeout(t *testing.T, e *env) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	t.Fatal("an idle sandbox was not terminated")
+}
+
+// A lifetime ends a sandbox whatever it is doing: here a process keeps it
+// busy, which an idle timeout would respect and a lifetime does not.
+func testLifetime(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{LifetimeSecs: 3})
+	if sb.LifetimeSecs != 3 || sb.ExpiresAt == nil {
+		t.Fatalf("lifetime_secs %d, expires_at %v; want 3 and a time", sb.LifetimeSecs, sb.ExpiresAt)
+	}
+	if d := sb.ExpiresAt.Sub(sb.CreatedAt); d != 3*time.Second {
+		t.Errorf("expires_at is %v after created_at, want 3s", d)
+	}
+	if _, err := e.c.StartProcess(ctxT(t), sb.ID, api.RunRequest{Argv: []string{"sleep", "600"}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := e.c.Sandbox(ctxT(t), sb.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State == api.StateTerminated {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("a sandbox outlived its lifetime")
+}
+
+func testLifetimeLimit(t *testing.T, e *env) {
+	max := e.caps.Limits.MaxLifetimeSecs
+	if max <= 0 {
+		t.Skip("no lifetime limit")
+	}
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{LifetimeSecs: max + 1})
+	wantCode(t, err, api.CodeInvalidRequest)
+	sb := e.newSandbox(t, api.CreateSandboxRequest{})
+	if sb.LifetimeSecs != max || sb.ExpiresAt == nil {
+		t.Errorf("a sandbox asking for none: lifetime_secs %d, expires_at %v; want the limit, %d", sb.LifetimeSecs, sb.ExpiresAt, max)
+	}
+}
+
+// A lifetime brought nearer is kept to: counted from creation, so a change
+// to 2 seconds on a sandbox older than that ends it at once. Shortening is
+// what any caller may do; lengthening may be an operator's alone (a gateway
+// keeps it to admins), so it is not asked for here.
+func testLifetimeUpdate(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{LifetimeSecs: 300})
+	two := 2
+	got, err := e.c.UpdateSandbox(ctxT(t), sb.ID, api.UpdateSandboxRequest{LifetimeSecs: &two})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LifetimeSecs != 2 || got.ExpiresAt == nil || got.ExpiresAt.Sub(got.CreatedAt) != 2*time.Second {
+		t.Fatalf("after the change: lifetime_secs %d, expires_at %v; want 2s after %v", got.LifetimeSecs, got.ExpiresAt, got.CreatedAt)
+	}
+	zero := 0
+	_, err = e.c.UpdateSandbox(ctxT(t), sb.ID, api.UpdateSandboxRequest{LifetimeSecs: &zero})
+	wantCode(t, err, api.CodeInvalidRequest)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, err := e.c.Sandbox(ctxT(t), sb.ID); err != nil || got.State == api.StateTerminated {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("a sandbox outlived its shortened lifetime")
 }
 
 func testIdleTimeoutLimit(t *testing.T, e *env) {
@@ -755,8 +973,11 @@ func testSuspend(t *testing.T, e *env) {
 func testSnapshot(t *testing.T, e *env) {
 	sb := e.newSandbox(t, api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
 	ctx := ctxT(t)
-	if !e.caps.Has(api.CapMemorySnapshot) {
+	memory, disk := e.caps.Has(api.CapMemorySnapshot), e.caps.Has(api.CapDiskSnapshot)
+	if !memory && !disk {
 		_, err := e.c.CreateSnapshot(ctx, sb.ID)
+		wantCode(t, err, api.CodeUnsupported)
+		_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: "snp_0000000000000000"})
 		wantCode(t, err, api.CodeUnsupported)
 		return
 	}
@@ -768,6 +989,11 @@ func testSnapshot(t *testing.T, e *env) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	t.Cleanup(func() { _ = e.c.DeleteSnapshot(context.Background(), snap.ID) })
+	// The kind says what a fork gets back: whole where the endpoint captures
+	// memory, the files only where it captures disks.
+	if want := map[bool]string{true: api.SnapshotMemory, false: api.SnapshotDisk}[memory]; snap.Kind != want {
+		t.Fatalf("snapshot kind %q; the endpoint's capabilities say %q", snap.Kind, want)
+	}
 	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"echo", "still"}}); string(res.Stdout) != "still\n" {
 		t.Fatalf("the original stopped working after a snapshot: %q", res.Stdout)
 	}
@@ -791,8 +1017,25 @@ func testSnapshot(t *testing.T, e *env) {
 			t.Fatalf("a write in one fork reached %s: %q", ref, data)
 		}
 	}
-	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID, MemoryMB: 1})
+	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID, Image: "another:1"})
 	wantCode(t, err, api.CodeInvalidRequest)
+	if !memory {
+		// A disk snapshot fixes the files, not the resources: nothing captured
+		// was running with the original's, so a fork may ask for others.
+		big := e.newSandbox(t, api.CreateSandboxRequest{SnapshotID: snap.ID, MemoryMB: sb.MemoryMB * 2, Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+		if big.MemoryMB != sb.MemoryMB*2 {
+			t.Fatalf("a fork of a disk snapshot asked for %d MiB and got %d", sb.MemoryMB*2, big.MemoryMB)
+		}
+		if data, err := e.c.ReadFile(ctx, big.ID, "/sandbox/home/state.txt"); err != nil || string(data) != "prepared" {
+			t.Fatalf("the larger fork: %q, %v", data, err)
+		}
+	} else {
+		// A memory snapshot is a running machine: its resources come with it.
+		for _, mb := range []int{1, sb.MemoryMB * 2} {
+			_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: snap.ID, MemoryMB: mb})
+			wantCode(t, err, api.CodeInvalidRequest)
+		}
+	}
 	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotID: "snp_0000000000000000"})
 	wantCode(t, err, api.CodeNotFound)
 }
@@ -1159,4 +1402,109 @@ func testVolumeRefusals(t *testing.T, e *env) {
 	wantCode(t, err, api.CodeNotFound)
 	_, err = e.c.CreateVolume(ctxT(t), api.CreateVolumeRequest{Name: "Bad_Name"})
 	wantCode(t, err, api.CodeInvalidRequest)
+}
+
+// A snapshot schedule is bounded by limits the endpoint publishes, refused
+// where it cannot be kept, and — where the endpoint allows an interval short
+// enough to wait for — takes snapshots and keeps the newest it was told to.
+func testSnapshotSchedule(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	l := e.caps.Limits
+	if !e.caps.Has(api.CapMemorySnapshot) && !e.caps.Has(api.CapDiskSnapshot) {
+		_, err := e.c.CreateSandbox(ctx, api.CreateSandboxRequest{SnapshotEverySecs: max(l.MinSnapshotEverySecs, 1)})
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	if l.MinSnapshotEverySecs < 1 || l.MaxSnapshotKeep < 1 {
+		t.Fatalf("limits %+v: a snapshot schedule needs min_snapshot_every_secs and max_snapshot_keep", l)
+	}
+	bad := []api.CreateSandboxRequest{
+		{SnapshotEverySecs: l.MinSnapshotEverySecs, SnapshotKeep: l.MaxSnapshotKeep + 1},
+		{SnapshotKeep: 1},
+	}
+	if l.MinSnapshotEverySecs > 1 { // one second under a minimum of 1 is 0: no schedule, which is allowed
+		bad = append(bad, api.CreateSandboxRequest{SnapshotEverySecs: l.MinSnapshotEverySecs - 1})
+	}
+	for _, req := range bad {
+		_, err := e.c.CreateSandbox(ctx, req)
+		wantCode(t, err, api.CodeInvalidRequest)
+	}
+	if l.MinSnapshotEverySecs > 3 {
+		t.Logf("min_snapshot_every_secs is %d: the schedule's timing is not waited for here", l.MinSnapshotEverySecs)
+		return
+	}
+	every := l.MinSnapshotEverySecs
+	sb := e.newSandbox(t, api.CreateSandboxRequest{SnapshotEverySecs: every, SnapshotKeep: 1, Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	if sb.SnapshotEverySecs != every || sb.SnapshotKeep != 1 {
+		t.Fatalf("the sandbox says its schedule is %d/%d", sb.SnapshotEverySecs, sb.SnapshotKeep)
+	}
+	t.Cleanup(func() {
+		list, _ := e.c.Snapshots(context.Background())
+		for _, s := range list {
+			if s.Sandbox == sb.ID {
+				_ = e.c.DeleteSnapshot(context.Background(), s.ID)
+			}
+		}
+	})
+	// Three intervals and some: at least two scheduled snapshots were taken,
+	// and one is kept.
+	time.Sleep(time.Duration(3*every)*time.Second + 1500*time.Millisecond)
+	list, err := e.c.Snapshots(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine []api.Snapshot
+	for _, s := range list {
+		if s.Sandbox == sb.ID && s.Scheduled {
+			mine = append(mine, s)
+		}
+	}
+	if len(mine) != 1 {
+		t.Fatalf("%d scheduled snapshots after three intervals with keep 1: %v", len(mine), mine)
+	}
+	if out, err := e.c.SetSnapshotSchedule(ctx, sb.ID, api.SnapshotSchedule{}); err != nil || out.SnapshotEverySecs != 0 {
+		t.Fatalf("stopping the schedule: %+v, %v", out, err)
+	}
+}
+
+// Where the endpoint measures usage, a running sandbox gets samples within a
+// few intervals, each sane: a CPU share of 0 to 100, memory within its limit,
+// in time order. Where it does not, it says so.
+func testMetrics(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	sb := e.newSandbox(t, api.CreateSandboxRequest{Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	if !e.caps.Has(api.CapMetrics) {
+		_, err := e.c.Metrics(ctx, sb.ID)
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	var m api.MetricsList
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var err error
+		if m, err = e.c.Metrics(ctx, sb.ID); err != nil {
+			t.Fatal(err)
+		}
+		if m.IntervalSecs < 1 {
+			t.Fatalf("interval_secs %d", m.IntervalSecs)
+		}
+		if len(m.Samples) >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Duration(m.IntervalSecs) * time.Second / 2)
+	}
+	if len(m.Samples) < 2 {
+		t.Fatalf("%d samples in 30 s at an interval of %d s", len(m.Samples), m.IntervalSecs)
+	}
+	for i, s := range m.Samples {
+		if s.CPUPercent < 0 || s.CPUPercent > 100 || s.MemoryBytes < 0 || (s.MemoryLimitBytes > 0 && s.MemoryBytes > s.MemoryLimitBytes) {
+			t.Fatalf("sample %d is not sane: %+v", i, s)
+		}
+		if i > 0 && !s.Time.After(m.Samples[i-1].Time) {
+			t.Fatalf("samples out of order at %d", i)
+		}
+	}
+	if _, err := e.c.Metrics(ctx, "sbx_0000000000000000"); err == nil {
+		t.Fatal("metrics of a sandbox that does not exist")
+	}
 }

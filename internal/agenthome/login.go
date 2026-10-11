@@ -83,8 +83,26 @@ func WritePrivate(dir, rel string, data []byte) error {
 	if fi, err := os.Lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		return fmt.Errorf("%s is a symlink; not writing through it", path)
 	}
+	// The temporary file is made fresh, never opened as found: WriteFile
+	// follows a link planted at path.tmp, and keeps the mode of a file
+	// already there — a leftover 0644 one made the login, or a saved API
+	// key, readable by every user once renamed into place. O_EXCL refuses
+	// both, a link included.
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)

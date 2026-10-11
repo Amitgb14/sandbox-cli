@@ -1,0 +1,46 @@
+# PostgreSQL for sandbox-gateway on this machine (docs/fleet.md, "The
+# gateway's database"). Started by scripts/postgres-local.sh, which makes the
+# passwords; published on loopback only.
+#
+#   scripts/postgres-local.sh up      # start, and write the gateway's DSN file
+#   scripts/postgres-local.sh down    # stop (the data stays in the volume)
+name: sandbox-gateway-db
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SANDBOX_DB_PORT:-5432}:5432"
+    # The secrets are mounted as the host's files are, readable by their
+    # owner only; the init script runs as postgres, so it is handed its copy
+    # first (still 0600), then the image's own entrypoint runs.
+    entrypoint:
+      - sh
+      - -c
+      - install -o postgres -g postgres -m 600 /run/secrets/gateway_password /var/run/postgresql/.gateway_password && exec docker-entrypoint.sh postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      GATEWAY_PASSWORD_FILE: /var/run/postgresql/.gateway_password
+    secrets:
+      - postgres_password
+      - gateway_password
+    volumes:
+      - data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandbox_gateway -d sandbox_gateway"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  gateway_password:
+    file: ./secrets/gateway_password
+
+volumes:
+  data:

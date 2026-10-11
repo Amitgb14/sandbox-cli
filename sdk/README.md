@@ -25,11 +25,11 @@ user-facing calls (a plain sandboxd answers each with `not_found`):
 | `ssh_access(ref, ttl_secs=0)` | `sshAccess(ref, ttlSecs?)` | a short-lived login; its `user` is the token, and the whole credential until `expires_at` |
 
 And its jobs, agent runs and secrets — work the gateway runs after the
-request that started it has gone (README, "Agents and jobs on a fleet"):
+request that started it has gone ([docs/jobs.md](../docs/jobs.md)):
 
 | Python | TypeScript | |
 |---|---|---|
-| `create_job(spec)` | `createJob(spec)` | start a job: `command` or `agent` + `prompt`/`prompts`, `parallelism`, `completions`, `retries`, `timeout_secs`, `env`, `secrets`, `keep`, `notify`, … |
+| `create_job(spec)` | `createJob(spec)` | start a job: `command` or `agent` + `prompt`/`prompts`, `parallelism`, `completions`, `retries`, `timeout_secs`, `env`, `secrets`, `keep`, `notify`, `labels`, … |
 | `agent_run(agent, prompt, **opts)` | `agentRun(agent, prompt, opts?)` | a job of one agent run |
 | `jobs()` | `jobs()` | your jobs, newest first, without their runs |
 | `job(id)` | `job(id)` | one job, with each run's state, exit code, attempts and sandbox |
@@ -40,7 +40,7 @@ request that started it has gone (README, "Agents and jobs on a fleet"):
 | `secrets()` | `secrets()` | the tenant's secrets by name |
 | `delete_secret(name)` | `deleteSecret(name)` | |
 
-And organizations (docs/fleet.md, "Organisations"). A client made with
+And organizations ([docs/organizations.md](../docs/organizations.md)). A client made with
 `org="acme"` (Python) or `{ org: "acme" }` (TypeScript), or derived with
 `with_org("acme")` / `withOrg("acme")`, sends `X-Sandbox-Org: acme` on every
 request, so everything it does acts in that organization; the gateway answers

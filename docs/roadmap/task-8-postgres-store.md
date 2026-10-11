@@ -1,11 +1,49 @@
-# Task 8 — the gateway's state in PostgreSQL, so several gateways can serve one fleet
 
-**Status:** proposed 2026-10-04, not scheduled. Nothing here is built.
+# Task 8 — the gateway's state in a database, so several gateways can serve one fleet
+
+**Status:** proposed 2026-10-04; phases 1–3 and 5 built 2026-10-10 (below,
+*What was decided*). Phase 4, several gateways on one database, is next.
 **Builds on:** [task 7](task-7-fleet-gateway.md) (the gateway) and
 organisations (#204).
-**Needs a decision first:** a new Go dependency, the PostgreSQL driver
-(decision 1). `AGENTS.md` allows none without one recorded in
-[`../rewrite/PLAN.md`](../rewrite/PLAN.md).
+
+## What was decided (2026-10-10)
+
+The maintainer asked for PostgreSQL, run locally in Docker for a self-hosted
+machine, with SQLite as the other choice, and organisations isolated in the
+database. Against the decisions below:
+
+1. **Drivers:** `github.com/jackc/pgx/v5` and, for SQLite,
+   `modernc.org/sqlite` (pure Go, so no cgo in the release matrix), both for
+   the gateway only. Recorded in [`../rewrite/PLAN.md`](../rewrite/PLAN.md)
+   and `AGENTS.md`.
+2. **Row-level security: on.** Without a superuser: the gateway's login role
+   owns the tables, so its own work across tenants is not filtered, and a
+   request's transaction takes the `sandbox_gateway_tenant` role with
+   `app.tenant` set (`ForTenant`, `migrations/postgres/0002_rls.sql`).
+3. **Jobs' kept output:** stays on `--jobs-dir` (a shared filesystem, with
+   several gateways).
+4. **The audit log:** stays JSONL, one per gateway, for now.
+5. **The default is SQLite, not the file store.** The JSON file store is no
+   longer served from; `sandbox-gateway store import` moves a state file
+   into a database once, keeping every key's id and hash.
+
+Phase 4 was narrowed on purpose: several gateways on one database run as
+**one serving and the rest standing by** (a PostgreSQL advisory lock held on a
+connection of its own, checked every two seconds; a gateway that loses it
+stops at once), not several serving at once. That gives failover without the
+cross-gateway revocation, election and write coordination that serving
+together needs — each a way to split the brain — and leaves serving together
+for later, on the same tables.
+
+Also decided on the way: organisation names keep their case and are matched
+without it (an organisation's tenant is its name lowercased), and each
+sandbox's row keeps its details as its node last answered (name, image,
+state, labels, network, lifetime, end, idle timeout) and is kept as history
+once it is terminated. What is built is described for operators in
+[`../fleet.md`](../fleet.md#the-gateways-database).
+
+The proposal as written follows.
+
 
 ## Why
 

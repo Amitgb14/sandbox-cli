@@ -91,6 +91,40 @@ func TestKeysCommands(t *testing.T) {
 	}
 }
 
+// --invite-url prints the link hosted Studio signs a user in with, and is
+// checked before a key is minted, so a mistake there leaves no key behind.
+func TestKeysCreateInviteURL(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	for _, bad := range []string{"studio.example.com", "https://studio.example.com/app", "https://studio.example.com/?x=1", "ftp://studio.example.com"} {
+		if _, err := run(t, "--state", state, "keys", "create", "--user", "alice", "--scope", "sandbox:read", "--invite-url", bad); err == nil {
+			t.Errorf("--invite-url %q was accepted", bad)
+		}
+	}
+	if _, err := run(t, "--state", state, "keys", "create", "--user", "ops", "--scope", "sandbox:read", "--expires", "30s"); err == nil {
+		t.Error("a key expiring in under a minute was made")
+	}
+	if out, _ := run(t, "--state", state, "keys", "list"); strings.Contains(out, "key_") {
+		t.Fatalf("a refused create minted a key: %q", out)
+	}
+	out, err := run(t, "--state", state, "keys", "create", "--user", "alice", "--tenant", "alice", "--scope", "sandbox:read", "--invite-url", "https://studio.example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := regexp.MustCompile(`secret: (sgk_\S+)`).FindStringSubmatch(out)
+	if secret == nil || !strings.Contains(out, "invite: https://studio.example.com/#key="+secret[1]+"\n") {
+		t.Fatalf("output %q", out)
+	}
+	// An admin may have one too, for a Studio run with --allow-admin, and a
+	// key may be made to expire.
+	out, err = run(t, "--state", state, "keys", "create", "--user", "ops", "--scope", "admin", "--expires", "7d", "--invite-url", "https://studio.example.com")
+	if err != nil || !strings.Contains(out, "invite: https://studio.example.com/#key=") || !strings.Contains(out, "expires: ") {
+		t.Fatalf("an admin's invite: %q %v", out, err)
+	}
+	if out, _ := run(t, "--state", state, "keys", "list"); !regexp.MustCompile(`ops\s.*\d{4}-\d\d-\d\dT\S+\s+active`).MatchString(out) {
+		t.Errorf("keys list shows no expiry: %q", out)
+	}
+}
+
 func TestNodesCommands(t *testing.T) {
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state.json")
@@ -222,8 +256,23 @@ func TestServe(t *testing.T) {
 	if _, err := c.Capabilities(context.Background()); !api.IsCode(err, api.CodeUnavailable) {
 		t.Fatalf("capabilities with no nodes: %v", err)
 	}
-	if _, err := run(t, "--state", state, "keys", "revoke", "key_x"); err == nil || !strings.Contains(err.Error(), "admin API") {
-		t.Fatalf("the CLI changed a serving gateway's state: %v", err)
+	// With a database the offline commands work while the gateway serves,
+	// and what they change holds at once: the gateway reads keys per
+	// request. (The state file's lock refused them.)
+	out, err = run(t, "--state", state, "keys", "create", "--user", "ops", "--scope", "sandbox:read")
+	if err != nil {
+		t.Fatalf("a key issued while serving: %v", err)
+	}
+	m := regexp.MustCompile(`id: +(key_\S+)[\s\S]*secret: (sgk_\S+)`).FindStringSubmatch(out)
+	ops := api.NewClientWithHTTP(base, m[2], http.DefaultClient)
+	if who, err := ops.Whoami(context.Background()); err != nil || who.User != "ops" {
+		t.Fatalf("the key issued while serving: %+v %v", who, err)
+	}
+	if _, err := run(t, "--state", state, "keys", "revoke", m[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.Whoami(context.Background()); !api.IsCode(err, api.CodeUnauthorized) {
+		t.Fatalf("a key revoked while serving still works: %v", err)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -275,4 +324,113 @@ func TestRouterFlags(t *testing.T) {
 	if served || err == nil || !strings.Contains(err.Error(), "router") {
 		t.Fatalf("served %v, err %v; the gateway must not start without the router it was asked for", served, err)
 	}
+}
+
+// The relay's password is read from a file only its owner can read, and the
+// mail flags make sense only together.
+func TestMailConfigFromFlags(t *testing.T) {
+	if c, err := mailConfig(serveOptions{}); c != nil || err != nil {
+		t.Errorf("no relay: %v, %v", c, err)
+	}
+	if _, err := mailConfig(serveOptions{studioURL: "https://studio.example.com"}); err == nil {
+		t.Error("--studio-url without --smtp-host")
+	}
+	pw := filepath.Join(t.TempDir(), "smtp.key")
+	if err := os.WriteFile(pw, []byte("relay-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := serveOptions{smtpHost: "smtp.example.com", smtpPort: 465, smtpUser: "relay", smtpPasswordFile: pw,
+		mailFrom: "Studio <invites@example.com>", studioURL: "https://studio.example.com"}
+	if _, err := mailConfig(o); err == nil || !strings.Contains(err.Error(), "readable by others") {
+		t.Errorf("a password file others can read: %v", err)
+	}
+	if err := os.Chmod(pw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := mailConfig(o)
+	if err != nil || c.Password != "relay-secret" || c.Port != 465 {
+		t.Errorf("a good relay: %+v, %v", c, err)
+	}
+}
+
+// A gateway from before databases left a state file: every command refuses
+// to start on the empty database beside it and says how to import it, and
+// after the import the old key's secret still signs in.
+func TestStoreImport(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "state.json")
+	fs, err := gateway.OpenFileStore(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, k, err := fs.CreateKey("root", "", []string{"admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.PutPolicy(api.UserPolicy{Name: "demo", MaxLifetimeSecs: 1800}); err != nil {
+		t.Fatal(err)
+	}
+	fs.Close()
+
+	if _, err := run(t, "--state-dir", dir, "keys", "list"); err == nil || !strings.Contains(err.Error(), "store import --from "+old) {
+		t.Fatalf("an empty database beside a state file: %v", err)
+	}
+	out, err := run(t, "--state-dir", dir, "store", "import", "--from", old)
+	if err != nil || !strings.Contains(out, "1 keys") || !strings.Contains(out, "1 policies") {
+		t.Fatalf("import: %q %v", out, err)
+	}
+	if _, err := run(t, "--state-dir", dir, "store", "import", "--from", old); err == nil || !strings.Contains(err.Error(), "already holds") {
+		t.Fatalf("a second import: %v", err)
+	}
+	out, err = run(t, "--state-dir", dir, "keys", "list")
+	if err != nil || !strings.Contains(out, k.ID) {
+		t.Fatalf("keys after the import: %q %v", out, err)
+	}
+	if out, err := run(t, "--state-dir", dir, "store", "status"); err != nil || !strings.Contains(out, "keys:      1") {
+		t.Fatalf("status: %q %v", out, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	where := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- serve(ctx, old, serveOptions{listen: "127.0.0.1:0", pollInterval: time.Second}, t.Logf, func(w string) { where <- w })
+	}()
+	var base string
+	select {
+	case base = <-where:
+	case err := <-done:
+		t.Fatal(err)
+	}
+	who, err := api.NewClientWithHTTP(base, secret, http.DefaultClient).Whoami(context.Background())
+	if err != nil || who.User != "root" || who.KeyID != k.ID {
+		t.Fatalf("the old key after the import: %+v %v", who, err)
+	}
+	cancel()
+	<-done
+}
+
+// A second gateway on the same SQLite database is refused, rather than
+// serving beside the first.
+func TestSecondServeOnSQLiteIsRefused(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	where := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- serve(ctx, state, serveOptions{listen: "127.0.0.1:0", pollInterval: time.Second}, t.Logf, func(w string) { where <- w })
+	}()
+	select {
+	case <-where:
+	case err := <-done:
+		t.Fatal(err)
+	}
+	err := serve(context.Background(), state, serveOptions{listen: "127.0.0.1:0", pollInterval: time.Second}, t.Logf, nil)
+	if err == nil || !strings.Contains(err.Error(), "another gateway serves") {
+		t.Fatalf("a second gateway on one database: %v", err)
+	}
+	cancel()
+	<-done
 }

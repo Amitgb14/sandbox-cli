@@ -1,14 +1,24 @@
 "use client";
 
-import { Cpu, Globe, HardDrive, ListTree, Timer } from "lucide-react";
+import { useState } from "react";
+import { Pencil, Scaling, SquareTerminal } from "lucide-react";
+import { toast } from "sonner";
+import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Countdown, ownerOf } from "@/components/sandbox/countdown";
+import { Labels } from "@/components/sandbox/labels";
+import { ResourcesWithMetrics } from "@/components/sandbox/metrics";
+import { SandboxSnapshots } from "@/components/sandbox/snapshots";
+import { EditDetails } from "@/components/sandbox/edit-details";
+import { EditNetwork } from "@/components/sandbox/edit-network";
+import { ResizeDialog, resizeBlocked } from "@/components/sandbox/resize";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useInfo, useUpdateSandbox } from "@/lib/api/queries";
+import { useCan } from "@/lib/caller";
+import { cn } from "@/lib/utils";
+import { StateDot } from "@/components/sandbox/state-dot";
 import { formatArgv, formatDateTime, formatRelative } from "@/lib/format";
 import type { Process, Sandbox } from "@/lib/types";
-
-function mib(n: number): string {
-  return n >= 1024 ? `${+(n / 1024).toFixed(1)} GiB` : `${n} MiB`;
-}
 
 function idle(secs: number): string {
   if (!secs) return "never";
@@ -17,130 +27,279 @@ function idle(secs: number): string {
   return `${secs} s`;
 }
 
-function Panel({ icon: Icon, title, children }: { icon: React.ComponentType<{ className?: string }>; title: string; children: React.ReactNode }) {
+function Section({ title, aside, children }: { title?: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <Card className="surface-sheen gap-0 py-0">
-      <CardContent className="flex flex-col gap-3 p-4">
-        <h3 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Icon className="size-3.5" />
-          {title}
-        </h3>
-        {children}
-      </CardContent>
-    </Card>
+    <section className="flex flex-col gap-2.5 border-b px-5 py-4 last:border-b-0">
+      {title ? (
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="font-mono text-[11px] tracking-wider text-muted-foreground uppercase">{title}</h3>
+          {aside}
+        </div>
+      ) : null}
+      {children}
+    </section>
   );
 }
 
-function Row({ k, children }: { k: string; children: React.ReactNode }) {
+const STEP = 15 * 60;
+
+/**
+ * Moves a sandbox's end by a quarter of an hour. Bringing it nearer only
+ * narrows what the caller holds, so any key that may change the sandbox may;
+ * pushing it out is the operator's: a sandboxd's token, or an admin key at a
+ * gateway, which refuses it to anyone else (internal/gateway/update.go).
+ */
+function MoveEnd({ sb, mayExtend }: { sb: Sandbox; mayExtend: boolean }) {
+  const update = useUpdateSandbox();
+  const life = sb.lifetime_secs ?? 0;
+  const move = (by: number) => {
+    const next = life + by;
+    const ends = new Date(sb.created_at).getTime() + next * 1000;
+    if (ends <= Date.now() && !confirm(`That end is already past: ${sb.name || sb.id} is terminated now. Go on?`)) return;
+    update.mutate(
+      { id: sb.id, lifetime_secs: next },
+      { onSuccess: () => toast.success(by > 0 ? "Lifetime extended" : "Lifetime shortened"), onError: (e) => toast.error(e.message) },
+    );
+  };
+  const button = (label: string, by: number, disabled: boolean) => (
+    <button
+      type="button"
+      onClick={() => move(by)}
+      disabled={disabled || update.isPending}
+      aria-label={by > 0 ? "Extend lifetime by 15 minutes" : "Shorten lifetime by 15 minutes"}
+      className="rounded-md px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+    >
+      {label}
+    </button>
+  );
   return (
-    <div className="flex items-baseline justify-between gap-4 text-sm">
-      <dt className="text-muted-foreground">{k}</dt>
-      <dd className="min-w-0 truncate text-right font-mono text-[13px]">{children}</dd>
+    <>
+      {button("−15m", -STEP, life <= STEP)}
+      {mayExtend ? button("+15m", STEP, false) : null}
+    </>
+  );
+}
+
+function Row({ k, copy, children }: { k: string; copy?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-6 items-center justify-between gap-4 text-sm">
+      <dt className="shrink-0 text-muted-foreground">{k}</dt>
+      <dd className="flex min-w-0 items-center justify-end gap-1">
+        <span className="min-w-0 truncate text-right">{children}</span>
+        {copy ? <CopyButton value={copy} label={`Copy ${k.toLowerCase()}`} className="size-6 shrink-0" /> : null}
+      </dd>
     </div>
   );
 }
 
+/** A small action beside a value: an edit a live sandbox takes, or why it does not. */
+function Action({ label, icon: Icon, onClick, blocked }: { label: string; icon: typeof Pencil; onClick: () => void; blocked?: string }) {
+  const button = (
+    <button
+      type="button"
+      onClick={blocked ? undefined : onClick}
+      aria-disabled={!!blocked}
+      aria-label={label}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground",
+        blocked ? "cursor-not-allowed opacity-50" : "hover:bg-muted hover:text-foreground",
+      )}
+    >
+      <Icon className="size-3" aria-hidden />
+      {label.split(" ")[0]}
+    </button>
+  );
+  if (!blocked) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent className="max-w-72">{blocked}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function Network({ sb, editable, onEdit }: { sb: Sandbox; editable: string | null; onEdit: () => void }) {
+  const [open, setOpen] = useState(false);
+  const allow = sb.network.allow ?? [];
+  return (
+    <>
+      <Row k="Network">
+        <span className="font-mono text-[13px]">{sb.network.mode}</span>
+        {sb.network.mode === "allowlist" ? (
+          <button type="button" onClick={() => setOpen(!open)} className="ml-2 text-xs text-muted-foreground underline-offset-2 hover:underline">
+            {allow.length} {allow.length === 1 ? "name" : "names"}
+          </button>
+        ) : null}
+        {editable !== null ? <Action label="Change network" icon={Pencil} onClick={onEdit} blocked={editable} /> : null}
+      </Row>
+      {open && allow.length ? (
+        <p className="rounded-md bg-muted/40 px-2.5 py-2 font-mono text-[11px] leading-relaxed break-all text-muted-foreground">{allow.join(", ")}</p>
+      ) : null}
+      {sb.network.deny?.length ? <Row k="Denied">{sb.network.deny.length} names</Row> : null}
+    </>
+  );
+}
+
 /**
- * What a sandbox is: what it was given, what it may reach, how long it lives,
- * what is mounted in it, and what has run. Everything here is the API's own
- * record of the sandbox; resources are allocations, not live usage, which
- * this sandboxd does not report.
+ * What a sandbox is, in sections a reader can scan down: what it is, what it
+ * was given, how long it lives, how it is labelled, what is in its
+ * environment and mounted in it, and what has run. Everything here is the
+ * API's own record of the sandbox; resources are allocations, not live usage,
+ * which sandboxd does not report.
  */
 export function SandboxOverview({
   sb,
   processes,
-  onLogs,
+  onOpen,
+  onReplaced,
 }: {
   sb: Sandbox;
   processes: Process[];
-  onLogs: (pid: number) => void;
+  /** A process clicked: its terminal if it has one running, else its logs. */
+  onOpen: (pid: number) => void;
+  /** A resize replaced it with a copy at the new size. */
+  onReplaced?: (id: string) => void;
 }) {
+  const labels = Object.keys(sb.labels ?? {}).length;
+  const { data: info } = useInfo();
+  const can = useCan();
+  const [editing, setEditing] = useState<"details" | "network" | "resize" | null>(null);
+  // What a live sandbox can have changed, for a key that may change it;
+  // null hides the control, a string disables it and says why.
+  const live = sb.state === "running" || sb.state === "suspended";
+  const mayEdit = can("sandbox:create") && live;
+  const caps = info?.capabilities?.capabilities;
+  const netBlocked = !mayEdit
+    ? null
+    : sb.state !== "running"
+      ? "Only a running sandbox's network changes."
+      : !caps?.network_policy_update
+        ? `${info?.capabilities?.backend ?? "This endpoint"} cannot change a running sandbox's network.`
+        : "";
+  const resize = mayEdit ? resizeBlocked(sb, caps, info?.capabilities?.backend) : null;
+  const edit = mayEdit ? <Action label="Edit name, labels and idle timeout" icon={Pencil} onClick={() => setEditing("details")} /> : null;
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid gap-3 md:grid-cols-3">
-        <Panel icon={Cpu} title="Resources">
-          <dl className="flex flex-col gap-1.5">
-            <Row k="vCPU">{sb.cpus}</Row>
-            <Row k="Memory">{mib(sb.memory_mb)}</Row>
-            <Row k="Disk">{mib(sb.disk_mb)}</Row>
-            <Row k="Image">
-              <span title={sb.image}>{sb.image}</span>
-            </Row>
-          </dl>
-        </Panel>
-        <Panel icon={Globe} title="Network">
-          <dl className="flex flex-col gap-1.5">
-            <Row k="Mode">{sb.network.mode}</Row>
-            {sb.network.mode === "allowlist" ? <Row k="Allowed">{sb.network.allow?.length ?? 0} names</Row> : null}
-            {sb.network.deny?.length ? <Row k="Denied">{sb.network.deny.length} names</Row> : null}
-          </dl>
-          {sb.network.allow?.length ? (
-            <p className="line-clamp-3 font-mono text-[11px] leading-relaxed text-muted-foreground">{sb.network.allow.join(", ")}</p>
-          ) : null}
-        </Panel>
-        <Panel icon={Timer} title="Lifecycle">
-          <dl className="flex flex-col gap-1.5">
-            <Row k="State">
-              <StatusBadge outcome={sb.state} size="sm" />
-            </Row>
-            <Row k="Started">
-              <span title={formatDateTime(sb.created_at)}>{formatRelative(sb.created_at)}</span>
-            </Row>
-            <Row k="Idle timeout">{idle(sb.idle_timeout_secs)}</Row>
-            <Row k="Starts in">/sandbox/home</Row>
-          </dl>
-        </Panel>
-      </div>
+    <div className="flex flex-col">
+      <Section>
+        <dl className="flex flex-col gap-1.5">
+          <Row k="Name">
+            <span className={cn("font-mono text-[13px]", !sb.name && "text-muted-foreground")}>{sb.name || "—"}</span>
+            {edit}
+          </Row>
+          <Row k="ID" copy={sb.id}>
+            <span className="font-mono text-[13px]">{sb.id}</span>
+          </Row>
+          <Row k="Image" copy={sb.image}>
+            <span className="font-mono text-[13px]" title={sb.image}>
+              {sb.image}
+            </span>
+          </Row>
+          <Network sb={sb} editable={netBlocked} onEdit={() => setEditing("network")} />
+          <Row k="Starts in">
+            <span className="font-mono text-[13px]">/sandbox/home</span>
+          </Row>
+        </dl>
+      </Section>
 
-      {(sb.volumes?.length || sb.env_names?.length) ? (
-        <div className="grid gap-3 md:grid-cols-2">
-          <Panel icon={HardDrive} title="Volumes">
-            {sb.volumes?.length ? (
-              <dl className="flex flex-col gap-1.5">
-                {sb.volumes.map((v) => (
-                  <Row key={v.name} k={v.name}>
-                    {v.path}
-                    {v.read_only ? " (read-only)" : ""}
-                  </Row>
-                ))}
-              </dl>
-            ) : (
-              <p className="text-sm text-muted-foreground">None mounted.</p>
-            )}
-          </Panel>
-          <Panel icon={ListTree} title="Environment">
-            {/* Names only: the API never returns a value, and neither does this. */}
-            {sb.env_names?.length ? (
-              <p className="font-mono text-[12px] leading-relaxed">{sb.env_names.join("  ")}</p>
-            ) : (
-              <p className="text-sm text-muted-foreground">No variables set.</p>
-            )}
-          </Panel>
-        </div>
+      <Section title="Resources" aside={resize !== null ? <Action label="Resize" icon={Scaling} onClick={() => setEditing("resize")} blocked={resize} /> : null}>
+        <ResourcesWithMetrics sb={sb} />
+      </Section>
+
+      <Section title="Lifecycle" aside={edit}>
+        <dl className="flex flex-col gap-1.5">
+          <Row k="State">
+            <StateDot state={sb.state} />
+          </Row>
+          <Row k="Created">
+            <span title={formatDateTime(sb.created_at)}>{formatRelative(sb.created_at)}</span>
+          </Row>
+          {ownerOf(sb) ? <Row k="Owner"><span className="font-mono text-xs">{ownerOf(sb)}</span></Row> : null}
+          <Row k="Idle auto-stop">{idle(sb.idle_timeout_secs)}</Row>
+          {sb.expires_at && sb.state !== "terminated" ? (
+            <Row k="Ends">
+              <Countdown at={sb.expires_at} />
+              {mayEdit ? <MoveEnd sb={sb} mayExtend={can("admin")} /> : null}
+            </Row>
+          ) : null}
+        </dl>
+      </Section>
+
+      <Section title="Snapshots">
+        <SandboxSnapshots sb={sb} />
+      </Section>
+
+      {labels || mayEdit ? (
+        <Section title="Labels" aside={edit}>
+          <Labels labels={sb.labels} />
+        </Section>
       ) : null}
 
-      <Panel icon={ListTree} title="Processes">
+      <EditDetails sb={sb} open={editing === "details"} onOpenChange={(o) => setEditing(o ? "details" : null)} />
+      <EditNetwork sb={sb} open={editing === "network"} onOpenChange={(o) => setEditing(o ? "network" : null)} />
+      <ResizeDialog
+        sb={sb}
+        open={editing === "resize"}
+        onOpenChange={(o) => setEditing(o ? "resize" : null)}
+        onReplaced={onReplaced}
+      />
+
+      {sb.env_names?.length ? (
+        <Section title="Environment">
+          {/* Names only: the API never returns a value, and neither does this. */}
+          <div className="flex flex-wrap gap-1">
+            {sb.env_names.map((n) => (
+              <span key={n} className="rounded-md border px-1.5 py-0.5 font-mono text-[11px]">
+                {n}
+              </span>
+            ))}
+          </div>
+        </Section>
+      ) : null}
+
+      {sb.volumes?.length ? (
+        <Section title="Volumes">
+          <dl className="flex flex-col gap-1.5">
+            {sb.volumes.map((v) => (
+              <Row key={v.name} k={v.name}>
+                <span className="font-mono text-[13px]">
+                  {v.path}
+                  {v.read_only ? " (read-only)" : ""}
+                </span>
+              </Row>
+            ))}
+          </dl>
+        </Section>
+      ) : null}
+
+      <Section title="Processes" aside={processes.length ? <span className="text-xs text-muted-foreground tabular-nums">{processes.length}</span> : null}>
         {processes.length ? (
           <div className="flex flex-col divide-y">
             {[...processes].reverse().map((p) => (
-              <div key={p.pid} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
-                <span className="w-10 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{p.pid}</span>
-                <span className="min-w-0 flex-1 truncate font-mono text-xs" title={formatArgv(p.argv)}>
-                  {formatArgv(p.argv)}
-                </span>
-                {p.tty ? <span className="text-[11px] text-muted-foreground">terminal</span> : null}
-                <StatusBadge outcome={p.state} exitCode={p.exit_code} size="sm" />
-                <span className="hidden w-20 text-right text-xs text-muted-foreground sm:block">{formatRelative(p.started_at)}</span>
-                <button type="button" onClick={() => onLogs(p.pid)} className="text-xs text-muted-foreground hover:text-foreground">
-                  logs →
-                </button>
-              </div>
+              <button
+                type="button"
+                key={p.pid}
+                onClick={() => onOpen(p.pid)}
+                title={p.tty && p.state === "running" ? "Open its terminal" : "Show its logs"}
+                className="flex items-center gap-3 py-1.5 text-left first:pt-0 last:pb-0 hover:text-foreground"
+              >
+                <span className="w-8 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{p.pid}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">{formatArgv(p.argv)}</span>
+                {p.tty && p.state === "running" ? (
+                  <span className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] text-status-running">
+                    <SquareTerminal className="size-3" />
+                    Interactive
+                  </span>
+                ) : (
+                  <StatusBadge outcome={p.state} exitCode={p.exit_code} size="sm" />
+                )}
+                <span className="hidden w-16 text-right text-xs text-muted-foreground sm:block">{formatRelative(p.started_at)}</span>
+              </button>
             ))}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">Nothing has run in this sandbox yet.</p>
         )}
-      </Panel>
+      </Section>
     </div>
   );
 }

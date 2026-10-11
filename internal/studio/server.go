@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -44,12 +45,36 @@ type LaunchRequest struct {
 	Console bool     `json:"console,omitempty"`
 	Command []string `json:"command,omitempty"`
 
-	Name    string            `json:"name,omitempty"`
-	Network string            `json:"network,omitempty"` // "", none, allowlist, open
-	Allow   []string          `json:"allow,omitempty"`
-	Labels  map[string]string `json:"labels,omitempty"`
-	Volumes []api.VolumeMount `json:"volumes,omitempty"`
-	Profile string            `json:"profile,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Network string   `json:"network,omitempty"` // "", none, allowlist, open
+	Allow   []string `json:"allow,omitempty"`
+	Deny    []string `json:"deny,omitempty"`
+	// EgressGroups are the allowlist groups (Settings) whose hosts the run
+	// may reach: absent, the default groups; [] none. Naming any asks for an
+	// allowlist. NoBaseline leaves out the built-in hosts (--no-baseline), so
+	// the groups, Allow and an agent's API are the whole list.
+	EgressGroups []string          `json:"egress_groups"`
+	NoBaseline   bool              `json:"no_baseline,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Volumes      []api.VolumeMount `json:"volumes,omitempty"`
+	Profile      string            `json:"profile,omitempty"`
+	// Image runs that image instead of the server's default, and Snapshot
+	// starts from a snapshot instead of an image: the CLI's --image and
+	// --from-snapshot. Either is only asked for; sandboxd decides, under its
+	// policy's image list and the snapshot's owner, as for any client.
+	Image    string `json:"image,omitempty"`
+	Snapshot string `json:"snapshot,omitempty"`
+	// SnapshotEverySecs and SnapshotKeep give the sandbox a snapshot schedule:
+	// the CLI's --snapshot-every and --snapshot-keep, bounded and refused by
+	// sandboxd as any client's.
+	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
+	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
+	// CPUs, MemoryMB and DiskMB size the sandbox — a template's, in the
+	// Playground: the CLI's --cpus, --memory and --disk. Zero is the server's
+	// default; the server's limits bound the rest.
+	CPUs     float64 `json:"cpus,omitempty"`
+	MemoryMB int     `json:"memory_mb,omitempty"`
+	DiskMB   int     `json:"disk_mb,omitempty"`
 	// Rows and Cols size a console run's terminal before anyone attaches.
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`
@@ -64,8 +89,9 @@ type LaunchResult struct {
 	PID     int    `json:"pid"`
 }
 
-// Launcher starts a run; the CLI supplies it.
-type Launcher func(ctx context.Context, req LaunchRequest) (LaunchResult, error)
+// Launcher starts a run; the CLI supplies it. c is the client of the request
+// it serves: the context's in local mode, the signed-in user's when hosted.
+type Launcher func(ctx context.Context, c *api.Client, req LaunchRequest) (LaunchResult, error)
 
 // Server is one Studio.
 type Server struct {
@@ -76,19 +102,39 @@ type Server struct {
 	Launch  Launcher
 	Version string
 	Logf    func(format string, a ...any)
+
+	// Hosted, when set, serves many users from a public address, each signed
+	// in with their own gateway key (hosted.go). Client, Context and Token
+	// are then unused.
+	Hosted *Hosted
+	hosted *hosted
 }
 
 // Handler is everything Studio serves.
 func (s *Server) Handler() http.Handler {
+	if s.Hosted != nil {
+		return s.hostedHandler()
+	}
 	mux := http.NewServeMux()
 	api := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.guard(h)) }
 
 	api("GET /api/info", s.info)
 	api("/api/v1/", s.proxy())
 	api("GET /api/ws/attach", s.attach)
+	api("GET /api/ws/desktop", s.desktop)
 	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
 	api("GET /api/agents", s.agents)
+	api("PUT /api/agents/{agent}/keys/{var}", s.putAgentKey)
+	api("DELETE /api/agents/{agent}/keys/{var}", s.deleteAgentKey)
+	api("GET /api/templates", s.templates)
+	api("PUT /api/templates/{name}", s.putTemplate)
+	api("DELETE /api/templates/{name}", s.deleteTemplate)
+	api("POST /api/sandboxes/{id}/resize", s.resize)
+	api("GET /api/egress", s.egress)
+	api("PUT /api/egress", s.putEgress)
+	api("PUT /api/egress/groups/{name}", s.putEgressGroup)
+	api("DELETE /api/egress/groups/{name}", s.deleteEgressGroup)
 	mux.Handle("/api/", s.guard(func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
 	}))
@@ -173,16 +219,34 @@ func orgOf(r *http.Request) string {
 	return ""
 }
 
-// clientFor is the context's client acting in the organisation r selects.
-func (s *Server) clientFor(r *http.Request) *api.Client { return s.Client.WithOrg(orgOf(r)) }
+// clientFor is the client r acts with — the context's, or when hosted the
+// signed-in user's — in the organisation r selects.
+func (s *Server) clientFor(r *http.Request) *api.Client {
+	if sess := sessionFrom(r.Context()); sess != nil {
+		return sess.client.WithOrg(orgOf(r))
+	}
+	return s.Client.WithOrg(orgOf(r))
+}
 
 // proxy forwards /api/v1/... to sandboxd's /v1/..., replacing the browser's
 // Studio token with the context's own. The browser's X-Sandbox-Org passes
 // through as it came: a selection the gateway checks against the key's
 // memberships, never a credential. An upgrade is refused here: a browser
 // cannot speak the API's stream protocols, and /api/ws/attach is the bridge.
+//
+// Hosted, the token is the session's, set per request, and the transport is
+// the one that ends a session the gateway answers 401 for.
 func (s *Server) proxy() http.HandlerFunc {
-	base, rt, token := s.Client.Transport()
+	var (
+		base  *url.URL
+		rt    http.RoundTripper
+		token string
+	)
+	if s.hosted != nil {
+		base, rt = s.hosted.gateway, s.hosted.rt
+	} else {
+		base, rt, token = s.Client.Transport()
+	}
 	rp := &httputil.ReverseProxy{
 		Transport: rt,
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -193,7 +257,9 @@ func (s *Server) proxy() http.HandlerFunc {
 			pr.Out.Header.Del("Authorization")
 			pr.Out.Header.Del("Origin")
 			pr.Out.Header.Del("Cookie")
-			if token != "" {
+			if sess := sessionFrom(pr.In.Context()); sess != nil {
+				pr.Out.Header.Set("Authorization", "Bearer "+sess.key)
+			} else if token != "" {
 				pr.Out.Header.Set("Authorization", "Bearer "+token)
 			}
 		},
@@ -218,9 +284,24 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	// needs it to write API code that means what the CLI line does.
 	// org is the context's own selection (sandbox-cli org use), which Studio
 	// starts in when the browser has chosen none.
-	out := map[string]any{"context": s.Context, "version": s.Version, "baseline_egress": policy.BaselineEgress(), "org": s.Client.Org()}
-	if caps, err := s.Client.Capabilities(ctx); err == nil {
+	out := map[string]any{"context": s.Context, "version": s.Version, "baseline_egress": policy.BaselineEgress()}
+	c := s.Client
+	if sess := sessionFrom(r.Context()); sess != nil {
+		// Hosted: no context, and nothing about the machine Studio runs on.
+		// No organisation either: with none chosen in the browser, a user
+		// starts in their key's own tenant.
+		c = sess.client
+		out["context"], out["hosted"], out["user"], out["tenant"] = "hosted", true, sess.who.User, sess.who.Tenant
+		out["admin_sign_in"] = s.hosted.cfg.AllowAdmin
+	}
+	out["org"] = c.Org()
+	if caps, err := c.Capabilities(ctx); err == nil {
 		out["capabilities"] = caps
+	} else if e := (*api.Error)(nil); s.hosted != nil && errors.As(err, &e) && e.Status == http.StatusUnauthorized {
+		// The gateway stopped accepting the session's key, and the session
+		// is gone with it: say so, rather than report an endpoint error.
+		writeNoSession(w)
+		return
 	} else {
 		out["error"] = err.Error()
 	}

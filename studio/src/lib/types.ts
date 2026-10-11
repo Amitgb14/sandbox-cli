@@ -36,16 +36,61 @@ export interface Sandbox {
   network: NetworkPolicy;
   created_at: string;
   idle_timeout_secs: number;
+  /** How long it may exist, busy or not, and when it ends for it; absent when it has no lifetime. */
+  lifetime_secs?: number;
+  expires_at?: string;
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
+  /** The snapshot schedule: one every so many seconds while it runs, the newest kept. */
+  snapshot_every_secs?: number;
+  snapshot_keep?: number;
+  /** The snapshot being taken of it, while one is. */
+  snapshotting?: SnapshotProgress;
+}
+
+/** How far a snapshot has got: what has been read, against an estimate where the backend has one. */
+export interface SnapshotProgress {
+  started_at: string;
+  scheduled?: boolean;
+  phase: "capture" | "store";
+  bytes: number;
+  estimated_bytes?: number;
 }
 
 export interface Capabilities {
   api_version: string;
   backend: string;
   capabilities: Record<string, boolean>;
-  limits: { max_cpus: number; max_memory_mb: number; max_disk_mb: number; max_idle_timeout_secs: number };
+  limits: {
+    max_cpus: number;
+    max_memory_mb: number;
+    max_disk_mb: number;
+    max_idle_timeout_secs: number;
+    /** How long any sandbox may exist; absent or 0 is no bound. */
+    max_lifetime_secs?: number;
+    /** The shortest snapshot schedule allowed, and the most scheduled snapshots kept. */
+    min_snapshot_every_secs?: number;
+    max_snapshot_keep?: number;
+  };
   network: { default: NetworkPolicy; ceiling: NetworkMode; may_allow: string[] | null };
+}
+
+export type Limits = Capabilities["limits"];
+
+/** An image the endpoint has, or is installing (GET /v1/images; capability images). */
+export interface SandboxImage {
+  image: string;
+  state: "installed" | "installing" | "failed";
+  digest?: string;
+  bytes?: number;
+  installed_at?: string;
+  /** Sandboxes running or suspended here that start from it. */
+  in_use: number;
+  /** The server's default image, or one it keeps a pool of: neither is removed. */
+  default?: boolean;
+  pooled?: boolean;
+  progress?: { phase: "pulling" | "building"; done?: number; total?: number };
+  error?: string;
 }
 
 export interface Process {
@@ -65,6 +110,8 @@ export interface AuditEvent {
   image?: string;
   labels?: Record<string, string>;
   network?: NetworkPolicy;
+  /** After a sandbox.updated that changed it. */
+  idle_timeout_secs?: number;
   env_names?: string[];
   snapshot?: string;
   volumes?: VolumeMount[];
@@ -99,11 +146,34 @@ export interface Snapshot {
   id: string;
   sandbox: string;
   image: string;
+  /** memory: memory, processes and disk; disk: the files only, forks boot afresh. */
+  kind?: "memory" | "disk";
+  /** Taken by the sandbox's schedule, whose retention may remove it. */
+  scheduled?: boolean;
   bytes: number;
   created_at: string;
 }
 
 /** GET /api/info */
+/** What a sandboxd has for sandboxes (GET /v1/node): allocations, not live usage. */
+export interface NodeResources {
+  cpus: number;
+  memory_mb: number;
+  disk_mb: number;
+}
+
+export interface NodeStatus {
+  node: string;
+  version: string;
+  capacity: NodeResources;
+  /** Capacity less what running and suspended sandboxes were given. */
+  free: NodeResources;
+  running: number;
+  /** Images whose root disk is already built here, so a sandbox of one starts without a pull. */
+  images?: string[];
+  cordoned: boolean;
+}
+
 export interface Info {
   context: string;
   version: string;
@@ -113,12 +183,59 @@ export interface Info {
   org?: string;
   capabilities?: Capabilities;
   error?: string;
+  /** Served by `sandbox-cli studio host`: the signed-in user's, and nothing of the host's. */
+  hosted?: boolean;
+  user?: string;
+  tenant?: string;
 }
 
 /** An agent Studio can run: only those with a verified headless mode are listed. */
 export interface Agent {
   name: string;
-  login: "saved" | "-" | "not kept";
+  login: "saved" | "-" | "not kept" | "in sandbox";
+  /** The agent's API, which its runs may always reach. */
+  provider_host?: string;
+  /** What is kept of its login between runs, relative to the sandbox user's home. */
+  login_files?: string[];
+  /**
+   * The variables it reads: whether each is set where Studio runs, and
+   * whether a key is saved for it. A run forwards the environment's value,
+   * else the saved one. Names only: a value is never served.
+   */
+  env?: { name: string; set: boolean; saved?: boolean }[];
+}
+
+/** A size to launch a sandbox at (Templates). The built-in ones cannot be changed. */
+export interface VmTemplate {
+  name: string;
+  description?: string;
+  cpus: number;
+  memory_mb: number;
+  /** 0 or absent: the server's default. */
+  disk_mb?: number;
+  builtin?: boolean;
+}
+
+/** A host every Studio launch is refused (Settings, Deny rules). */
+export interface EgressRule {
+  host: string;
+  action: "deny";
+  enabled: boolean;
+  note?: string;
+}
+
+/** A named set of hosts an allowlist launch can include (Settings, Allowlist groups). */
+export interface EgressGroup {
+  name: string;
+  description?: string;
+  hosts: string[];
+  /** Included in an allowlist launch that picks no groups. */
+  default?: boolean;
+}
+
+export interface EgressSettings {
+  rules: EgressRule[];
+  groups: EgressGroup[];
 }
 
 export interface LaunchRequest {
@@ -129,11 +246,26 @@ export interface LaunchRequest {
   name?: string;
   network?: "" | NetworkMode;
   allow?: string[];
+  deny?: string[];
+  /** Allowlist groups: absent, the default ones; [] none. Naming any asks for an allowlist. */
+  egress_groups?: string[];
+  /** Leave out the built-in hosts: the groups, allow and an agent's API are the whole list. */
+  no_baseline?: boolean;
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
+  /** A template's size; absent is the server's default. */
+  cpus?: number;
+  memory_mb?: number;
+  disk_mb?: number;
   profile?: "" | "dev" | "prod";
   rows?: number;
   cols?: number;
+  /** An image instead of the server's default, or a snapshot to start from: one or neither. */
+  image?: string;
+  snapshot?: string;
+  /** A snapshot schedule: one every so many seconds while it runs, the newest kept. */
+  snapshot_every_secs?: number;
+  snapshot_keep?: number;
 }
 
 export interface LaunchResult {
@@ -176,6 +308,17 @@ export interface Whoami {
   scopes: string[];
   /** The organisation the request acted in, after X-Sandbox-Org; "default" for the default tenant. */
   org?: string;
+  /** The operator's policy for this user, if any (docs/fleet.md#user-policies). */
+  policy?: UserPolicy;
+  /** Set for an account's sign-in: its address, and that it has a password. */
+  email?: string;
+}
+
+/** A gateway's user policy: limits on top of the nodes' own. */
+export interface UserPolicy {
+  name: string;
+  /** How long each of the user's sandboxes may exist; 0 is no bound of its own. */
+  max_lifetime_secs: number;
 }
 
 /** GET /v1/orgs: one organisation the caller may act in. */
@@ -229,6 +372,7 @@ export type RunState = "queued" | "running" | "succeeded" | "failed" | "timed_ou
 export interface JobSpec {
   name?: string;
   image?: string;
+  labels?: Record<string, string>;
   command?: string[];
   agent?: string;
   prompt?: string;
@@ -344,4 +488,24 @@ export interface Service {
   replicas: ServiceReplica[];
   created_at: string;
   updated_at: string;
+}
+
+/** One reading of a sandbox's usage, taken on the host (GET …/metrics). */
+export interface MetricSample {
+  time: string;
+  /** Share of the sandbox's vCPUs used since the previous sample, 0–100. */
+  cpu_percent: number;
+  memory_bytes: number;
+  memory_limit_bytes: number;
+  /** Counters from the sandbox's start. */
+  net_rx_bytes: number;
+  net_tx_bytes: number;
+  disk_read_bytes: number;
+  disk_write_bytes: number;
+  processes?: number;
+}
+
+export interface MetricsList {
+  interval_secs: number;
+  samples: MetricSample[];
 }

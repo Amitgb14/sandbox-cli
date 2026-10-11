@@ -72,6 +72,10 @@ const (
 	CapNetworkPolicyUpdate = "network_policy_update"
 	CapSuspend             = "suspend"
 	CapMemorySnapshot      = "memory_snapshot"
+	// CapDiskSnapshot: a sandbox's files can be captured, and new sandboxes
+	// started from them, booting afresh: nothing that was running is kept.
+	// What a backend offers when it cannot capture memory (the macOS one).
+	CapDiskSnapshot = "disk_snapshot"
 	// CapEgressAllowlist: network mode allowlist is enforced. Without it, the
 	// endpoint offers only none — a sandbox there has no network at all.
 	CapEgressAllowlist = "egress_allowlist"
@@ -82,9 +86,18 @@ const (
 	// CapVolumes: named volumes persist across sandboxes and are mounted at a
 	// path on create.
 	CapVolumes = "volumes"
+	// CapMetrics: the server samples each running sandbox's CPU and memory,
+	// as the host measures them, and serves the last hour at
+	// GET /v1/sandboxes/{ref}/metrics. A property of the server and its
+	// backend together: the backend must be able to read usage.
+	CapMetrics = "metrics"
 	// CapAudit: the server keeps an event log, served per sandbox at
 	// GET /v1/sandboxes/{ref}/events. A property of the server, not the backend.
 	CapAudit = "audit"
+	// CapImages: the operator manages the images sandboxes start from —
+	// GET, POST and DELETE /v1/images — rather than each being pulled only
+	// when a sandbox first asks for it.
+	CapImages = "images"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -94,6 +107,22 @@ type Limits struct {
 	MaxDiskMB   int     `json:"max_disk_mb"`
 	// MaxIdleTimeoutSecs bounds idle_timeout_secs; 0 means no bound.
 	MaxIdleTimeoutSecs int `json:"max_idle_timeout_secs"`
+	// MaxLifetimeSecs is how long any sandbox may exist, busy or not,
+	// counted from its creation; 0 means no bound. Where it is set, every
+	// sandbox has a lifetime: this one, or a shorter one it asked for.
+	MaxLifetimeSecs int `json:"max_lifetime_secs,omitempty"`
+	// MinSnapshotEverySecs is the shortest interval a snapshot schedule may
+	// ask for, and MaxSnapshotKeep the most scheduled snapshots of one
+	// sandbox it may keep: each is a copy of the sandbox, on the host's disk.
+	MinSnapshotEverySecs int `json:"min_snapshot_every_secs"`
+	MaxSnapshotKeep      int `json:"max_snapshot_keep"`
+}
+
+// SnapshotSchedule is a sandbox's scheduled snapshots: one every EverySecs
+// while it runs, the newest Keep kept. EverySecs 0 is no schedule.
+type SnapshotSchedule struct {
+	EverySecs int `json:"every_secs"`
+	Keep      int `json:"keep"`
 }
 
 // NetworkCeiling is the server's network policy floor and ceiling, as a client
@@ -116,10 +145,22 @@ type CreateSandboxRequest struct {
 	// IdleTimeoutSecs terminates the sandbox after this long with no request
 	// touching it and no process running. 0 takes the server's default.
 	IdleTimeoutSecs int `json:"idle_timeout_secs,omitempty"`
-	// SnapshotID starts the sandbox from a snapshot (capability
-	// memory_snapshot): memory, processes and disk as they were captured. Its
-	// image and resources are the snapshot's.
+	// LifetimeSecs terminates the sandbox this long after it is created,
+	// whatever it is doing. 0 takes limits.max_lifetime_secs (none where that
+	// is 0); more than that limit is refused.
+	LifetimeSecs int `json:"lifetime_secs,omitempty"`
+	// SnapshotID starts the sandbox from a snapshot. A memory snapshot
+	// (capability memory_snapshot) brings back memory, processes and disk as
+	// they were, so its image and resources are the snapshot's. A disk
+	// snapshot (disk_snapshot) brings back the files only and boots afresh,
+	// so only its image is fixed; resources are the request's.
 	SnapshotID string `json:"snapshot_id,omitempty"`
+	// SnapshotEverySecs takes a snapshot of the sandbox this often while it
+	// runs, keeping the newest SnapshotKeep of them (default 1); a manual
+	// snapshot is never removed by it. Needs a snapshot capability, and is
+	// bounded by min_snapshot_every_secs and max_snapshot_keep.
+	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
+	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
 	// Labels are the client's own metadata: up to 32 keys of lowercase letters,
 	// digits and . _ / -, values up to 256 printable bytes. They decide nothing
 	// about the sandbox; they are returned with it, filter the listing
@@ -158,9 +199,26 @@ type VolumeList struct {
 	Volumes []Volume `json:"volumes"`
 }
 
-// UpdateSandboxRequest changes a running sandbox.
+// UpdateSandboxRequest changes a live sandbox. Each field left out is left
+// as it is. Network needs a running sandbox and the network_policy_update
+// capability; the rest are this server's records of the sandbox, changed on
+// a running or suspended one with nothing asked of its VM.
 type UpdateSandboxRequest struct {
 	Network *NetworkPolicy `json:"network,omitempty"`
+	// Name renames it; "" removes the name. Unique among live sandboxes, as
+	// at create.
+	Name *string `json:"name,omitempty"`
+	// Labels replace its labels whole; {} removes them all.
+	Labels *map[string]string `json:"labels,omitempty"`
+	// IdleTimeoutSecs is how long it may sit idle before it is terminated,
+	// counted from its last activity. Between 1 and limits.max_idle_timeout_secs;
+	// 0, never, only where that limit is 0.
+	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
+	// LifetimeSecs is a new lifetime, counted from creation as at create:
+	// longer extends it, shorter brings its end nearer, and one already
+	// past ends it at once. At least 1, and at most limits.max_lifetime_secs
+	// where that is set. Through a gateway only an admin may lengthen it.
+	LifetimeSecs *int `json:"lifetime_secs,omitempty"`
 }
 
 // Sandbox is a sandbox as the API reports it. Environment values are never
@@ -178,9 +236,37 @@ type Sandbox struct {
 	Network   NetworkPolicy `json:"network"`
 	CreatedAt time.Time     `json:"created_at"`
 	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
-	IdleTimeoutSecs int               `json:"idle_timeout_secs"`
-	Labels          map[string]string `json:"labels,omitempty"`
-	Volumes         []VolumeMount     `json:"volumes,omitempty"`
+	IdleTimeoutSecs int `json:"idle_timeout_secs"`
+	// LifetimeSecs is how long it may exist, and ExpiresAt when it is
+	// terminated for it, busy or not; both absent when it has no lifetime.
+	LifetimeSecs int        `json:"lifetime_secs,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	// SnapshotEverySecs and SnapshotKeep are the sandbox's snapshot
+	// schedule; 0 is none.
+	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
+	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
+	// Snapshotting is the snapshot being taken of it, while one is.
+	Snapshotting *SnapshotProgress `json:"snapshotting,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Volumes      []VolumeMount     `json:"volumes,omitempty"`
+}
+
+// Snapshot phases, in order.
+const (
+	SnapshotPhaseCapture = "capture" // reading the sandbox: its files, or its memory and disk
+	SnapshotPhaseStore   = "store"   // keeping what was read where a fork can start from it
+)
+
+// SnapshotProgress is how far a snapshot has got. Bytes is what has been read
+// of the sandbox so far; EstimatedBytes, where the backend can say, is about
+// how much there is, and 0 where it cannot. It is an estimate to draw a bar
+// with, and Bytes may pass it.
+type SnapshotProgress struct {
+	StartedAt      time.Time `json:"started_at"`
+	Scheduled      bool      `json:"scheduled,omitempty"`
+	Phase          string    `json:"phase"`
+	Bytes          int64     `json:"bytes"`
+	EstimatedBytes int64     `json:"estimated_bytes,omitempty"`
 }
 
 // Event types in the audit log.
@@ -188,9 +274,11 @@ const (
 	EventSandboxCreated    = "sandbox.created"
 	EventSandboxTerminated = "sandbox.terminated" // Reason: "request" or "idle"
 	EventNetworkUpdated    = "sandbox.network_updated"
+	EventSandboxUpdated    = "sandbox.updated" // name, labels or idle timeout changed; the event carries them after
 	EventSandboxSuspended  = "sandbox.suspended"
 	EventSandboxResumed    = "sandbox.resumed"
 	EventSnapshotCreated   = "snapshot.created"
+	EventSnapshotDeleted   = "snapshot.deleted" // Reason: "request" or "retention"
 	EventProcessStarted    = "process.started"
 	EventProcessExited     = "process.exited"
 	EventFileRead          = "file.read"
@@ -215,6 +303,10 @@ type Event struct {
 	EnvNames []string       `json:"env_names,omitempty"`
 	Snapshot string         `json:"snapshot,omitempty"`
 	Volumes  []VolumeMount  `json:"volumes,omitempty"`
+	// IdleTimeoutSecs is the idle timeout after an update that changed it.
+	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
+	// LifetimeSecs is the lifetime after an update that changed it.
+	LifetimeSecs *int `json:"lifetime_secs,omitempty"`
 
 	PID int `json:"pid,omitempty"`
 	// A process is recorded by its program, its argument count and a hash
@@ -245,11 +337,22 @@ type EventList struct {
 	Truncated bool `json:"truncated,omitempty"`
 }
 
-// Snapshot is a capture of a sandbox's memory and disk.
+// Snapshot kinds.
+const (
+	SnapshotMemory = "memory" // memory, processes and disk
+	SnapshotDisk   = "disk"   // the files only
+)
+
+// Snapshot is a capture of a sandbox: its memory and disk, or its files only,
+// as Kind says.
 type Snapshot struct {
-	ID        string    `json:"id"`
-	Sandbox   string    `json:"sandbox"`
-	Image     string    `json:"image"`
+	ID      string `json:"id"`
+	Sandbox string `json:"sandbox"`
+	Image   string `json:"image"`
+	Kind    string `json:"kind"`
+	// Scheduled is set on a snapshot the sandbox's schedule took, which its
+	// retention may remove; a snapshot taken by request never is.
+	Scheduled bool      `json:"scheduled,omitempty"`
 	Bytes     int64     `json:"bytes"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -464,6 +567,12 @@ type Whoami struct {
 	// key's own tenant when the header is absent, and DefaultOrg for the
 	// default tenant.
 	Org string `json:"org,omitempty"`
+	// Policy is the operator's policy for this user, if any: what their
+	// sandboxes are held to on top of the nodes' own limits.
+	Policy *UserPolicy `json:"policy,omitempty"`
+	// Email is set when the key is an account's, or one of its sign-ins':
+	// its user signs in with that address and a password.
+	Email string `json:"email,omitempty"`
 }
 
 // OrgHeader selects the organisation a gateway request acts in. Absent, a
@@ -600,6 +709,19 @@ type CreateKeyRequest struct {
 	User   string   `json:"user"`
 	Tenant string   `json:"tenant,omitempty"`
 	Scopes []string `json:"scopes"`
+	// Policy, when set, is assigned to the key's user as the key is issued
+	// (UserPolicyRequest); it must exist.
+	Policy string `json:"policy,omitempty"`
+	// ExpiresInSecs, when set, makes the key stop working that long after
+	// it is issued, as if revoked then; 0 is never.
+	ExpiresInSecs int `json:"expires_in_secs,omitempty"`
+}
+
+// KeyExpiryRequest is PATCH /v1/admin/keys/{id}: the key stops working
+// ExpiresInSecs from now, never when 0, and at once when negative — what
+// it has open is ended as for a revocation.
+type KeyExpiryRequest struct {
+	ExpiresInSecs int `json:"expires_in_secs"`
 }
 
 // KeyInfo is an API key without its secret.
@@ -610,6 +732,14 @@ type KeyInfo struct {
 	Scopes  []string  `json:"scopes"`
 	Created time.Time `json:"created"`
 	Revoked bool      `json:"revoked,omitempty"`
+	// Policy names the policy the key's user holds; "" is none.
+	Policy string `json:"policy,omitempty"`
+	// Expires is when the key stops working; absent is never.
+	Expires *time.Time `json:"expires,omitempty"`
+	// Email, when set, makes the key an account: its user signs in with
+	// that address and a password, and the key's secret is never shown.
+	Email     string     `json:"email,omitempty"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
 }
 
 // CreatedKey is returned once, when a key is issued: Secret is never shown
@@ -622,6 +752,30 @@ type CreatedKey struct {
 // KeyList is GET /v1/admin/keys.
 type KeyList struct {
 	Keys []KeyInfo `json:"keys"`
+}
+
+// UserPolicy is a gateway's named limits for the users it is assigned to
+// (admin). It is held on top of every node's own limits, and the strictest
+// wins: it can only narrow what a node allows.
+type UserPolicy struct {
+	Name string `json:"name"`
+	// MaxLifetimeSecs is how long each of the user's sandboxes may exist:
+	// one that asks for no lifetime gets this one, and one that asks for
+	// more is refused. 0 is no bound of the policy's own.
+	MaxLifetimeSecs int `json:"max_lifetime_secs"`
+}
+
+// UserPolicyList is GET /v1/admin/policies.
+type UserPolicyList struct {
+	Policies []UserPolicy `json:"policies"`
+}
+
+// AssignPolicyRequest is PUT /v1/admin/user-policy: assigns Policy to User,
+// named with the tenant of their keys, or clears it when Policy is "".
+type AssignPolicyRequest struct {
+	User   string `json:"user"`
+	Tenant string `json:"tenant,omitempty"`
+	Policy string `json:"policy"`
 }
 
 // NodeSpec adds a node to a gateway (admin).
@@ -648,4 +802,180 @@ type NodeInfo struct {
 // NodeList is GET /v1/admin/nodes.
 type NodeList struct {
 	Nodes []NodeInfo `json:"nodes"`
+}
+
+// MetricSample is one reading of a running sandbox's usage, taken on the host:
+// nothing here is the guest's own account of itself.
+type MetricSample struct {
+	Time time.Time `json:"time"`
+	// CPUPercent is the share of the sandbox's vCPUs used since the previous
+	// sample, 0 to 100.
+	CPUPercent       float64 `json:"cpu_percent"`
+	MemoryBytes      int64   `json:"memory_bytes"`
+	MemoryLimitBytes int64   `json:"memory_limit_bytes"`
+	// The counters run from the sandbox's start; a rate is the difference
+	// between two samples.
+	NetRxBytes     int64 `json:"net_rx_bytes"`
+	NetTxBytes     int64 `json:"net_tx_bytes"`
+	DiskReadBytes  int64 `json:"disk_read_bytes"`
+	DiskWriteBytes int64 `json:"disk_write_bytes"`
+	Processes      int   `json:"processes,omitempty"`
+}
+
+// Image is one image a server has, or is installing: GET /v1/images.
+type Image struct {
+	Image string `json:"image"`
+	// State is installed, installing, or failed (Error says why); a failed
+	// one is listed until it is installed or removed, or the server restarts.
+	State       string     `json:"state"`
+	Digest      string     `json:"digest,omitempty"`
+	Bytes       int64      `json:"bytes,omitempty"`
+	InstalledAt *time.Time `json:"installed_at,omitempty"`
+	// InUse is how many sandboxes running or suspended here start from it.
+	InUse int `json:"in_use"`
+	// Default is the server's default image, and Pooled one it keeps a
+	// pool of: neither is removed.
+	Default  bool           `json:"default,omitempty"`
+	Pooled   bool           `json:"pooled,omitempty"`
+	Progress *ImageProgress `json:"progress,omitempty"`
+	Error    string         `json:"error,omitempty"`
+}
+
+// Image states.
+const (
+	ImageInstalled  = "installed"
+	ImageInstalling = "installing"
+	ImageFailed     = "failed"
+)
+
+// ImageProgress is how far an install has got: pulling the image's blobs,
+// Done of Total bytes, then building its root disk where the backend has one.
+type ImageProgress struct {
+	Phase string `json:"phase"`
+	Done  int64  `json:"done,omitempty"`
+	Total int64  `json:"total,omitempty"`
+}
+
+// ImageList is the body of GET /v1/images.
+type ImageList struct {
+	Images []Image `json:"images"`
+}
+
+// InstallImageRequest is the body of POST /v1/images.
+type InstallImageRequest struct {
+	Image string `json:"image"`
+}
+
+// RemovedImage is the answer to DELETE /v1/images?image=REF.
+type RemovedImage struct {
+	Image      string `json:"image"`
+	FreedBytes int64  `json:"freed_bytes"`
+}
+
+// MetricsList is the body of GET /v1/sandboxes/{ref}/metrics: the samples of
+// the last hour, oldest first, one every IntervalSecs.
+type MetricsList struct {
+	IntervalSecs int            `json:"interval_secs"`
+	Samples      []MetricSample `json:"samples"`
+}
+
+// CreateInviteRequest is POST /v1/admin/invites: a sign-up link for Email.
+// Whoever opens it sets a password and becomes an account with these
+// user, tenant, scopes and policy, as a key issued with them would.
+type CreateInviteRequest struct {
+	Email  string   `json:"email"`
+	User   string   `json:"user"`
+	Tenant string   `json:"tenant,omitempty"`
+	Scopes []string `json:"scopes"`
+	Policy string   `json:"policy,omitempty"`
+	// ExpiresInSecs is how long the account lasts once made; 0 is for good.
+	ExpiresInSecs int `json:"expires_in_secs,omitempty"`
+	// ValidSecs is how long the link may be used; 0 is two days, and at
+	// most seven.
+	ValidSecs int `json:"valid_secs,omitempty"`
+	// SendEmail has the gateway email the link to Email, where it was
+	// started with a mail relay (InviteList.CanEmail).
+	SendEmail bool `json:"send_email,omitempty"`
+}
+
+// ResetPasswordRequest is POST /v1/admin/keys/{id}/reset, and POST
+// /v1/admin/invites/{id}/resend; the body is optional.
+type ResetPasswordRequest struct {
+	SendEmail bool `json:"send_email,omitempty"`
+}
+
+// InviteInfo is an invite without its token.
+type InviteInfo struct {
+	ID            string   `json:"id"`
+	Email         string   `json:"email"`
+	User          string   `json:"user"`
+	Tenant        string   `json:"tenant"`
+	Scopes        []string `json:"scopes"`
+	Policy        string   `json:"policy,omitempty"`
+	ExpiresInSecs int      `json:"expires_in_secs,omitempty"`
+	// Reset is set on an invite that sets a new password for an account
+	// that exists, rather than making one.
+	Reset   bool      `json:"reset,omitempty"`
+	Created time.Time `json:"created"`
+	Expires time.Time `json:"expires"`
+}
+
+// CreatedInvite is returned once, when an invite is made: Token is never
+// shown again. The link is Studio's address with #invite=Token.
+type CreatedInvite struct {
+	InviteInfo
+	Token string `json:"token"`
+	// Emailed says the gateway sent the link to the address; EmailError
+	// why it could not, when it was asked to. The invite stands either way.
+	Emailed    bool   `json:"emailed,omitempty"`
+	EmailError string `json:"email_error,omitempty"`
+}
+
+// InviteList is GET /v1/admin/invites: those not used and not expired.
+type InviteList struct {
+	Invites []InviteInfo `json:"invites"`
+	// CanEmail says the gateway can send an invite's link itself.
+	CanEmail bool `json:"can_email,omitempty"`
+}
+
+// InviteTokenRequest is POST /v1/auth/invite: what an invite is for, so
+// the page that opens it can say so before a password is set.
+type InviteTokenRequest struct {
+	Token string `json:"token"`
+}
+
+// RegisterRequest is POST /v1/auth/register: the invite's token and the
+// password chosen. TTLSecs is how long the sign-in it starts lasts, as for
+// LoginRequest.
+type RegisterRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+	TTLSecs  int    `json:"ttl_secs,omitempty"`
+}
+
+// LoginRequest is POST /v1/auth/login. TTLSecs is how long the key it
+// returns lasts: 0 is twelve hours, at most seven days, and never past the
+// account's own end.
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	TTLSecs  int    `json:"ttl_secs,omitempty"`
+}
+
+// Login is a sign-in: an API key for it alone, ended by POST
+// /v1/auth/logout, by its expiry, or with its account.
+type Login struct {
+	Secret  string    `json:"secret"`
+	User    string    `json:"user"`
+	Tenant  string    `json:"tenant"`
+	Email   string    `json:"email"`
+	Scopes  []string  `json:"scopes"`
+	Expires time.Time `json:"expires"`
+}
+
+// PasswordRequest is POST /v1/auth/password: an account's own change of
+// password. Every other sign-in of the account ends.
+type PasswordRequest struct {
+	Current string `json:"current"`
+	New     string `json:"new"`
 }

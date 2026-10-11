@@ -75,6 +75,9 @@ func CombineCapabilities(sts []api.NodeStatus) api.Capabilities {
 		if l.MaxIdleTimeoutSecs == 0 || (c.Limits.MaxIdleTimeoutSecs > 0 && c.Limits.MaxIdleTimeoutSecs < l.MaxIdleTimeoutSecs) {
 			l.MaxIdleTimeoutSecs = c.Limits.MaxIdleTimeoutSecs
 		}
+		if l.MaxLifetimeSecs == 0 || (c.Limits.MaxLifetimeSecs > 0 && c.Limits.MaxLifetimeSecs < l.MaxLifetimeSecs) {
+			l.MaxLifetimeSecs = c.Limits.MaxLifetimeSecs
+		}
 		if api.NetworkRank(c.Network.Ceiling) < api.NetworkRank(out.Network.Ceiling) {
 			out.Network.Ceiling = c.Network.Ceiling
 		}
@@ -87,6 +90,9 @@ func CombineCapabilities(sts []api.NodeStatus) api.Capabilities {
 			}
 		}
 	}
+	// Every node may manage its own images, but the gateway does not route
+	// that (http.go), so the fleet does not offer it.
+	out.Capabilities[api.CapImages] = false
 	if api.NetworkRank(out.Network.Default.Mode) > api.NetworkRank(out.Network.Ceiling) {
 		out.Network.Default = api.NetworkPolicy{Mode: out.Network.Ceiling, Allow: []string{}}
 	}
@@ -119,6 +125,7 @@ func intersectAllow(a, b []string) []string {
 // mean whichever node the sandbox landed on.
 
 func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeCreate) {
 		return
 	}
@@ -140,11 +147,14 @@ func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Princip
 		return
 	}
 	defer g.unclaim(key)
-	if _, taken := g.store.VolumeOwner(req.Name); taken {
+	if _, taken, err := g.store.VolumeOwner(ctx, req.Name); err != nil {
+		g.writeStoreErr(w, err)
+		return
+	} else if taken {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "a volume named "+req.Name+" already exists")
 		return
 	}
-	n := g.volumeNode(p, g.anyNodeHas(api.CapVolumes)) // any node: in a mixed fleet the combined capabilities say none
+	n := g.volumeNode(ctx, p, g.anyNodeHas(api.CapVolumes)) // any node: in a mixed fleet the combined capabilities say none
 	if n == nil {
 		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, "no node is taking new volumes")
 		return
@@ -161,7 +171,7 @@ func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Princip
 		return
 	}
 	if resp.StatusCode == http.StatusCreated {
-		if err := g.store.SetVolume(req.Name, Owner{User: p.User, Tenant: p.Tenant, Node: n.cfg.Name}); err != nil {
+		if err := g.storeFor(p).SetVolume(context.WithoutCancel(ctx), req.Name, Owner{User: p.User, Tenant: p.Tenant, Node: n.cfg.Name}); err != nil {
 			g.logf("recording volume %s: %v", req.Name, err)
 			writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the volume's owner could not be recorded")
 			return
@@ -173,7 +183,7 @@ func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Princip
 // volumeNode picks a node for a new volume: the one holding most of the
 // caller's volumes, so a sandbox can mount them together, then the most free
 // disk. With no node offering volumes, any node, to refuse it.
-func (g *Gateway) volumeNode(p Principal, anyHas bool) *node {
+func (g *Gateway) volumeNode(ctx context.Context, p Principal, anyHas bool) *node {
 	cands := g.nodes.candidates()
 	if !anyHas {
 		if name, ok := Fallback(cands, nil); ok {
@@ -182,7 +192,8 @@ func (g *Gateway) volumeNode(p Principal, anyHas bool) *node {
 		return nil
 	}
 	held := map[string]int{}
-	for _, nodeName := range g.store.VolumesOf(p.User, p.Tenant) {
+	mine, _ := g.storeFor(p).VolumesOf(ctx, p.User, p.Tenant) // a preference only
+	for _, nodeName := range mine {
 		held[nodeName]++
 	}
 	var best *Candidate
@@ -223,7 +234,11 @@ func (g *Gateway) listVolumes(w http.ResponseWriter, r *http.Request, p Principa
 		mu.Lock()
 		defer mu.Unlock()
 		for _, v := range list.Volumes {
-			if o, ok := g.store.VolumeOwner(v.Name); ok && o.Node == n.cfg.Name && mayAct(p, o) {
+			o, ok, err := g.storeFor(p).VolumeOwner(ctx, v.Name)
+			if err != nil {
+				return err
+			}
+			if ok && o.Node == n.cfg.Name && mayAct(p, o) {
 				out = append(out, v)
 			}
 		}
@@ -238,11 +253,16 @@ func (g *Gateway) listVolumes(w http.ResponseWriter, r *http.Request, p Principa
 }
 
 func (g *Gateway) deleteVolume(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeDelete) {
 		return
 	}
 	name := r.PathValue("name")
-	o, ok := g.store.VolumeOwner(name)
+	o, ok, err := g.storeFor(p).VolumeOwner(ctx, name)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
 	if !ok || !mayAct(p, o) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no volume named "+name)
 		return
@@ -260,7 +280,7 @@ func (g *Gateway) deleteVolume(w http.ResponseWriter, r *http.Request, p Princip
 	data, _ := readBody(resp)
 	// Gone on the node, by this request or before it: forget it.
 	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
-		if err := g.store.ForgetVolume(name); err != nil {
+		if err := g.storeFor(p).ForgetVolume(context.WithoutCancel(ctx), name); err != nil {
 			g.logf("forgetting volume %s: %v", name, err)
 		}
 	}
@@ -302,10 +322,21 @@ func (g *Gateway) listSnapshots(w http.ResponseWriter, r *http.Request, p Princi
 			}
 			return err
 		}
+		holds := map[string]bool{}
+		for _, s := range list.Snapshots {
+			holds[s.ID] = true
+		}
+		if err := g.store.ForgetSnapshotsGoneFrom(ctx, n.cfg.Name, holds); err != nil {
+			g.logf("forgetting %s's removed snapshots: %v", n.cfg.Name, err)
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		for _, s := range list.Snapshots {
-			if o, ok := g.store.SnapshotOwner(s.ID); ok && o.Node == n.cfg.Name && mayAct(p, o) {
+			o, ok, err := g.snapshotOwnerOn(ctx, s, n.cfg.Name)
+			if err != nil {
+				return err
+			}
+			if ok && mayAct(p, o) {
 				out = append(out, s)
 			}
 		}
@@ -320,11 +351,12 @@ func (g *Gateway) listSnapshots(w http.ResponseWriter, r *http.Request, p Princi
 }
 
 func (g *Gateway) deleteSnapshot(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeDelete) {
 		return
 	}
 	id := r.PathValue("id")
-	o, ok := g.store.SnapshotOwner(id)
+	o, ok := g.snapshotOwner(r.Context(), id)
 	if !ok || !mayAct(p, o) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		return
@@ -341,9 +373,64 @@ func (g *Gateway) deleteSnapshot(w http.ResponseWriter, r *http.Request, p Princ
 	}
 	data, _ := readBody(resp)
 	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
-		if err := g.store.ForgetSnapshot(id); err != nil {
+		if err := g.store.ForgetSnapshot(ctx, id); err != nil {
 			g.logf("forgetting snapshot %s: %v", id, err)
 		}
 	}
 	relay(w, resp, data)
+}
+
+// snapshotOwnerOn is the owner of a snapshot a node holds. One made through the
+// gateway is in its store. One a sandbox's schedule took was made by the node
+// itself, so it belongs to whoever owns that sandbox, on that node, and is
+// recorded as theirs. Anything else belongs to no one here and is shown to no
+// one: a snapshot made on a node behind the gateway's back is not adopted.
+func (g *Gateway) snapshotOwnerOn(ctx context.Context, s api.Snapshot, node string) (Owner, bool, error) {
+	if o, ok, err := g.store.SnapshotOwner(ctx, s.ID); err != nil {
+		return Owner{}, false, err
+	} else if ok {
+		return o, o.Node == node, nil
+	}
+	if !s.Scheduled {
+		return Owner{}, false, nil
+	}
+	o, ok, err := g.store.OwnerOf(ctx, s.Sandbox)
+	if err != nil {
+		return Owner{}, false, err
+	}
+	if !ok || o.Node != node {
+		return Owner{}, false, nil
+	}
+	if err := g.store.SetSnapshot(context.WithoutCancel(ctx), s.ID, o); err != nil {
+		g.logf("recording snapshot %s: %v", s.ID, err)
+	}
+	return o, true, nil
+}
+
+// snapshotOwner is the owner of a snapshot by id: from the store, or, for a
+// scheduled one not yet seen, from the node that holds it.
+func (g *Gateway) snapshotOwner(ctx context.Context, id string) (Owner, bool) {
+	if o, ok, _ := g.store.SnapshotOwner(ctx, id); ok {
+		return o, true
+	}
+	var mu sync.Mutex
+	var found Owner
+	var ok bool
+	_ = fanOut(ctx, g.nodes.healthy(), func(ctx context.Context, n *node) error {
+		var list api.SnapshotList
+		if err := n.getJSON(ctx, "/v1/snapshots", nil, &list); err != nil {
+			return nil
+		}
+		for _, s := range list.Snapshots {
+			if s.ID == id {
+				if o, adopted, _ := g.snapshotOwnerOn(ctx, s, n.cfg.Name); adopted {
+					mu.Lock()
+					found, ok = o, true
+					mu.Unlock()
+				}
+			}
+		}
+		return nil
+	})
+	return found, ok
 }

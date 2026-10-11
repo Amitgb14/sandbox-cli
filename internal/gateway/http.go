@@ -43,6 +43,14 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	// The only routes without a key: the invite or the password is the
+	// credential (accounts.go).
+	open := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, g.observe(g.openGuard(h))) }
+	open("POST /v1/auth/login", g.login)
+	open("POST /v1/auth/invite", g.inviteFor)
+	open("POST /v1/auth/register", g.register)
+	route("POST /v1/auth/logout", false, g.logout)
+	route("POST /v1/auth/password", false, g.changePassword)
 	route("GET /v1/capabilities", false, g.capabilities)
 	route("GET /v1/whoami", false, g.whoami)
 	route("GET /v1/orgs", false, g.listOrgs)
@@ -51,8 +59,25 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/orgs/{name}/members", false, g.setOrgMember)
 	route("DELETE /v1/orgs/{name}/members/{user}", false, g.removeOrgMember)
 
+	// A node's images are its operator's: an install fills that node's disk
+	// for every tenant on it. The gateway's own catalog, run by admin keys,
+	// is not done yet, so the fleet has no images capability and installing
+	// or removing one is refused as on any endpoint without it, rather than
+	// forwarded. What the nodes have built is listed at an endpoint of the
+	// gateway's own (images.go), so GET /v1/images keeps the answer every
+	// endpoint without the capability gives.
+	route("GET /v1/fleet/images", false, g.listImages)
+	for _, p := range []string{"GET /v1/images", "POST /v1/images", "DELETE /v1/images"} {
+		route(p, false, func(w http.ResponseWriter, _ *http.Request, _ Principal) {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "images are managed on each node by its operator; this gateway does not manage them")
+		})
+	}
+
 	route("POST /v1/sandboxes", false, g.createSandbox)
 	route("GET /v1/sandboxes", false, g.listHandler)
+	// Read, not forwarded: labels and names are the gateway's business too
+	// (update.go).
+	route("PATCH /v1/sandboxes/{ref}", false, g.updateHandler)
 	// Every route on one sandbox is forwarded to its node once the router
 	// has said the caller may; each names the scope it needs. Attach and a
 	// tunnel are GETs that write — stdin, signals, bytes to a guest port —
@@ -64,7 +89,6 @@ func (g *Gateway) Handler() http.Handler {
 		after   afterFunc
 	}{
 		{"GET /v1/sandboxes/{ref}", false, ScopeRead, nil},
-		{"PATCH /v1/sandboxes/{ref}", false, ScopeCreate, nil},
 		{"DELETE /v1/sandboxes/{ref}", false, ScopeDelete, g.afterDelete},
 		{"POST /v1/sandboxes/{ref}/run", false, ScopeCreate, nil},
 		{"POST /v1/sandboxes/{ref}/processes", false, ScopeCreate, nil},
@@ -77,12 +101,14 @@ func (g *Gateway) Handler() http.Handler {
 		{"POST /v1/sandboxes/{ref}/suspend", false, ScopeCreate, nil},
 		{"POST /v1/sandboxes/{ref}/resume", false, ScopeCreate, nil},
 		{"POST /v1/sandboxes/{ref}/snapshots", false, ScopeCreate, g.afterSnapshot},
+		{"PUT /v1/sandboxes/{ref}/snapshot-schedule", false, ScopeCreate, nil},
 		{"GET /v1/sandboxes/{ref}/tunnel", false, ScopeCreate, nil},
 		{"GET /v1/sandboxes/{ref}/files", false, ScopeRead, nil},
 		{"PUT /v1/sandboxes/{ref}/files", true, ScopeCreate, nil},
 		{"DELETE /v1/sandboxes/{ref}/files", false, ScopeCreate, nil},
 		{"GET /v1/sandboxes/{ref}/dirs", false, ScopeRead, nil},
 		{"GET /v1/sandboxes/{ref}/events", false, ScopeRead, nil},
+		{"GET /v1/sandboxes/{ref}/metrics", false, ScopeRead, nil},
 	} {
 		route(rt.pattern, rt.raw, g.forward(rt.scope, rt.after))
 	}
@@ -111,6 +137,12 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/admin/keys", false, g.adminCreateKey)
 	route("GET /v1/admin/keys", false, g.adminListKeys)
 	route("DELETE /v1/admin/keys/{id}", false, g.adminRevokeKey)
+	route("PATCH /v1/admin/keys/{id}", false, g.adminKeyExpiry)
+	route("POST /v1/admin/keys/{id}/reset", false, g.adminResetPassword)
+	route("POST /v1/admin/invites", false, g.adminCreateInvite)
+	route("GET /v1/admin/invites", false, g.adminListInvites)
+	route("DELETE /v1/admin/invites/{id}", false, g.adminRevokeInvite)
+	route("POST /v1/admin/invites/{id}/resend", false, g.adminResendInvite)
 	route("GET /v1/admin/ssh-keys", false, g.adminListSSHKeys)
 	route("DELETE /v1/admin/ssh-keys/{id}", false, g.adminRemoveSSHKey)
 	route("GET /v1/admin/nodes", false, g.adminListNodes)
@@ -121,6 +153,10 @@ func (g *Gateway) Handler() http.Handler {
 	route("GET /v1/admin/lost", false, g.adminLost)
 	route("GET /v1/admin/audit", false, g.adminAudit)
 	route("GET /v1/admin/orgs", false, g.adminListOrgs)
+	route("GET /v1/admin/policies", false, g.adminListPolicies)
+	route("PUT /v1/admin/policies/{name}", false, g.adminPutPolicy)
+	route("DELETE /v1/admin/policies/{name}", false, g.adminDeletePolicy)
+	route("PUT /v1/admin/user-policy", false, g.adminAssignPolicy)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")
@@ -138,7 +174,14 @@ func (g *Gateway) guard(raw bool, next handlerFunc) http.Handler {
 			writeErr(w, http.StatusForbidden, api.CodeForbiddenOrigin, "requests from this origin are not accepted")
 			return
 		}
-		p, ok := g.authenticate(r)
+		p, ok, err := g.authenticate(r)
+		if err != nil {
+			// Not 401: a client that drops its credential on 401 (hosted
+			// Studio ends the session) must not, for a database that did
+			// not answer.
+			g.writeStoreErr(w, err)
+			return
+		}
 		if !ok {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeErr(w, http.StatusUnauthorized, api.CodeUnauthorized, "missing or unknown API key")
@@ -178,16 +221,17 @@ func (g *Gateway) originAllowed(r *http.Request) bool {
 
 // authenticate turns the bearer key into a principal. The key's secret is
 // never logged; its id is what names it.
-func (g *Gateway) authenticate(r *http.Request) (Principal, bool) {
+func (g *Gateway) authenticate(r *http.Request) (Principal, bool, error) {
+	ctx := r.Context()
 	secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || secret == "" {
-		return Principal{}, false
+		return Principal{}, false, nil
 	}
-	k, ok := g.store.KeyBySecret(secret)
-	if !ok {
-		return Principal{}, false
+	k, ok, err := g.store.KeyBySecret(ctx, secret)
+	if err != nil || !ok {
+		return Principal{}, false, err
 	}
-	return Principal{User: k.User, Tenant: k.Tenant, KeyTenant: k.Tenant, KeyID: k.ID, Scopes: k.Scopes}, true
+	return Principal{User: k.User, Tenant: k.Tenant, KeyTenant: k.Tenant, KeyID: k.ID, Scopes: k.Scopes}, true, nil
 }
 
 func checkContentType(r *http.Request, raw bool) error {
@@ -251,6 +295,8 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 func writeRouteErr(w http.ResponseWriter, err error, scope string) {
 	var ae *api.Error
 	switch {
+	case errors.Is(err, ErrStore):
+		writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())
 	case errors.Is(err, ErrUnauthenticated):
 		writeErr(w, http.StatusUnauthorized, api.CodeUnauthorized, "missing or unknown API key")
 	case errors.Is(err, ErrForbidden):

@@ -3,7 +3,7 @@ PKG := github.com/Amitgb14/sandbox-cli
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION)
 
-.PHONY: build studio install test test-sdk test-integration e2e lint fmt clean snapshot release docker-build image
+.PHONY: build studio studio-hosted install test docs-cli test-sdk test-integration e2e lint fmt clean snapshot release docker-build image db-up db-down test-postgres
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/sandbox-cli
@@ -19,6 +19,11 @@ studio:
 	cd studio && npm ci --no-audit --no-fund && npm run build
 	find internal/studio/ui -mindepth 1 ! -name .keep -delete
 	cp -R studio/out/. internal/studio/ui/
+
+# The UI `sandbox-cli studio host --ui-dir studio/out-hosted` serves to a
+# gateway's users: invite-link sign-in, no Studio token, no admin screens.
+studio-hosted:
+	cd studio && npm ci --no-audit --no-fund && npm run build:hosted
 
 # --- release engineering (GoReleaser) ----------------------------------------
 # Install once: go install github.com/goreleaser/goreleaser/v2@latest
@@ -52,6 +57,12 @@ install:
 test:
 	go test ./...
 
+# docs/cli.md, the CLI reference, generated from the command tree
+# (internal/cli/docs.go). TestCLIReferenceIsCurrent fails until this is run
+# after a change to a command, a flag or its help.
+docs-cli:
+	UPDATE_CLI_DOCS=1 go test ./internal/cli -run '^TestCLIReferenceIsCurrent$$' -count=1
+
 # The Python SDK against a real sandboxd (the in-memory backend).
 test-sdk: build
 	SANDBOXD=$(CURDIR)/bin/sandboxd python3 -m unittest discover -s sdk/python/tests
@@ -59,6 +70,18 @@ test-sdk: build
 # The real binaries end to end: two sandboxd nodes on the fake backend,
 # sandbox-gateway in front, sandbox-cli and the system ssh (if any) against it.
 # No VM, no root; builds into a temporary directory (test/e2e).
+# PostgreSQL for sandbox-gateway, in Docker, on loopback (scripts/postgres-local.sh).
+db-up:
+	scripts/postgres-local.sh up
+
+db-down:
+	scripts/postgres-local.sh down
+
+# The gateway's tests on PostgreSQL rather than SQLite: every gateway test,
+# plus row-level security. Each test makes and drops a database of its own.
+test-postgres: db-up
+	SANDBOX_TEST_POSTGRES_DSN="$$(scripts/postgres-local.sh test-dsn)" go test -count=1 ./internal/gateway/... ./cmd/sandbox-gateway/...
+
 e2e:
 	go test -tags e2e -count=1 -v ./test/e2e
 

@@ -11,11 +11,18 @@ import {
   FLEET_GATEWAY_CODE,
   FLEET_NODE_CODE,
   FLEET_USER_CODE,
+  FLEET_USE_CODE,
+  FLEET_ORGS_CODE,
+  FLEET_REVOKE_CODE,
+  BIND_MOUNT_CODE,
+  CLIENT_INSTALL_CODE,
+  DISK_MOUNT_CODE,
   INSTALL_STEP,
   LAUNCH_AGENT_CODE,
+  SERVER_INSTALL_CODE,
   UNINSTALL_STEPS,
 } from "@/lib/setup";
-import { DOC_URL, STUDIO_PATH } from "@/lib/site";
+import { DOC_URL, NOT_RELEASED_YET, RELEASED, STUDIO_PATH, docPath } from "@/lib/site";
 
 /**
  * The setup guide: a Mac, a Linux machine for a quick try, a Linux server, and
@@ -41,6 +48,7 @@ export const metadata: Metadata = {
 };
 
 const NAV: NavEntry[] = [
+  { kind: "link", href: "#before", label: "Before you start" },
   { kind: "link", href: "#mac", label: "Mac" },
   { kind: "link", href: "#linux", label: "Linux" },
   { kind: "link", href: "#server", label: "Linux server" },
@@ -57,7 +65,7 @@ const DOCTOR: Step = {
   body: (
     <>
       It prints the context, the backend, the API version, the network policy&apos;s default and ceiling, what it{" "}
-      <em>can</em> do (egress allowlist, suspend, snapshots, volumes, audit) and its limits. A request for anything
+      <em>can</em>{" "}do (egress allowlist, suspend, snapshots, volumes, audit) and its limits. A request for anything
       missing from that list is refused, never served weaker, so this is where you find out, not halfway through
       an agent&apos;s run.
     </>
@@ -76,6 +84,19 @@ const FIRST_RUN: Step = {
   ),
 };
 
+const STUDIO: Step = {
+  title: "Open Studio",
+  code: "sandbox-cli studio\n# Studio: http://127.0.0.1:7080/#token=…",
+  body: (
+    <>
+      The browser view of the same sandboxes: launch a command or an agent, use its terminal, watch its output,
+      files and events. sandbox-cli serves it on a loopback port for whichever sandboxd your context points at, and
+      holds that sandboxd&apos;s token itself; open the address it prints, token and all.{" "}
+      <Link href={STUDIO_PATH}>More about Studio</Link>.
+    </>
+  ),
+};
+
 const MAC_STEPS: Step[] = [
   {
     title: "Start the container runtime",
@@ -87,10 +108,21 @@ const MAC_STEPS: Step[] = [
     code: INSTALL_STEP.code,
     body: (
       <>
-        sandbox-cli, sandboxd and the guest agent go into <code>~/.local/bin</code>, each checked against the
-        release checksums. The guest agent is the Linux arm64 build: it runs inside the sandbox, mounted read-only
-        from beside sandboxd, so any image works and the agent always matches the server. If the script says{" "}
-        <code>~/.local/bin</code> is not on your PATH, add it as it shows.
+        {RELEASED ? (
+          <>
+            sandbox-cli, sandboxd and the guest agent go into <code>~/.local/bin</code>, each checked against the
+            release checksums.
+          </>
+        ) : (
+          <>
+            {NOT_RELEASED_YET} sandbox-cli, sandboxd and the guest agent go side by side into{" "}
+            <code>~/.local/bin</code>.
+          </>
+        )}{" "}
+        The guest agent is the Linux arm64 build: it runs inside the sandbox, mounted read-only
+        from beside sandboxd, so any image works and the agent always matches the server. <code>~/.local/bin</code> must be on
+        your PATH, or the next steps answer <code>sandboxd: command not found</code>: put{" "}
+        <code>export PATH=&quot;$HOME/.local/bin:$PATH&quot;</code> in <code>~/.zshrc</code>.
       </>
     ),
   },
@@ -102,12 +134,14 @@ const MAC_STEPS: Step[] = [
         The launch agent in the repository runs <code>/usr/local/bin/sandboxd</code>; the <code>sed</code> points
         it at the copy in <code>~/.local/bin</code>, so nothing needs root. It starts at login, restarts if it
         exits, logs to <code>/tmp/sandboxd.log</code>, and listens on a unix socket only you can open, which is the
-        CLI&apos;s default context.
+        CLI&apos;s context named <code>local</code>. If you have added other contexts,{" "}
+        <code>sandbox-cli context use local</code> switches back to it.
       </>
     ),
   },
   DOCTOR,
   FIRST_RUN,
+  STUDIO,
 ];
 
 const MAC_DIFFERENCES: [string, string, string][] = [
@@ -118,37 +152,76 @@ const MAC_DIFFERENCES: [string, string, string][] = [
 
 const FIRECRACKER_FETCH = `ARCH=$(uname -m)
 release_url=https://github.com/firecracker-microvm/firecracker/releases
-latest=$(basename $(curl -fsSLI -o /dev/null -w '%{url_effective}' $release_url/latest))
+latest=v1.17.0   # the version checked on a real host
 curl -fsSL $release_url/download/$latest/firecracker-$latest-$ARCH.tgz | tar -xz
+install -d ~/.local/bin      # as yourself, not root: this path runs sandboxd as you
 install -m 0755 release-$latest-$ARCH/firecracker-$latest-$ARCH ~/.local/bin/firecracker
-install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH ~/.local/bin/jailer`;
+install -m 0755 release-$latest-$ARCH/jailer-$latest-$ARCH ~/.local/bin/jailer
+~/.local/bin/firecracker --version   # Firecracker v1.17.0`;
+
+/**
+ * What the machine needs, with the versions checked on a real host
+ * (docs/self-hosting.md, "Versions checked"). Both Linux paths start here.
+ */
+const CHECK_MACHINE_CODE = `uname -m                     # x86_64 (checked) or aarch64 (built, not yet run)
+ls -l /dev/kvm               # must exist; a cloud VM needs nested virtualisation
+uname -r                     # host kernel; checked: 6.12
+
+# mkfs.ext4 (e2fsprogs 1.43+; checked 1.47.1), ip (iproute2; checked 6.17.0),
+# nft (nftables; checked 1.1.5), and git, make, curl, file to build
+sudo dnf install -y e2fsprogs iproute nftables git make curl file      # Fedora, RHEL and rebuilds
+sudo apt-get install -y e2fsprogs iproute2 nftables git make curl file # Debian, Ubuntu (not yet checked)
+go version                   # 1.25 or later builds the binaries
+df -h /var/lib ~             # 20 GiB free where the state goes: /var/lib/sandboxd as root, ~/.local/share as you`;
+
+const CHECK_MACHINE_BODY = (
+  <>
+    Checked on x86_64, an EL10 distribution with host kernel 6.12, xfs and firewalld; arm64 and other distributions
+    are built for but not yet run. Disk: the base image takes 2.5 GiB installed, each sandbox what it writes (up
+    to 10 GiB by default), each snapshot its memory plus its disk, and the build a few GiB of caches in your home;
+    20 GiB free is enough to try it. If <code>/</code> is the full one, put the state on a larger filesystem; see{" "}
+    <Link href={docPath("self-hosting", "what-the-machine-needs")}>What the machine needs</Link>. The host kernel
+    only needs KVM, <code>tun</code>{" "}and nftables. A distribution&apos;s
+    Go is often older than 1.25; <a href="https://go.dev/dl/">go.dev/dl</a> has the current one. Every version
+    checked is in <Link href={docPath("self-hosting", "versions-checked")}>Versions checked</Link>.
+  </>
+);
 
 const LINUX_STEPS: Step[] = [
   {
-    title: "Check for KVM and the tools",
-    code: "ls -l /dev/kvm\nsudo usermod -aG kvm $USER     # then log out and back in\ncommand -v mkfs.ext4 ip nft",
+    title: "Check the machine: KVM, the tools, Go",
+    code: `${CHECK_MACHINE_CODE}\nsudo usermod -aG kvm $USER   # then log out and back in: your user must open /dev/kvm`,
     body: (
       <>
-        x86_64 or arm64 Linux with <code>/dev/kvm</code>, which your user must be able to read and write. A cloud
-        VM needs nested virtualisation for that. You also need <code>mkfs.ext4</code> (e2fsprogs 1.43 or later);{" "}
-        <code>ip</code> and <code>nft</code> are only used when sandboxd runs as root.
+        {CHECK_MACHINE_BODY} Without root, <code>ip</code> and <code>nft</code> go unused.
       </>
     ),
   },
   INSTALL_STEP,
   {
-    title: "Get Firecracker",
+    title: "Get Firecracker 1.17.0",
     code: FIRECRACKER_FETCH,
-    body: "Firecracker and its jailer come from the project's own releases. This takes the latest for your architecture and puts both beside sandbox-cli.",
-  },
-  {
-    title: "Get a guest kernel",
-    code: "# a vmlinux built with CONFIG_IP_PNP, CONFIG_VIRTIO_VSOCKETS and overlayfs,\n# for example a CI kernel from Firecracker's getting-started guide\ninstall -D -m 0644 vmlinux ~/.local/share/sandboxd/vmlinux",
     body: (
       <>
-        Each sandbox boots this kernel. It needs <code>CONFIG_IP_PNP</code>, <code>CONFIG_VIRTIO_VSOCKETS</code>{" "}
-        and overlayfs; the CI kernels from Firecracker&apos;s getting-started guide have all three. Keep it anywhere
-        you like and name it with <code>--kernel</code>.
+        Firecracker and its jailer come from the project&apos;s own releases. This takes 1.17.0, the version
+        sandboxd has been checked with, for your architecture, and puts both beside sandbox-cli. It is pinned: a
+        newer one may work, but has not been run. Run this path as yourself, not in a root shell: as root,{" "}
+        <code>~</code> is <code>/root</code>, and a sandboxd for others belongs under systemd (the Linux server
+        path below).
+      </>
+    ),
+  },
+  {
+    title: "Get the guest kernel, 6.1.155",
+    code: "ARCH=$(uname -m)   # on its own line: zsh escapes ( ) pasted inside a URL\nmkdir -p ~/.local/share/sandboxd\ncurl -fsSL -o ~/.local/share/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155\nfile ~/.local/share/sandboxd/vmlinux   # must say ELF 64-bit; anything else is an error page",
+    body: (
+      <>
+        Each sandbox boots this kernel, whatever the host runs. It must be built with{" "}
+        <code>CONFIG_IP_PNP</code>, <code>CONFIG_VIRTIO_VSOCKETS</code>, <code>CONFIG_OVERLAY_FS</code>,{" "}
+        <code>CONFIG_EXT4_FS</code>, <code>CONFIG_VIRTIO_BLK</code> and <code>CONFIG_VIRTIO_NET</code>;
+        Firecracker&apos;s CI kernel 6.1.155 has them all, for x86_64 (checked) and arm64. It is pinned: the newest
+        Firecracker release does not always have CI kernels published yet. Keep it anywhere you like and name it
+        with <code>--kernel</code>.
       </>
     ),
   },
@@ -157,35 +230,104 @@ const LINUX_STEPS: Step[] = [
     code: "sandboxd --backend firecracker \\\n  --kernel ~/.local/share/sandboxd/vmlinux \\\n  --firecracker ~/.local/bin/firecracker",
     body: (
       <>
-        It listens on <code>$XDG_RUNTIME_DIR/sandboxd.sock</code>, the CLI&apos;s default local context, and its
-        first line says what it will serve. Leave it running and use a second terminal for the rest.
+        It listens on <code>$XDG_RUNTIME_DIR/sandboxd.sock</code>, the CLI&apos;s context named{" "}
+        <code>local</code>, and its last line names its version and what it will serve. Leave it running and use a
+        second terminal for the rest. If you have added other contexts, switch back with{" "}
+        <code>sandbox-cli context use local</code>; otherwise the CLI asks the one you added, and says{" "}
+        <code>sandboxd did not answer</code>.
+      </>
+    ),
+  },
+  {
+    title: "Or serve it on an IP address",
+    code: `IP=10.0.0.17   # this machine's address, as clients dial it
+curl -fsSLO https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/packaging/fleet/make-certs.sh
+sh make-certs.sh -o certs $IP
+sh -c 'umask 077; head -c 32 /dev/urandom | base64 > ~/sandboxd.token'
+sandboxd --backend firecracker \\
+  --kernel ~/.local/share/sandboxd/vmlinux --firecracker ~/.local/bin/firecracker \\
+  --listen $IP:7443 --token-file ~/sandboxd.token \\
+  --tls-cert certs/node-$IP.pem --tls-key certs/node-$IP-key.pem --allowed-host $IP
+
+# on a client, with the token and certs/ca.pem copied across
+sandbox-cli context add box https://10.0.0.17:7443 --token-file sandboxd.token --ca ca.pem
+sandbox-cli context use box`,
+    body: (
+      <>
+        Instead of the socket, for other machines. An address other machines can reach needs a token, TLS with a
+        certificate naming that IP, and <code>--allowed-host</code>; sandboxd refuses to start without them and
+        says which is missing. On <code>127.0.0.1</code> a token is enough. Loopback, the firewall and what each
+        flag guards are in{" "}
+        <Link href={docPath("self-hosting", "on-an-ip-address-instead-of-a-socket")}>On an IP address</Link>.
       </>
     ),
   },
   DOCTOR,
   FIRST_RUN,
+  STUDIO,
 ];
 
 const SERVER_STEPS: Step[] = [
   {
-    title: "Install as root, where the unit expects it",
-    code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh \\\n  | sudo sh -s -- --dest /usr/local/bin --no-config\nsudo install -m 0755 firecracker jailer /usr/local/bin/",
+    title: "Check the machine: KVM, the tools, Go",
+    code: CHECK_MACHINE_CODE,
+    body: CHECK_MACHINE_BODY,
+  },
+  {
+    title: "Give sandboxes a drive of their own",
+    code: DISK_MOUNT_CODE,
     body: (
       <>
-        sandboxd and the guest agent land side by side in <code>/usr/local/bin</code>, where the systemd unit runs
-        them from; the guest agent is put into every image&apos;s root disk, so it must sit beside sandboxd.{" "}
-        <code>--no-config</code> because the server reads a policy file, not a client config. Fetch Firecracker as
-        in the quick try above.
+        Images, every sandbox&apos;s disk, snapshots and volumes live under <code>/var/lib/sandboxd</code>; on a
+        drive of their own, a sandbox that fills its disk fills that and not <code>/</code>. Mount it before the
+        next steps, which put the kernel there. Check the drive is the empty one before <code>mkfs</code>, which
+        erases it. By UUID, since device names can swap between boots, and without <code>nofail</code>: the unit
+        has <code>RequiresMountsFor=/var/lib/sandboxd</code>, so sandboxd does not start on the empty directory
+        underneath. Keep the whole directory on it: its parts are hard-linked into each jail. On a machine just
+        for trying, with 20 GiB free on <code>/</code>, skip this step and the next.
       </>
     ),
   },
   {
-    title: "Make its directories, kernel and token",
-    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nsudo install -m 0644 vmlinux /var/lib/sandboxd/vmlinux\nhead -c 32 /dev/urandom | base64 | sudo tee /etc/sandboxd/token >/dev/null\nsudo chmod 600 /etc/sandboxd/token",
+    title: "Or, with no spare drive: a directory of a larger filesystem",
+    code: BIND_MOUNT_CODE,
     body: (
       <>
-        Image disks are hard-linked into each sandbox&apos;s jail, so <code>/var/lib/sandboxd</code> must be one
-        filesystem; on xfs or btrfs each sandbox&apos;s disk is a reflink. The token is what clients present: at
+        Instead of the step above, when <code>/</code> is small and another filesystem, <code>/home</code> say, has
+        the room: a bind mount puts a directory of it at <code>/var/lib/sandboxd</code>. It is one filesystem, as
+        the jail needs, and the unit waits for it as for a drive.
+      </>
+    ),
+  },
+  {
+    title: RELEASED
+      ? "Install as root, with Firecracker 1.17.0"
+      : "Build sandboxd, and install it as root with Firecracker 1.17.0",
+    code: SERVER_INSTALL_CODE,
+    body: (
+      <>
+        {RELEASED ? null : <>{NOT_RELEASED_YET} </>}
+        sandboxd and the guest agent land side by side in <code>/usr/local/bin</code>, where the systemd unit runs
+        them from; the guest agent is put into every image&apos;s root disk, so it must sit beside sandboxd.
+        {RELEASED ? (
+          <>
+            {" "}
+            <code>--no-config</code> because the server reads a policy file, not a client config.
+          </>
+        ) : null}{" "}
+        Firecracker and its jailer come from Firecracker&apos;s own releases: 1.17.0, the version checked; see{" "}
+        <Link href={docPath("self-hosting", "versions-checked")}>Versions checked</Link>.
+      </>
+    ),
+  },
+  {
+    title: "Make its directories, the guest kernel (6.1.155) and the token",
+    code: "sudo install -d -m 0700 /etc/sandboxd /etc/sandboxd/tls /var/lib/sandboxd\nARCH=$(uname -m)\nsudo curl -fsSL -o /var/lib/sandboxd/vmlinux \\\n  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.15/$ARCH/vmlinux-6.1.155\nfile /var/lib/sandboxd/vmlinux   # must say ELF 64-bit\nsudo sh -c 'umask 077; head -c 32 /dev/urandom | base64 > /etc/sandboxd/token'",
+    body: (
+      <>
+        The guest kernel is Firecracker&apos;s CI kernel 6.1.155, with every option sandboxd needs (as in the quick
+        try above). Image disks are hard-linked into each sandbox&apos;s jail, so <code>/var/lib/sandboxd</code> must be one
+        filesystem; on xfs or btrfs snapshot and fork copies are reflinks. The token is what clients present: at
         least 16 characters, readable by root only. sandboxd refuses a token file other users can read.
       </>
     ),
@@ -209,18 +351,33 @@ const SERVER_STEPS: Step[] = [
       <>
         Set <code>--allowed-host</code> to the name clients use (the <code>sed</code> line). As root, sandboxd
         enforces the egress allowlist on the host and runs every VM under the jailer with a uid of its own. It
-        serves <code>0.0.0.0:7443</code>, and refuses a network address without both a token and TLS.
+        serves <code>0.0.0.0:7443</code>, and refuses a network address without both a token and TLS. Add{" "}
+        <code>--keep-sandboxes</code> to <code>ExecStart</code> and a restart or an upgrade leaves running
+        sandboxes, and their processes, running.
       </>
     ),
   },
   DOCTOR,
+  {
+    title: "Install images ahead of their first sandbox",
+    code: "sandbox-cli image pull ghcr.io/amitgb14/sandbox-desktop:edge   # waits; --no-wait returns at once\nsandbox-cli image ls                                            # state, size, sandboxes using each",
+    body: (
+      <>
+        Otherwise an image is pulled and built into a root disk when a sandbox first asks for it, and that sandbox
+        waits a minute or more. <code>image rm</code> frees one nothing uses. The policy&apos;s{" "}
+        <code>images:</code>{" "}list limits installs as it limits runs; Studio&apos;s Images screen does the same.
+      </>
+    ),
+  },
 ];
 
 const CLIENT_STEPS: Step[] = [
   {
-    title: "Install the client",
-    code: "curl -fsSL https://raw.githubusercontent.com/Amitgb14/sandbox-cli/main/install.sh | sh -s -- --client-only",
-    body: "For a laptop that should not run VMs, an Intel Mac, or any machine talking to a server. On Windows, download the .zip from the releases page.",
+    title: RELEASED ? "Install the client" : "Build and install the client",
+    code: CLIENT_INSTALL_CODE,
+    body: RELEASED
+      ? "For a laptop that should not run VMs, an Intel Mac, or any machine talking to a server. On Windows, download the .zip from the releases page."
+      : `For a laptop that should not run VMs, an Intel Mac, or any machine talking to a server; on Windows, go build -o sandbox-cli.exe ./cmd/sandbox-cli. ${NOT_RELEASED_YET} The published 0.0.1 client is the container design's and cannot talk to a sandboxd.`,
   },
   {
     title: "Add the server as a context",
@@ -229,16 +386,7 @@ const CLIENT_STEPS: Step[] = [
   },
   DOCTOR,
   FIRST_RUN,
-  {
-    title: "Open Studio",
-    code: "cd ~/your-project\nsandbox-cli studio",
-    body: (
-      <>
-        The browser view of the same sandboxes, served by sandbox-cli on a loopback port, for whichever sandboxd
-        your context points at. Open the address it prints. <Link href={STUDIO_PATH}>More about Studio</Link>.
-      </>
-    ),
-  },
+  STUDIO,
 ];
 
 const FLEET_STEPS: Step[] = [
@@ -248,7 +396,7 @@ const FLEET_STEPS: Step[] = [
     body: (
       <>
         A private CA, the gateway&apos;s client certificate, and a server certificate per node for the address the
-        gateway dials (<code>-g</code> adds one for the gateway&apos;s own API). Nodes accept a connection only with
+        gateway dials (<code>-g</code>{" "}adds one for the gateway&apos;s own API). Nodes accept a connection only with
         the gateway&apos;s certificate, and still check their token on every request. Keep <code>ca-key.pem</code>{" "}
         offline.
       </>
@@ -284,8 +432,44 @@ const FLEET_STEPS: Step[] = [
     body: (
       <>
         Each user gets an API key with the scopes they need, and sees only the sandboxes they made. Users never
-        hold a node&apos;s token. <code>sandbox-cli ssh</code> registers their public key and pins the
+        hold a node&apos;s token. <code>sandbox-cli ssh</code>{" "}registers their public key and pins the
         gateway&apos;s host key, after which plain <code>ssh demo@gateway -p 2222</code> works too.
+      </>
+    ),
+  },
+  {
+    title: "Use it: SSH, secrets, jobs and services",
+    code: FLEET_USE_CODE,
+    body: (
+      <>
+        One SSH port reaches every sandbox, with no tunnel or port per sandbox: the user name is the sandbox.
+        Logging in needs a key with <code>sandbox:ssh</code>. A secret is sealed on the gateway and reaches only
+        the runs that name it. A job runs each attempt in a fresh sandbox and keeps its output and the files it
+        names; a service keeps its replicas healthy, rolls a new spec out one at a time, and with{" "}
+        <code>serve --router-domain</code> answers at <code>&lt;service&gt;--&lt;org&gt;.DOMAIN</code>.
+      </>
+    ),
+  },
+  {
+    title: "Organizations",
+    code: FLEET_ORGS_CODE,
+    body: (
+      <>
+        An organization is isolated: its sandboxes, secrets, jobs, services and quota are its own, and a name or
+        an id from another one answers as if it did not exist. A key acts in its own organization, and in those
+        its user created or was added to; nothing else, whatever a request asks for. Removing a member ends what
+        they had open there at once. Studio has the same switcher at the top of its sidebar.
+      </>
+    ),
+  },
+  {
+    title: "Revoke a key: access ends now",
+    code: FLEET_REVOKE_CODE,
+    body: (
+      <>
+        Revoking ends what the key already has open — SSH sessions, followed logs, attach sessions and tunnels —
+        and cancels its user&apos;s running jobs when no other key of theirs is active, rather than waiting for
+        them to finish. Each is recorded in the audit log, by key id and never by secret.
       </>
     ),
   },
@@ -326,6 +510,37 @@ const TROUBLE: { symptom: React.ReactNode; fix: React.ReactNode }[] = [
       </>
     ),
     fix: "A TCP address, loopback included, is reachable by other users. Serve on the default unix socket, or pass --token-file (and TLS for anything beyond loopback).",
+  },
+  {
+    symptom: (
+      <>
+        Every sandbox fails to start: <code>linking … into the jail (the jail must be on the same filesystem as the
+        image cache)</code>
+      </>
+    ),
+    fix: (
+      <>
+        Part of <code>/var/lib/sandboxd</code> (<code>jail/</code>, <code>rootfs/</code> or <code>volumes/</code>) is
+        on a mount of its own. Its parts are hard-linked into each jail, so they must share one filesystem: mount
+        the disk at the whole state directory instead. Only the audit log can go elsewhere, with{" "}
+        <code>--audit-log</code>.
+      </>
+    ),
+  },
+  {
+    symptom: (
+      <>
+        sandboxd does not start after a reboot: <code>Dependency failed for sandboxd</code>
+      </>
+    ),
+    fix: (
+      <>
+        The disk for <code>/var/lib/sandboxd</code> did not mount, and the unit&apos;s{" "}
+        <code>RequiresMountsFor</code> keeps sandboxd from filling <code>/</code> instead. Check{" "}
+        <code>findmnt /var/lib/sandboxd</code> and the UUID in <code>/etc/fstab</code> against{" "}
+        <code>blkid</code>.
+      </>
+    ),
   },
   {
     symptom: "sandbox-cli cannot connect to sandboxd",
@@ -382,6 +597,54 @@ function Caveat({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * What a reader needs before any path, storage first: it is the one that
+ * fails late. Sizes measured on a real host (docs/self-hosting.md, "What the
+ * machine needs"); where each path keeps its state is from sandboxd's
+ * defaultStateDir and docs/local-macos.md.
+ */
+const STORAGE_SIZES: [string, string][] = [
+  ["The base image, installed", "2.5 GiB"],
+  ["A small image, e.g. python:3.13-slim", "about 120 MiB"],
+  ["Each sandbox", "what it writes, up to its disk size (10 GiB by default); the disk is sparse"],
+  ["Each snapshot", "its memory plus its written disk: 1 GiB for an idle 1 GiB sandbox"],
+  ["Building from a checkout", "a few GiB of Go caches in your home, and about 0.8 GiB for Studio's UI"],
+];
+
+const STORAGE_WHERE: { path: string; where: React.ReactNode }[] = [
+  {
+    path: "Linux server (root)",
+    where: (
+      <>
+        <code>/var/lib/sandboxd</code>. Give it a drive of its own, or bind-mount a directory of a larger filesystem
+        there, <em>before</em>{" "}installing: the server path&apos;s first steps do it.
+      </>
+    ),
+  },
+  {
+    path: "Linux, quick try",
+    where: (
+      <>
+        <code>~/.local/share/sandboxd</code>, on the filesystem that holds your home.
+      </>
+    ),
+  },
+  {
+    path: "Mac",
+    where: (
+      <>
+        Images and sandboxes&apos; disks in the <code>container</code> runtime&apos;s own store, on the startup disk;{" "}
+        <code>~/.local/share/sandboxd</code> holds only records and the audit log.
+      </>
+    ),
+  },
+  { path: "Client only", where: "Nothing but the binary and its config: sandboxes live on the server." },
+];
+
+const BEFORE_CHECK = `df -h /var/lib ~      # free space where the state will go: 20 GiB to try it
+ls -l /dev/kvm        # Linux: must exist (a cloud VM needs nested virtualisation)
+go version            # 1.25 or later, to build until the first microVM release`;
+
 const PATHS = [
   { href: "#mac", icon: Laptop, title: "A Mac", what: "macOS 26+, Apple silicon. Sandboxes run on your Mac, through the native container runtime." },
   { href: "#linux", icon: Terminal, title: "Linux, quick try", what: "Any Linux with KVM, no root. Everything works except the network." },
@@ -393,7 +656,7 @@ const PATHS = [
 export default function SetupPage() {
   return (
     <div id="top">
-      <SiteHeader nav={NAV} />
+      <SiteHeader nav={NAV} installHref="/#install" />
       <main className="flex-1">
         <Section id="start">
           <Link
@@ -424,6 +687,58 @@ export default function SetupPage() {
               </a>
             ))}
           </div>
+
+          <div id="before" className="mt-14 scroll-mt-24">
+            <h2 className="text-xl font-semibold tracking-tight">Before you start</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+              Storage first: it is the requirement that fails late, when an image or a snapshot fills a disk halfway
+              through a run.
+            </p>
+            <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div className="rounded-xl border bg-card p-5">
+                <h3 className="mb-3 text-[0.95rem] font-semibold tracking-tight">Storage: 20 GiB free to try it</h3>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {STORAGE_SIZES.map(([what, takes]) => (
+                      <tr key={what} className="border-t first:border-t-0">
+                        <td className="py-2 pr-4 align-top text-foreground">{what}</td>
+                        <td className="py-2 align-top text-muted-foreground">{takes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                  A server others depend on needs a drive of its own for sandboxes, so a full one never fills{" "}
+                  <code className="font-mono text-[0.82em] text-foreground">/</code>. Measured on a real host;{" "}
+                  <Link className="underline" href={docPath("self-hosting", "what-the-machine-needs")}>
+                    What the machine needs
+                  </Link>{" "}
+                  has the rest.
+                </p>
+              </div>
+              <div className="rounded-xl border bg-card p-5">
+                <h3 className="mb-3 text-[0.95rem] font-semibold tracking-tight">Where each path keeps it</h3>
+                <dl className="flex flex-col gap-3 text-sm [&_code]:font-mono [&_code]:text-[0.82em] [&_code]:text-foreground">
+                  {STORAGE_WHERE.map((w) => (
+                    <div key={w.path}>
+                      <dt className="font-medium text-foreground">{w.path}</dt>
+                      <dd className="leading-relaxed text-muted-foreground">{w.where}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            </div>
+            <div className="mt-6 max-w-3xl">
+              <h3 className="mb-3 text-[0.95rem] font-semibold tracking-tight">
+                And the machine: KVM on Linux, macOS 26 on Apple silicon, Go to build
+              </h3>
+              <CodeBlock code={BEFORE_CHECK} />
+              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                Each path&apos;s first step checks the rest: the tools, the versions checked, and whether the drive is
+                mounted.
+              </p>
+            </div>
+          </div>
         </Section>
 
         <Section id="mac" tinted>
@@ -435,7 +750,7 @@ export default function SetupPage() {
           <Caveat>
             the macOS backend was written and tested on Linux, against a fake runtime that runs the real guest agent.
             Its first runs on a real Mac (macOS 26.1) boot a sandbox in under a second, but the full check has not run
-            yet. Expect rough edges; <a className="underline" href={DOC_URL.localMac}>docs/local-macos.md</a> lists the
+            yet. Expect rough edges; <Link className="underline" href={docPath("local-macos")}>Local on a Mac</Link> lists the
             open points.
           </Caveat>
           <Steps steps={MAC_STEPS} />
@@ -475,7 +790,8 @@ export default function SetupPage() {
           />
           <Caveat>
             without root there are no tap devices, so sandboxes get <strong>no network at all</strong> and a request for
-            an allowlist is refused, never served open. Boot, run, files, snapshots and volumes all work. For
+            an allowlist is refused, never served open. Boot, run, files, snapshots and volumes all work. Run these
+            steps as yourself, not in a root shell (<code>sudo su</code>): they install into your home. For
             networking, use the Linux server path.
           </Caveat>
           <Steps steps={LINUX_STEPS} />
@@ -489,8 +805,14 @@ export default function SetupPage() {
           />
           <Steps steps={SERVER_STEPS} />
           <p className="mt-8 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            Pools, volumes, the audit log, how the allowlist is enforced and living with a host firewall are in{" "}
-            <a className="underline" href={DOC_URL.selfHosting}>docs/self-hosting.md</a>. To check the whole API
+            Before others depend on it, go through the{" "}
+            <Link className="underline" href={docPath("self-hosting", "in-production")}>production checklist</Link>: room
+            kept back with <code className="font-mono text-[0.82em] text-foreground">--capacity-disk-mb</code>, an alert on
+            the disk&apos;s real free space, the audit log rotated, volumes backed up.{" "}
+            <Link className="underline" href={docPath("self-hosting", "where-it-keeps-things")}>Where it keeps things</Link>,{" "}
+            <Link className="underline" href={docPath("self-hosting", "upgrading-without-stopping-sandboxes")}>upgrading without stopping sandboxes</Link>,
+            pools, volumes, the audit log, how the allowlist is enforced and living with a host firewall are in{" "}
+            <Link className="underline" href={docPath("self-hosting")}>Self-hosting on Linux</Link>. To check the whole API
             against your server, run the conformance suite from a checkout:
           </p>
           <div className="mt-3 max-w-3xl">
@@ -521,7 +843,14 @@ export default function SetupPage() {
           <p className="mt-8 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             On one machine the gateway can sit beside sandboxd, reaching it on a loopback port with its token. Node
             and gateway flags, the admin API, scopes, quotas, the security model and what is not done yet are in{" "}
-            <a className="underline" href={DOC_URL.fleet}>docs/fleet.md</a>.
+            <Link className="underline" href={docPath("fleet")}>the gateway docs</Link>, with{" "}
+            <Link className="underline" href={docPath("ssh")}>SSH</Link>,{" "}
+            <Link className="underline" href={docPath("organizations")}>organizations</Link>,{" "}
+            <Link className="underline" href={docPath("jobs")}>jobs and secrets</Link>,{" "}
+            <Link className="underline" href={docPath("services")}>services</Link> and{" "}
+            <Link className="underline" href={docPath("operations")}>operations</Link> on pages of their own. To check a fleet end to end — one KVM
+            machine and a laptop, every step with what a pass looks like — follow{" "}
+            <a className="underline" href={DOC_URL.fleetWalkthrough}>the fleet walkthrough</a>.
           </p>
         </Section>
 

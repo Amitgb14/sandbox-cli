@@ -95,6 +95,29 @@ type Key struct {
 	Hash    string    `json:"hash"` // hex SHA-256 of the secret
 	Created time.Time `json:"created"`
 	Revoked bool      `json:"revoked,omitempty"`
+	// Expires, when set, is when the key stops working, as if revoked then:
+	// a demo user's key that lasts a week. A key without it never expires.
+	Expires *time.Time `json:"expires,omitempty"`
+	// Email and Password make the key an account (accounts.go): a person
+	// who signs in with a password rather than holding the key. The key's
+	// own secret was never shown to anyone; it stands for what the account
+	// may do, and is what keeps the user's work running while they are
+	// signed out. Password is a PBKDF2 hash, never the password.
+	Email     string     `json:"email,omitempty"`
+	Password  string     `json:"password,omitempty"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
+	// Parent, when set, makes this a sign-in's key: minted for one sign-in
+	// to the account key it names, with that key's user and scopes, and
+	// never outliving it.
+	Parent string `json:"parent,omitempty"`
+}
+
+// Active reports whether k still works at now: not revoked, not expired.
+// Every check of a key goes through it, so an expired key is refused
+// wherever a revoked one is — a request, an open stream, an SSH login, a
+// job's run.
+func (k Key) Active(now time.Time) bool {
+	return !k.Revoked && (k.Expires == nil || now.Before(*k.Expires))
 }
 
 // SSHKey is a public key a user may log in with.
@@ -141,40 +164,6 @@ type NodeConfig struct {
 	CAFile    string `json:"ca_file,omitempty"`
 	CertFile  string `json:"cert_file,omitempty"`
 	KeyFile   string `json:"key_file,omitempty"`
-}
-
-// Store is everything the gateway must keep across a restart. Placement can
-// be rebuilt from the nodes' own listings; ownership cannot, which is why it
-// lives here.
-type Store interface {
-	CreateKey(user, tenant string, scopes []string) (secret string, k Key, err error)
-	// KeyBySecret checks a presented secret against the stored hashes, in
-	// constant time, and returns the key it matches if not revoked.
-	KeyBySecret(secret string) (Key, bool)
-	RevokeKey(id string) error
-	Keys() []Key
-
-	AddSSHKey(user, tenant, sandbox, authorizedKey string) (SSHKey, error)
-	RemoveSSHKey(id string) error
-	// SSHKeysByFingerprint returns every stored key with that fingerprint.
-	SSHKeysByFingerprint(fingerprint string) []SSHKey
-	SSHKeysFor(user string) []SSHKey
-
-	// NewSSHToken issues a token for one sandbox; only its hash is stored.
-	NewSSHToken(user, tenant, sandbox string, ttl time.Duration) (token string, expires time.Time, err error)
-	RedeemSSHToken(token string) (SSHToken, bool)
-
-	SetOwner(sandbox string, o Owner) error
-	OwnerOf(sandbox string) (Owner, bool)
-	ForgetSandbox(sandbox string) error
-
-	PutNode(n NodeConfig) error
-	RemoveNode(name string) error
-	Nodes() []NodeConfig
-
-	// MemberRole returns the role user — named with the tenant of their own
-	// keys — holds in organisation org, and false when not a member.
-	MemberRole(org, user, userTenant string) (string, bool)
 }
 
 // Router turns a principal, a sandbox reference and a scope into a client for

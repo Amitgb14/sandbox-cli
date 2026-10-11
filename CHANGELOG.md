@@ -185,6 +185,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   `secrets:write` scope. A restarted gateway carries its jobs on, following
   a command that was running where it runs. The Python and TypeScript SDKs
   have the same calls.
+- **A job carries labels.** A job spec's `labels` are your own metadata,
+  bounded as a sandbox's are (up to 32 keys of lowercase letters, digits and
+  `. _ / -`; printable values up to 256 bytes) and refused otherwise. They
+  are returned with the job, so `GET /v1/jobs` can be told apart and
+  filtered; Studio's Jobs form sets them and its list filters by them.
 
 **Added:**
 
@@ -198,6 +203,234 @@ in `_old/` as reference, to be ported where this design still wants it.
   a failed run changed nothing took a repository to compare, and a run that may
   have done work must not be done twice. A `--detach` run with `--fallback` is
   refused, because nothing watches a detached run's exit.
+- **Images, managed ahead of use** (capability `images`). An image was
+  pulled, and on Linux built into a root disk, only when a sandbox first asked
+  for it, a minute or more for that sandbox. `GET /v1/images` lists what is
+  installed with each one's state, size and the sandboxes using it; `POST
+  /v1/images` installs one in the background, with its progress; `DELETE
+  /v1/images?image=REF` removes one nothing uses, and on Linux the cached layers
+  no other image needs. The policy's `images` list limits installs as it limits
+  creates; the default and pooled images are not removed. `sandbox-cli image ls`,
+  `image pull` and `image rm`, and Studio's new Images screen, do the same. They
+  are the node's operator's: a gateway answers them `501` until its own catalog
+  exists. On Linux each root disk now records the images it serves, so the list,
+  and a gateway's placement hint, survive a sandboxd restart, where before they
+  were forgotten.
+- **A live sandbox can be renamed, relabelled and retimed.** `PATCH
+  /v1/sandboxes/{ref}` takes `name`, `labels` (replaced whole) and
+  `idle_timeout_secs` beside `network`, on a running or suspended sandbox,
+  under the rules they have at create; one bad field and nothing changes. A new
+  audit event, `sandbox.updated`, records what changed. Through a gateway a
+  name is unique among the caller's sandboxes on every node, and its own
+  `gateway.*` labels cannot be set, changed or removed. `sandbox-cli update
+  SANDBOX` does it from the CLI (`--name`, `--label k=v` / `k-`, `--unlabel`,
+  `--idle`, and `--network` with `--allow`, `--deny`, `--no-baseline` for a
+  running one); the SDKs gain `update_sandbox` / `updateSandbox`. In Studio, a
+  sandbox's Overview edits its name, labels and idle timeout, changes its
+  network (with the allowlist groups), and, where the backend takes disk
+  snapshots (macOS), resizes it: a copy at the new size in its place, with its
+  files, name, labels and network. A VM's vCPUs and memory are fixed while it
+  runs, so a Firecracker sandbox, whose snapshots are memory ones, is not
+  resized; its environment would not carry over either, and a resize says so.
+- **Saved agent API keys, VM templates and allowlist groups, from Studio.**
+  Studio's Agents screen saves an API key for any variable an agent reads, in
+  `~/.config/sandbox/agent-keys.json` (0600, write-only: no call returns it);
+  every agent run, `sandbox-cli agent` included, forwards it when the
+  environment does not set that variable, and the environment wins. Studio's
+  launches take a size (`cpus`, `memory_mb`, `disk_mb`), a `deny` list,
+  `egress_groups` and `no_baseline`; a new Templates screen keeps sizes by
+  name, micro to xlarge built in. Settings keeps allowlist groups — named sets
+  of hosts, picked per launch in the Playground's new Network step (none, an
+  allowlist of the groups chosen, or open), the default ones picked when none
+  are — and deny rules every Studio launch carries. Both are kept in
+  `~/.config/sandbox/studio.json`. See [docs/studio.md](docs/studio.md).
+  `run` and the agent commands take `--no-baseline`: an allowlist of only the
+  hosts named with `--allow` (and an agent's API), without the built-in
+  agents' APIs and registries. It only turns the baseline off; a config that
+  turned it off keeps it off.
+  `run` and the agent commands take `--template NAME` for the same sizes,
+  built in or saved in Studio; `--cpus`, `--memory` and `--disk` given beside
+  it win for their own field. `sandbox-cli template ls` lists them.
+- **A desktop image, used from Studio** ([docs/desktop.md](docs/desktop.md)).
+  `ghcr.io/<owner>/sandbox-desktop` is the base image plus a screen: a window
+  manager, a terminal and Chromium, started by `sandbox-desktop` and served
+  over VNC on the guest's loopback. Studio's new Desktop tab starts it and
+  draws it with its own VNC client, through a bridge (`/api/ws/desktop`) that
+  reaches that one port through the API's tunnel and nothing else; nothing the
+  guest serves is shown as a page on Studio's address. Published with the base
+  image, under the same tags.
+- **A Mac reports the images it has.** The macOS backend lists the runtime's
+  local images at `GET /v1/node` (`images`), as Linux lists those it has built:
+  what a sandbox starts without a pull, and what Studio's Playground suggests.
+  Snapshot images are left out; they are started from as snapshots.
+- **Snapshots on macOS: the files.** The macOS backend offers a new
+  capability, `disk_snapshot`: a running sandbox's files, exported and kept as
+  an image a new sandbox starts from, booting afresh. Snapshots now say their
+  `kind` (`memory` or `disk`); a fork of a disk snapshot keeps its image but
+  may ask for other resources. Studio's Snapshot button and Snapshots screen
+  work with either. See docs/local-macos.md and docs/api/v1.md. On a disk
+  too full for one it is refused at once, saying how much is free and about
+  how much is needed (`503`), rather than failing after the export; a load
+  that fails part way leaves no image behind; and sandboxd logs why any
+  snapshot failed, which a client is told only in general terms.
+- **Scheduled snapshots.** A sandbox can be snapshotted every so often while it
+  runs, keeping the newest few: `snapshot_every_secs` and `snapshot_keep` on
+  create, `PUT …/snapshot-schedule` on a running sandbox, `run --snapshot-every
+  30m --snapshot-keep 3` and `sandbox-cli snapshot-schedule` in the CLI, and
+  both SDKs. sandboxd takes them, whatever is watching; retention removes only
+  scheduled ones, and logs each. The operator bounds them with
+  `limits.min_snapshot_every_secs` (default five minutes) and
+  `limits.max_snapshot_keep` (default 5); a schedule outside them, on an
+  endpoint without snapshots or on a sandbox with volumes is refused. Behind a
+  gateway a scheduled snapshot belongs to the sandbox's owner, and a fleet whose
+  nodes snapshot disks only checks ownership as one that snapshots whole
+  machines does.
+
+- **A sandbox's CPU and memory over the last hour.** `GET
+  /v1/sandboxes/{id}/metrics`, where the endpoint has the new `metrics`
+  capability (macOS, Firecracker and the fake backend all do): CPU as a share
+  of the vCPUs given, memory against its limit, network and disk byte counts,
+  sampled every 5 seconds by sandboxd from what the host measures — the
+  runtime's counters on macOS, the VMM's process on Linux — and never from the
+  guest. An hour is kept per sandbox, about 63 KB, in sandboxd's memory only:
+  nothing is written to disk, so it is gone when sandboxd restarts, and after
+  a sandbox ends once sandboxd forgets it (it keeps the 100 newest ended). Reading it does not count as
+  activity for the idle timeout. Behind a gateway it is the owner's. Studio
+  opens it from a sandbox's resources.
+- **A snapshot's progress.** While a snapshot is taken, the sandbox carries
+  `snapshotting`: its phase (`capture`, then `store`), the bytes read and an
+  estimate of the total where the backend has one (on macOS, from the guest's
+  `df`). On macOS the bytes are counted as the runtime exports them. A second
+  snapshot of a sandbox while one is taken is refused with `409`, and a
+  snapshot asked for now finishes even when the client that asked hangs up —
+  before, closing the browser tab threw a minute of work away. Deleting the
+  sandbox part way does not stop it either: the sandbox goes at once, and the
+  snapshot is listed when it finishes, or is not there at all if it cannot.
+- **The gateway keeps its state in SQLite or PostgreSQL, not a file.**
+  `sandbox-gateway --store sqlite` (the default: `gateway.db` in
+  `--state-dir`) or `--store postgres --store-dsn-file FILE` (the address
+  read from a 0600 file; `sslmode=verify-full` required unless the database
+  is on the same machine). The schema migrates itself as the gateway starts;
+  `store status` and `store migrate` look after it. A gateway from before
+  refuses to start beside its old `state.json` until `sandbox-gateway store
+  import --from state.json` copies it in, keys keeping their ids and hashes.
+  On PostgreSQL every organisation's records are also held apart by
+  row-level security; `scripts/postgres-local.sh up` (`make db-up`) runs one
+  in Docker on loopback with a least-privilege role. Each sandbox's row now
+  keeps its name, image, state, labels, network, lifetime, end and idle
+  timeout, kept in step with its node and kept as history once terminated;
+  `GET /v1/admin/lost` includes the last known name, image and state. The
+  offline `keys`, `policies` and `nodes` commands now work while the gateway
+  serves. A database that does not answer is a `503`, never a `401` or a
+  `404`. One gateway serves a database at a time: on PostgreSQL further
+  gateways wait as standbys (listening on nothing) and take over within
+  seconds when it stops or loses the database; on SQLite a second is
+  refused. `--state FILE` still works and names a file in the gateway's
+  directory.
+- **The gateway's database has organisations and users as tables, and every
+  record points at them.** Before, a tenant and a user were text columns
+  repeated on every row, with nothing in the database saying a row's tenant
+  or user existed. Now every tenant is a row in `orgs` (the default tenant,
+  a personal one per tenant a key or invite named, and team ones made with
+  `org create`). Every user is a row in `users`, at home in one, with an
+  account's address and password on it. Keys, memberships, sandboxes,
+  volumes, snapshots, jobs, services, secrets, SSH keys and policies point
+  at them by foreign key, and row-level security compares `org_id`. The API,
+  the CLI and the SDKs are unchanged. Upgrading moves every row in one
+  transaction, keys keeping their hashes. SQLite copies itself to
+  `gateway.db.before-0003` first. PostgreSQL refuses until you have taken a
+  `pg_dump` and pass `--store-migrate` (docs/fleet.md, "Upgrading to schema
+  3").
+- **Behind a gateway, the create form lists images before your first
+  sandbox.** Studio's image picker offered only the images of your own
+  sandboxes through a gateway, so a new user saw nothing until they had made
+  one. The gateway now lists what its nodes have built (`GET
+  /v1/fleet/images`, any key that may list sandboxes), and Studio shows it
+  as "Built on the gateway's nodes".
+- **Organisation names keep their case and are matched without it.**
+  `Acme-Labs` is created and shown as typed, and is the same organisation as
+  `acme-labs` everywhere, including `X-Sandbox-Org` and service hosts; its
+  tenant is the name lowercased. Policy names stay lowercase.
+- **Studio's sandbox list says when each ends and, to an admin, whose it
+  is.** An **Ends** column ticks down to a sandbox's lifetime ("in 29m 12s",
+  or "never"), and a gateway admin's list has an **Owner** column from the
+  gateway's owner label; a sandbox's page shows its owner too.
+- **Invite people by email; they sign in with a password.** A gateway admin
+  invites an address (`POST /v1/admin/invites`, `sandbox-cli gateway invites
+  create --email …`, or **Create invite** in Studio's Users & keys, whose
+  **Email invite** opens the admin's mail program with the message written).
+  The link, `#invite=…`, works once and for two days; opening it in hosted
+  Studio, the person chooses a password and is signed in, and from then on
+  signs in with their address and password on the form hosted Studio shows
+  to anyone without a session. The account is a key with the user, tenant,
+  scopes, policy and lifetime the invite named, listed by `keys list` with its
+  EMAIL and renewed or revoked like any key; each sign-in gets a short-lived
+  key of its own, ended by Sign out. `keys reset ID` (Reset password… in
+  Studio) makes a link for a forgotten password, and the Account page changes
+  one's own. Five wrong passwords in a row lock an address for 15 minutes.
+  With a mail relay (`sandbox-gateway serve --smtp-host … --smtp-password-file
+  … --mail-from … --studio-url …`, TLS required) the gateway emails the link
+  itself (`send_email`, `--send`, on by default in Studio when it can); a
+  failed send leaves the invite usable. Hosted Studio without a session now shows
+  a sign-in page of its own, in place of the dashboard, with email and
+  password or an API key; a hosted session's 401 reads "no session: sign in
+  again".
+- **The admin in hosted Studio, and keys that expire.** `sandbox-cli studio
+  host --allow-admin` lets an admin key sign in by invite link and use the
+  admin screens there; an admin's session ends after an hour unused or twelve
+  hours in all. Without the flag an admin key is refused, as before. Users &
+  keys adds users as a **Demo user** (a policy, a key for 7 days) or a
+  **Member** (neither), and shows each new key's invite link once. An API key
+  can now expire: `expires_in_secs` at `POST /v1/admin/keys`, `sandbox-cli
+  gateway keys create --expires 7d`, `sandbox-gateway keys create --expires`;
+  an expired key is refused everywhere a revoked one is. `PATCH
+  /v1/admin/keys/{id}`, `sandbox-cli gateway keys renew ID --expires
+  30d|never|now` and Renew in Studio change it. `--invite-url` now prints an
+  admin key's link too, with a note that it needs `--allow-admin`. The hosted
+  build (`npm run build:hosted`) now carries the admin screens' code, shown
+  only to an admin's session; `NEXT_PUBLIC_STUDIO_ADMIN=off` still leaves it out.
+- **User policies, and moving a sandbox's end.** A gateway admin can name a
+  policy (`sandbox-cli gateway policies set demo --max-lifetime 30m`) and give
+  it to users, when issuing their key (`sandbox-cli gateway keys create …
+  --policy demo`) or later (`gateway policies assign`). Each sandbox of a user
+  holding it lives at most that long, so a demo server can give its users 30
+  minutes while the admin's own sandboxes are unlimited. A change to a policy
+  holds for sandboxes created after it. A running sandbox's end moves with
+  `PATCH /v1/sandboxes/{ref}` `{"lifetime_secs": N}`, counted from creation:
+  `sandbox-cli update SANDBOX --lifetime +15m` (or `-10m`, or `45m`), or the
+  −15m / +15m buttons beside "Ends" in Studio. Only an admin key may push an
+  end out; its owner may only bring it nearer. `sandbox-cli gateway keys
+  create|list|revoke` issues keys, with an invite link, while the gateway
+  serves, which `sandbox-gateway keys` cannot; Studio's Users & keys screen
+  has the policies too. `sandbox-gateway policies` edits them offline.
+- **A sandbox lifetime.** `limits.max_lifetime_secs` in sandboxd's policy ends
+  every sandbox that long after it was created, whatever it is doing — a
+  running process holds off the idle timeout, not this — and a suspended one
+  too. A request may ask for a shorter `lifetime_secs` (`sandbox-cli run
+  --lifetime 10m`), never a longer one, and with no limit set it may ask for
+  one of its own. A sandbox reports `lifetime_secs` and `expires_at`;
+  `sandbox-cli ls` has an EXPIRES column, Studio counts down to it, and the
+  termination is recorded with reason `lifetime`. The clock is the wall clock,
+  so a sandbox kept across a sandboxd restart ends on time, and a Studio resize
+  keeps the time left rather than starting it over. For a demo server:
+  `max_lifetime_secs: 1800`.
+- **Hosted Studio: `sandbox-cli studio host`.** One Studio on a public
+  address for a gateway's users ([docs/studio.md](docs/studio.md#hosted-studio)).
+  Each user opens an invite link, `https://studio.example.com/#key=sgk_…`,
+  printed by `sandbox-gateway keys create … --invite-url URL`. The page trades
+  the key for an HttpOnly session cookie, and from then on every call is made
+  with that user's key, so the gateway's ownership, tenants and quotas decide
+  what each person sees. It holds no credential of its own and reads nothing
+  from the machine it runs on: no context, no agent logins, no environment,
+  no config. Interactive agents log in inside their sandbox; unattended ones
+  run as jobs, with the API key stored as a secret. Studio's own settings
+  (saved agent keys, templates, egress rules and groups) are the host user's
+  and play no part: hosted users get the built-in sizes and name the hosts
+  they allow. Admin keys are refused.
+  Sessions are in memory, so a restart signs everyone out; a revoked key ends
+  its sessions at their next call. `npm run build:hosted` (`make
+  studio-hosted`) builds its UI, and `npm run check:hosted` fails if that
+  build carries the admin screens or local Studio's token handling.
 
 ### Security
 
@@ -229,6 +462,11 @@ the previous release.
 
 In the rewrite:
 
+- **A saved login, or saved API key, is written to a fresh temporary file.**
+  The write went through `path.tmp` with `os.WriteFile`, which keeps the mode
+  of a file already there and follows a link there: a leftover 0644 one left
+  the result readable by every user on the machine. The temporary file is now
+  removed and created anew, owner-only, refusing a link.
 - **A saved login carries the login and nothing else.** Claude Code's
   `~/.claude.json` and Gemini CLI's `settings.json` are saved with the login
   because they hold part of it, but they also hold MCP servers: commands the
@@ -315,6 +553,71 @@ that fails on the code before the fix:
   `api.revoked`. Requests made with the user's other keys stay open.
 
 ### Changed
+
+- **sandboxd's systemd unit waits for its state directory's disk.**
+  `packaging/systemd/sandboxd.service` has
+  `RequiresMountsFor=/var/lib/sandboxd`: where that is a disk of its own and
+  it does not mount, sandboxd does not start, rather than starting on the empty
+  directory underneath and filling the root filesystem. Harmless where it is a
+  plain directory. docs/self-hosting.md says what is kept there and how to give
+  it an extra disk ("Where it keeps things").
+- **Processes keep running through a sandboxd upgrade too**
+  (`--keep-sandboxes`). Commands, terminals and agent sessions in a kept
+  sandbox carry on while sandboxd restarts. The new sandboxd re-attaches them
+  under the same process numbers, with the output the guest held: the newest
+  1 MiB, with the log noting what was dropped. A terminal attaches again.
+  Only processes sandboxd's own records name are taken back. A process that
+  finished meanwhile is listed with its exit code, and one the guest no longer
+  holds as exited with -1. Without the flag a process still ends with its
+  connection. VMs started under an older guest agent lose their processes at
+  the first upgrade to this version; after that they keep them.
+
+- **sandboxd can be upgraded or restarted without stopping its sandboxes**
+  (`--keep-sandboxes`, Firecracker). On exit it leaves the VMs running, and on
+  start it takes back the ones an earlier sandboxd on the same state directory
+  left: same VM, memory, files, network policy, name, labels and environment,
+  and a suspended one stays suspended. Running processes still end at a
+  restart (commands, terminals, agent sessions), and a sandbox's network is
+  off for about a second. A VM is taken back only if it is provably the same
+  one: its record intact, its VMM the same process, its guest answering, and
+  its network policy still allowed by the current policy file. Anything else
+  is ended, as before. With the flag on, each sandbox's environment values
+  are written to `<state-dir>/records/` (0600; deleted when it ends, or when
+  sandboxd starts without the flag). The packaged systemd unit now sets
+  `KillMode=process`, so a stop no longer kills VMs behind sandboxd's back.
+  Each VMM now runs in a session of its own, so a Ctrl-C to a sandboxd run by
+  hand no longer reaches its VMs. At every start, kept or not, sandboxd ends
+  any VMM in its state directory that no sandbox accounts for, deletes network
+  devices and jails nothing owns, and logs how many it took back and ended.
+
+- **An example: browser automation across many sandboxes**
+  (`sdk/python/examples/browser-fleet`). `fleet.py` makes N sandboxes from the
+  desktop image, splits a list of URLs across them, drives each one's Chromium
+  with Playwright, and brings back the results and screenshots; every sandbox
+  is terminated at the end. It uses sandbox-cli's current context, as Studio
+  does, and `--headed --hold` keeps the browser on screen to watch in Studio's
+  Desktop tab. `--snapshot` installs once and starts the rest from a snapshot,
+  and `--network allowlist` allows only the URLs' hosts.
+- **The documentation is a page per component, and the site renders it at
+  `/docs`.** `docs/fleet.md` keeps setting up a gateway and its model; SSH
+  (`docs/ssh.md`), organizations (`docs/organizations.md`), jobs and secrets
+  (`docs/jobs.md`), services and the router (`docs/services.md`) and running a
+  fleet — metrics, the audit log, drain, lost nodes, revocation, the admin API
+  (`docs/operations.md`) — have pages of their own, and `docs/fleet.md` links
+  each. New: `docs/studio.md` (Studio for its users; `studio/README.md` stays
+  the developer's page), `docs/sandboxd.md` (every flag and the policy file),
+  and `docs/cli.md`, every command and flag generated from the CLI itself
+  (`make docs-cli`; a test fails when it is stale). `docs/README.md` indexes
+  them in the site's groups. The website's new `/docs` renders these files at
+  build time — nothing is copied — with a sidebar, "On this page", links
+  between pages, and a check that fails the build on a broken link or anchor;
+  the header's Docs, the footer, `/setup` and `/studio` link there.
+- **The site's fleet setup goes past the first key.** `/setup` now shows using a
+  fleet — SSH on one port, `scp` and `ssh-access`, secrets, jobs and services —
+  organizations (create, switch, members, and what isolates them), and that
+  revoking a key ends what it has open at once, with a link to the walkthrough
+  that checks a fleet end to end. `/studio` describes the organization switcher
+  and the hosted build without admin screens.
 
 - **Studio's screens have their own changelog,** [studio/CHANGELOG.md](studio/CHANGELOG.md).
   This file keeps what changes the CLI, the API or a command Studio runs.
@@ -505,6 +808,51 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **An image the registry will not serve is named, with the likely reason.**
+  Pulling an image that does not exist or is private, a misspelt name
+  included, failed with only `token request: 403 Forbidden`, which read like
+  a credentials problem; sandboxd pulls anonymously and has none. It now
+  says `ghcr.io/owner/name: the registry refused an anonymous pull (token
+  request: 403 Forbidden): no such image, or it is private`, in
+  `sandbox-cli image pull` and Studio's Images screen.
+- **Snapshots no longer fill the disk after a restart, and with
+  `--keep-sandboxes` they survive one.** The list of snapshots lived only in
+  sandboxd's memory, so after a restart a snapshot's files (a guest's memory
+  and disk, gigabytes each) could neither be used nor deleted, and stayed on
+  disk for good. With `--keep-sandboxes`, snapshots are now kept like their
+  sandboxes: listed again after a restart and usable to start sandboxes from.
+  Without it, a restart deletes the snapshots an earlier run left.
+
+- **Upgrading sandboxd no longer fills its disk with old root disks.** Each
+  image's root disk is cached per guest agent, and every sandboxd build has its
+  own agent, so each upgrade built a new set (about 3.7 GB for the base image)
+  and nothing removed the last. A machine filled its root filesystem after a
+  few upgrades, and creating a sandbox failed with "the backend failed" (mkfs:
+  no space left on device). sandboxd now removes, at start, the root disks
+  built for another guest agent. It keeps the ones a sandbox it took back is
+  still running or suspended from. Disks from before this version are treated
+  as stale and rebuilt once, on first use.
+
+- **sandboxd with networking now starts on a Linux machine that runs
+  avahi-daemon.** Its egress resolver listened on UDP 5353, the mDNS port,
+  which avahi-daemon holds on most Linux desktops and on EL-family servers
+  by default, so `sandboxd --network` exited with "address already in use"
+  and systemd restarted it forever. The resolver now listens on 7353. New
+  flags `--egress-dns-port` and `--egress-proxy-port` move it, or the proxy
+  (TCP 3128, also Squid's port), when another program holds one, and the
+  startup error says so.
+
+- **A name a Firecracker sandbox may not reach is now logged when its DNS
+  lookup is refused,** not only when a connection is: a site not on the
+  allowlist is refused at the lookup and never reaches the proxy, so it left
+  no trace. Each `egress denied` line quotes the name, which is the guest's
+  and may hold any byte.
+
+- **The docs no longer say a Linux sandbox gets open egress by default.** On
+  Firecracker egress is always an allowlist checked by name, and sandboxd
+  turns an `open` default or ceiling into the allowlist. `docs/self-hosting.md`
+  and the example policy now say so, and how a run adds the names it needs.
+
 - **A gateway no longer refuses a burst of short-lived sandboxes on a node
   with room.** A sandbox the gateway terminated kept counting against its node
   until the node's next status, every 5 seconds by default, so create-use-
@@ -512,6 +860,22 @@ that fails on the code before the fix:
   node has room for this sandbox" on an empty node: the conformance suite
   through a gateway in front of a 16-CPU node failed from its 17th create. The
   room comes back as soon as the node confirms the terminate.
+
+- **A Mac behind a gateway now gets sandboxes and jobs.** sandboxd read the
+  machine's memory from `/proc/meminfo`, which macOS does not have, so a Mac
+  node reported 0 MiB and the gateway queued everything for it, a job
+  forever. It now reads `hw.memsize`. Disk was 0 on any first start, measured
+  before the state directory existed; it is now the filesystem that directory
+  will be made on. `--capacity-memory-mb` and `--capacity-disk-mb` still win.
+
+- **On macOS, a sandboxd starting no longer removes another's sandboxes.**
+  Every Mac has one `container` runtime, and a sandboxd starting removed every
+  sandbox any sandboxd had made, taking it for its own leftovers: a dev build
+  beside the launch agent, or either restarted by launchd, ended the other's
+  running sandboxes. Each sandbox now carries its sandboxd's owner label (a
+  hash of its `--state-dir`), and only those are removed. Sandboxes from an
+  earlier build carry none: they are left alone and named in the log, with the
+  command to remove one.
 
 - **On macOS, an image without the sandbox user's home failed every run with
   "no such command".** Firecracker guests make `/sandbox/home` at boot; the

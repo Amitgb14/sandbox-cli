@@ -167,11 +167,8 @@ func startGatewayAt(t *testing.T, path string, nodes ...*testNode) *testGateway 
 
 func startGatewayAtWith(t *testing.T, path string, mod func(*Config), nodes ...*testNode) *testGateway {
 	t.Helper()
-	st, err := OpenFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := Config{Store: st, PollInterval: 100 * time.Millisecond, FailAfter: 2, Logf: t.Logf}
+	st := reopenTestStore(t, path)
+	cfg := Config{Store: st.Store, JobsDir: filepath.Join(t.TempDir(), "jobs"), PollInterval: 100 * time.Millisecond, FailAfter: 2, Logf: t.Logf}
 	svcConfig(&cfg)
 	for _, n := range nodes {
 		cfg.StaticNodes = append(cfg.StaticNodes, n.config())

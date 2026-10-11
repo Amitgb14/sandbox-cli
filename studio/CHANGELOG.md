@@ -10,6 +10,183 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Jobs and Services are searchable, filterable and paged.** Jobs has a
+  search (name, id, command, label), a State filter and a Labels filter;
+  Services a search (name, owner, image, URL), a Health filter and a Reach
+  (public or private) filter. Both sort by name and time and page 20 rows
+  at a time, and the page stays put as the list refreshes.
+- **A job is submitted with labels**, `key=value` or a bare `key` as a tag,
+  checked as they are typed; the job's page shows them. The API side is in
+  the main [CHANGELOG.md](../CHANGELOG.md).
+- **A command line using the shell runs in one.** The Jobs form and the
+  Playground split a command into words, so a loop, `;`, `&&`, a pipe or
+  `$VAR` ran its first word as a program and failed with "no such command".
+  Such a line is now sent as `sh -c '…'` (the form says so as you type);
+  plain words still run as they are.
+- **A failed run says why, plainly.** The reason a job's run failed is in a
+  red box, with what to do when the command was not found; a run that never
+  started says it has no output rather than "no output yet".
+- **The Jobs form picks an image as the create form does**, from what the
+  gateway's nodes have built and what your sandboxes run.
+- **Your policy is shown.** The create form says when a sandbox will end
+  under your policy ("ends 30 minutes after it starts"), and the Account page
+  lists the policy. A sandbox that has ended shows "ended" under Ends.
+- **Services explain themselves.** Deploy starts from a working example —
+  from a Git repository, a private one with a token from Secrets, or an image
+  with the app built in — and says what a service is and how it is reached.
+
+- **The theme switch shows the theme in force.** After a reload on the light
+  theme, the sidebar's switch still had Dark selected: the pre-rendered page
+  says dark, and the switch kept that until a choice changed it. It now
+  follows the stored theme once the page has loaded.
+
+- **The metrics dialog refreshes every 5 s**, whatever the server's sampling
+  interval, and says only that under its charts. Where the last hour is kept
+  is in docs/api/v1.md.
+- **Images.** A new screen under Sandboxes, on a plain sandboxd: the images
+  sandboxes start from, with state, size, use and when installed; Download
+  image installs one with its progress; Start opens the Playground with it;
+  Remove frees one nothing uses; a failed download says why, with Retry and
+  Clear (see [CHANGELOG.md](../CHANGELOG.md), "Images, managed ahead of use").
+- **Memory reads as a size in the metrics charts.** The memory chart's axis
+  is marked in quarters of the limit (512 MiB, 1 GiB, 1.5 GiB, 2 GiB) and its
+  tooltip says "1.1 GiB", where both showed raw MiB (2048, 1100, "1,109.8")
+  with no unit. The CPU tooltip says "%", and while a chart spans under ten
+  minutes its time marks carry seconds, since a minute's marks all read alike.
+- **Agents as rows, with their API keys.** The Agents screen is a table —
+  login, keys, the API reached — and a row opens to add, edit or remove a
+  saved key for each variable the agent reads (see
+  [CHANGELOG.md](../CHANGELOG.md), "Saved agent API keys, VM templates and
+  allowlist groups").
+- **Templates.** A new screen under Build: sizes to launch at, micro to
+  xlarge built in and your own, with a Size step in the Playground and a
+  Launch link from each.
+- **Allowlist groups and deny rules in Settings.** Hosts grouped by purpose
+  (go, npm, an internal registry), each group a card whose hosts are added and
+  removed in place, some marked default; and hosts no launch reaches, each
+  with a switch.
+- **A Network step in the Playground.** Server default, none, allowlist or
+  open as cards; an allowlist picks its groups, adds one-off hosts, can leave
+  out the built-in hosts, and shows every host it will reach.
+- **A sandbox is edited where it is shown.** Its Overview has a Name row and
+  Edit beside it, Lifecycle and Labels: a dialog for its name, labels (rows of
+  key and value; a gateway's own shown locked) and idle auto-stop. Change
+  beside Network applies none, an allowlist from the groups and hosts, or open
+  to the running sandbox, keeping an agent's API. Resize picks a template
+  and replaces the sandbox with a copy at that size, where the endpoint takes
+  disk snapshots, and says why not where it does not. See
+  [CHANGELOG.md](../CHANGELOG.md), "A live sandbox can be renamed,
+  relabelled and retimed".
+- **Terminating asks for the name.** The sandbox panel's Terminate and the
+  list's (one or a selection) open a dialog listing what goes, and Terminate
+  stays off until the sandbox's name — or "terminate N" for several — is
+  typed, in place of the browser's own confirm box.
+- **Metrics.** A sandbox's resources, in the list and its overview, open the
+  last hour of its CPU and memory as charts, with its current network and disk
+  rates, where the endpoint measures them (see
+  [CHANGELOG.md](../CHANGELOG.md), "A sandbox's CPU and memory over the last
+  hour").
+- **A snapshot's progress.** Taking a snapshot shows its three steps —
+  preparing, reading files (with a percentage where there is an estimate),
+  storing — and the time so far, in the sandbox's panel and as a short status
+  in the list's Snapshots column, in place of a button that said "Taking
+  snapshot…" for a minute and a half. It is read from the sandbox, so it is
+  still there after the panel is closed or the page reloaded (see
+  [CHANGELOG.md](../CHANGELOG.md), "A snapshot's progress").
+- **A Snapshots column, and a Snapshot button that stands out.** Where the
+  endpoint takes snapshots, the sandbox list has a column with each sandbox's
+  snapshot count, marked scheduled or manual, and "Inactive" for one with no
+  schedule and none taken. A running sandbox's Snapshot button is coloured,
+  with an icon.
+- **The Playground's agents as a table.** One row per agent, with what a
+  launch hands the sandbox for it: its login (copied in), the API keys set
+  where Studio runs (forwarded) and the API it reaches (let through); a row
+  expands to the login files, every key it reads and its status.
+
+- **A snapshot schedule from the Playground.** *Start from* has "Snapshot it
+  on a schedule": every so often, keeping the newest few, offered only within
+  the server's limits and only where the endpoint takes snapshots. The
+  summary shows it, and the code beside the form carries it
+  (`--snapshot-every 30m --snapshot-keep 3`, `snapshot_every_secs` and
+  `snapshot_keep`). Studio's launch request carries the two fields to the same
+  code the CLI's flags reach.
+
+- **Agents, one row each, with what each needs to log in.** The Playground's
+  agents are a list: each row says whether it is logged in, has an API key set
+  where Studio runs (which a launch forwards), or needs one, and opens for
+  where its login is kept between runs, the variables it reads and which are
+  set (names only, never values), and the API it always reaches.
+- **The Playground starts from the image or snapshot you choose.** A new
+  *Start from* step takes an image, from a searchable picker grouped into the
+  desktop image, those the machine has already built and those its sandboxes
+  run, or typed; or a snapshot, where the endpoint takes them.
+  Empty is the server's default, as before. The code beside the form follows:
+  `--image` or `--from-snapshot` for the CLI, `image` or `snapshot_id` for the
+  API and the SDKs. Studio's launch request carries `image` and `snapshot`,
+  one or neither; sandboxd's policy still decides whether they run.
+- **A Desktop tab.** A running sandbox's panel has a Desktop tab: in a sandbox
+  made from the desktop image it starts the desktop and shows its screen — a
+  terminal and a browser to use — scaled to fit, with Reconnect and Full
+  screen; closing it leaves the desktop running. In any other sandbox it says
+  the image has no desktop and gives the command that makes one. The screen is
+  drawn by noVNC, bundled in Studio. See the main
+  [CHANGELOG.md](../CHANGELOG.md) and [docs/desktop.md](../docs/desktop.md).
+- **Files never waits for good.** Listing a directory or opening a file
+  gives up after 20 seconds with "The sandbox did not answer" and a Retry,
+  where a read the sandbox never answered left "reading…" up for good; a file
+  the server refused to read says why instead of showing the error as its
+  contents.
+
+- **Snapshots where the backend keeps files only.** The panel's Snapshot
+  button appears where the endpoint takes either kind of snapshot, says
+  "Taking snapshot…" while a disk snapshot is made (about a minute on macOS),
+  and the Snapshots screen shows each one's kind: whole machine, or files
+  only. See the main [CHANGELOG.md](../CHANGELOG.md).
+- **Scheduled snapshots in the panel.** A sandbox's overview has a Snapshots
+  section: its schedule (every so often, the newest few kept, chosen within the
+  server's limits), set, changed or stopped there, and that sandbox's
+  snapshots, scheduled or manual, with their kind, size and age.
+
+- **The sandbox list shows live sandboxes by default**: starting, running and
+  suspended. Terminated ones are one choice away in the State filter, and a
+  list with none live says so, with a link to show them all.
+
+- **A running sandbox's dot pulses**, in the list and its panel, as Studio's
+  other live indicators do, so what is alive reads at a glance; every other
+  state's dot holds still, and so does this one under reduced motion.
+
+- **A sandbox opens beside the list.** A click on a row slides its details in
+  from the right: who it is and its actions at the top, then its overview in
+  sections (id, image, network, resources, lifecycle, labels, environment
+  names, volumes, processes) and its Terminal, Logs, Files and Events. Its up
+  and down buttons step through the list as it is filtered and sorted; *Widen* puts the
+  overview beside the tabs, and *Open as a page* is the same view at
+  `/sandbox?id=`, two panes on a wide screen. The row's terminal button opens
+  the panel with a shell already started.
+- **Terminals are kept, not multiplied.** *Terminal* goes back to the shell
+  already open and starts one only when there is none; it used to start a new
+  shell on every click. The Terminal tab lists every process with a terminal —
+  an agent's console and each shell — to attach to any of them, and *New
+  shell* starts another. An agent's sandbox opens on its console. A click on
+  such a process in the overview attaches to it instead of showing its output
+  as lines, and its Logs say why that output reads poorly. Logs drop the
+  cursor moves, erases and mode switches a terminal program writes, which
+  showed as boxes and brackets, and keep its colours.
+- **What an agent is doing, under its sandbox's state.** A running sandbox
+  with an agent says whether it is working, waiting for you, idle, done or
+  failed (the same check as `sandbox-cli agent state`; the reason on hover),
+  in the list and the panel; that replaces the Agent column. The panel shows
+  *Interactive* when a process there has a terminal, with how many, and a
+  click on it opens the Terminal tab; such a process is *Interactive* in the
+  process list rather than a spinner.
+- **The sandbox list.** Above it, how many sandboxes are running and the vCPU,
+  memory and disk given to them, against the machine's capacity where the
+  endpoint reports it (`GET /v1/node`); a gateway that does not gives totals.
+  These are allocations, not live usage, which sandboxd does not report. Each
+  row shows its state as a dot and its resources as chips; the State filter
+  takes several states at once with a count for each; columns sort and hide;
+  the list pages; and selected sandboxes are terminated together.
+
 - **Organizations on a gateway.** The top of the sidebar is an organization
   switcher: the key's own tenant and every organization you belong to, with a
   check on the current one, *Create organization* (with `org:create`; the name

@@ -22,6 +22,15 @@ export const GATEWAY_STUDIOS = [
 
 export type GatewayStudio = (typeof GATEWAY_STUDIOS)[number]["name"];
 
+/**
+ * The users of the hosted Studio global-setup.ts starts (`sandbox-cli studio
+ * host`, serving out-hosted/ from npm run build:hosted), each in a tenant of
+ * their own. gil's key is revoked by a test, so nobody else depends on it.
+ */
+export const HOSTED_PORT = 7186;
+export const HOSTED_USERS = ["hana", "ivo", "gil"] as const;
+export type HostedUser = (typeof HOSTED_USERS)[number];
+
 export interface E2EState {
   /** The Studio in front of the plain sandboxd, on 7181. */
   token: string;
@@ -29,6 +38,11 @@ export interface E2EState {
   gateway: Partial<Record<GatewayStudio, string>>;
   pids: number[];
   dir: string;
+  /** The hosted Studio's users, when out-hosted/ was built: invite link, key and key id. */
+  hosted?: Record<HostedUser, { invite: string; key: string; id: string }>;
+  /** The gateway's address and its admin key, for what a test does as the operator. */
+  gatewayURL: string;
+  adminKey: string;
 }
 
 export function e2eState(): E2EState {

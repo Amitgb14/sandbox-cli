@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -63,6 +64,10 @@ type orgRecord struct {
 	Members         []memberRecord `json:"members"`
 }
 
+// tenant is the organisation's tenant: its name lowercased, so "Acme" and
+// "acme" are one organisation, its records and router host one tenant.
+func (o orgRecord) tenant() string { return strings.ToLower(o.Name) }
+
 // memberRecord is one member: a user, named with the tenant of their keys.
 type memberRecord struct {
 	User   string    `json:"user"`
@@ -71,9 +76,10 @@ type memberRecord struct {
 	Added  time.Time `json:"added"`
 }
 
-// orgNameRE is an organisation's name: a DNS label, so it can be the
-// router's <service>--<org> host, starting with a letter.
-var orgNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,29}$`)
+// orgNameRE is an organisation's name: a DNS label once lowercased, so its
+// tenant can be the router's <service>--<org> host, starting with a letter.
+// It is kept as typed for display, and matched without regard to case.
+var orgNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]{0,29}$`)
 
 // reservedOrgNames may not be created: "default" is the default tenant on
 // the wire, and "admin" would read as the operator's.
@@ -83,13 +89,13 @@ var reservedOrgNames = []string{api.DefaultOrg, "admin"}
 func CheckOrgName(name string) error {
 	switch {
 	case !orgNameRE.MatchString(name):
-		return errors.New("an organization name is 1 to 30 lowercase letters, digits and dashes, starting with a letter")
+		return errors.New("an organization name is 1 to 30 letters, digits and dashes, starting with a letter")
 	case strings.HasSuffix(name, "-"):
 		return errors.New("an organization name may not end with a dash")
 	case strings.Contains(name, "--"):
 		// The router splits <service>--<tenant> on the first "--".
 		return errors.New(`an organization name may not contain "--"`)
-	case slices.Contains(reservedOrgNames, name):
+	case slices.Contains(reservedOrgNames, strings.ToLower(name)):
 		return fmt.Errorf("%q is reserved", name)
 	}
 	return nil
@@ -314,11 +320,20 @@ func (s *FileStore) memberRole(org, user, userTenant string) (string, bool) {
 	return "", false
 }
 
-// orgMembership is one organisation a user is in.
+// orgMembership is one organisation a user is in: Org its tenant, Name
+// its name as it was given.
 type orgMembership struct {
 	Org     string
+	Name    string
 	Role    string
 	Created time.Time
+}
+
+func (m orgMembership) display() string {
+	if m.Name != "" {
+		return m.Name
+	}
+	return m.Org
 }
 
 // MembershipsOf lists the organisations user (of userTenant) is in, by name.
@@ -408,6 +423,7 @@ func (s *FileStore) RemoveMember(org, user, userTenant string) error {
 // every handler will act in. It answers the request itself, and returns
 // false, when the header names nothing the key may select.
 func (g *Gateway) selectOrg(w http.ResponseWriter, r *http.Request, p Principal) (Principal, bool) {
+	ctx := r.Context()
 	vals := r.Header.Values(api.OrgHeader)
 	if len(vals) == 0 {
 		return p, true
@@ -430,16 +446,28 @@ func (g *Gateway) selectOrg(w http.ResponseWriter, r *http.Request, p Principal)
 	if p.Can(ScopeAdmin) {
 		// An admin acts on every sandbox already; it may act in any
 		// organisation that exists, or the default tenant.
-		_, exists := g.store.Org(t)
+		_, exists, err := g.store.Org(ctx, t)
+		if err != nil {
+			g.writeStoreErr(w, err)
+			return Principal{}, false
+		}
 		allowed = t == "" || exists
 	} else {
-		_, allowed = g.store.MemberRole(t, p.User, p.KeyTenant)
+		var err error
+		if _, allowed, err = g.store.MemberRole(ctx, t, p.User, p.KeyTenant); err != nil {
+			g.writeStoreErr(w, err)
+			return Principal{}, false
+		}
 	}
 	if !allowed {
 		// The same answer for an organisation that does not exist and one
 		// the key's user is not in.
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such organization")
 		return Principal{}, false
+	}
+	// An organisation's tenant is its name lowercased: "Acme" selects acme.
+	if t != "" {
+		t = strings.ToLower(t)
 	}
 	p.Tenant = t
 	return p, true
@@ -449,43 +477,56 @@ func (g *Gateway) selectOrg(w http.ResponseWriter, r *http.Request, p Principal)
 // still act in its tenant: k is the principal's key as the store holds it
 // now. The key's own tenant always passes; another needs the membership, or
 // an admin key.
-func stillInTenant(st Store, p Principal, k Key) bool {
+func stillInTenant(ctx context.Context, st Store, p Principal, k Key) (bool, error) {
 	if p.Tenant == k.Tenant {
-		return true
+		return true, nil
 	}
 	if (Principal{Scopes: k.Scopes}).Can(ScopeAdmin) {
-		return true
+		return true, nil
 	}
-	_, ok := st.MemberRole(p.Tenant, k.User, k.Tenant)
-	return ok
+	_, ok, err := st.MemberRole(ctx, p.Tenant, k.User, k.Tenant)
+	return ok, err
 }
 
 // --- handlers -------------------------------------------------------------------
 
 func (g *Gateway) listOrgs(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	out := api.OrgList{Orgs: []api.Org{}}
 	seen := map[string]bool{}
 	own := api.Org{Name: wireOrg(p.KeyTenant), Role: api.RoleMember, Current: p.Tenant == p.KeyTenant}
-	if rec, ok := g.store.Org(p.KeyTenant); ok {
+	if rec, ok, err := g.store.Org(ctx, p.KeyTenant); err != nil {
+		g.writeStoreErr(w, err)
+		return
+	} else if ok {
 		own.Created = rec.Created
+		own.Name = rec.Name
 	}
-	if role, ok := g.store.MemberRole(p.KeyTenant, p.User, p.KeyTenant); ok {
+	if role, ok, err := g.store.MemberRole(ctx, p.KeyTenant, p.User, p.KeyTenant); err != nil {
+		g.writeStoreErr(w, err)
+		return
+	} else if ok {
 		own.Role = role
 	}
 	out.Orgs = append(out.Orgs, own)
-	seen[p.KeyTenant] = true
-	for _, m := range g.store.MembershipsOf(p.User, p.KeyTenant) {
+	seen[strings.ToLower(p.KeyTenant)] = true
+	ms, err := g.store.MembershipsOf(ctx, p.User, p.KeyTenant)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
+	for _, m := range ms {
 		if seen[m.Org] {
 			continue
 		}
 		seen[m.Org] = true
-		out.Orgs = append(out.Orgs, api.Org{Name: m.Org, Role: m.Role, Created: m.Created, Current: p.Tenant == m.Org})
+		out.Orgs = append(out.Orgs, api.Org{Name: m.display(), Role: m.Role, Created: m.Created, Current: p.Tenant == m.Org})
 	}
 	if !seen[p.Tenant] {
 		// An admin's key selecting an organisation it is not in.
 		o := api.Org{Name: wireOrg(p.Tenant), Role: api.RoleMember, Current: true}
-		if rec, ok := g.store.Org(p.Tenant); ok {
-			o.Created = rec.Created
+		if rec, ok, _ := g.store.Org(ctx, p.Tenant); ok {
+			o.Created, o.Name = rec.Created, rec.Name
 		}
 		out.Orgs = append(out.Orgs, o)
 	}
@@ -493,6 +534,7 @@ func (g *Gateway) listOrgs(w http.ResponseWriter, r *http.Request, p Principal) 
 }
 
 func (g *Gateway) createOrg(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeOrgCreate) {
 		return
 	}
@@ -504,7 +546,7 @@ func (g *Gateway) createOrg(w http.ResponseWriter, r *http.Request, p Principal)
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 		return
 	}
-	rec, err := g.store.CreateOrg(req.Name, p.User, p.KeyTenant, g.cfg.MaxOrgsPerUser)
+	rec, err := g.store.CreateOrg(ctx, req.Name, p.User, p.KeyTenant, g.cfg.MaxOrgsPerUser)
 	switch {
 	case errors.Is(err, ErrOrgExists):
 		writeErr(w, http.StatusConflict, api.CodeConflict, "the name "+req.Name+" is taken")
@@ -528,8 +570,13 @@ func (g *Gateway) createOrg(w http.ResponseWriter, r *http.Request, p Principal)
 // owner, or an admin). Someone who is not a member gets the 404 of an
 // organisation that does not exist; a member who is not an owner a 403.
 func (g *Gateway) orgFor(w http.ResponseWriter, r *http.Request, p Principal, manage bool) (orgRecord, bool) {
+	ctx := r.Context()
 	name := r.PathValue("name")
-	rec, ok := g.store.Org(tenantOfOrg(name))
+	rec, ok, err := g.store.Org(ctx, tenantOfOrg(name))
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return orgRecord{}, false
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such organization")
 		return orgRecord{}, false
@@ -537,8 +584,12 @@ func (g *Gateway) orgFor(w http.ResponseWriter, r *http.Request, p Principal, ma
 	if p.Can(ScopeAdmin) {
 		return rec, true
 	}
-	role, member := g.store.MemberRole(rec.Name, p.User, p.KeyTenant)
-	if !member && p.KeyTenant == rec.Name {
+	role, member, err := g.store.MemberRole(ctx, rec.tenant(), p.User, p.KeyTenant)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return orgRecord{}, false
+	}
+	if !member && strings.EqualFold(p.KeyTenant, rec.Name) {
 		// A key issued into the organisation's tenant is in it.
 		role, member = api.RoleMember, true
 	}
@@ -588,6 +639,7 @@ func (g *Gateway) listOrgMembers(w http.ResponseWriter, r *http.Request, p Princ
 }
 
 func (g *Gateway) setOrgMember(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	rec, ok := g.orgFor(w, r, p, true)
 	if !ok {
 		return
@@ -612,7 +664,7 @@ func (g *Gateway) setOrgMember(w http.ResponseWriter, r *http.Request, p Princip
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "role: owner or member")
 		return
 	}
-	prev, err := g.store.SetMember(rec.Name, req.User, tenant, role)
+	prev, err := g.store.SetMember(ctx, rec.tenant(), req.User, tenant, role)
 	switch {
 	case errors.Is(err, ErrLastOwner), errors.Is(err, ErrMemberName):
 		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
@@ -625,7 +677,7 @@ func (g *Gateway) setOrgMember(w http.ResponseWriter, r *http.Request, p Princip
 		return
 	}
 	m := api.OrgMember{User: req.User, Tenant: tenant, Role: role}
-	if cur, ok := g.store.Org(rec.Name); ok {
+	if cur, ok, _ := g.store.Org(ctx, rec.tenant()); ok {
 		for _, mr := range cur.Members {
 			if mr.User == req.User && mr.Tenant == tenant {
 				m = memberInfo(mr)
@@ -641,7 +693,7 @@ func (g *Gateway) setOrgMember(w http.ResponseWriter, r *http.Request, p Princip
 		action, status = "org.member_role", http.StatusOK
 	}
 	g.logf("organization %s: %s %s as %s by key %s", rec.Name, action, memberTarget(req.User, tenant), role, p.KeyID)
-	g.audit.write(api.AuditEntry{Kind: "org", Action: action, KeyID: p.KeyID, User: p.User, Tenant: rec.Name,
+	g.audit.write(api.AuditEntry{Kind: "org", Action: action, KeyID: p.KeyID, User: p.User, Tenant: rec.tenant(),
 		Remote: remoteIP(r.RemoteAddr), Target: memberTarget(req.User, tenant), Result: role})
 	if prev != "" {
 		// A role is not access, but what holds a member's access is
@@ -652,6 +704,7 @@ func (g *Gateway) setOrgMember(w http.ResponseWriter, r *http.Request, p Princip
 }
 
 func (g *Gateway) removeOrgMember(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	rec, ok := g.orgFor(w, r, p, true)
 	if !ok {
 		return
@@ -664,7 +717,7 @@ func (g *Gateway) removeOrgMember(w http.ResponseWriter, r *http.Request, p Prin
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such member")
 		return
 	}
-	err := g.store.RemoveMember(rec.Name, user, tenant)
+	err := g.store.RemoveMember(ctx, rec.tenant(), user, tenant)
 	switch {
 	case errors.Is(err, ErrLastOwner):
 		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
@@ -677,7 +730,7 @@ func (g *Gateway) removeOrgMember(w http.ResponseWriter, r *http.Request, p Prin
 		return
 	}
 	g.logf("organization %s: %s removed by key %s", rec.Name, memberTarget(user, tenant), p.KeyID)
-	g.audit.write(api.AuditEntry{Kind: "org", Action: "org.member_removed", KeyID: p.KeyID, User: p.User, Tenant: rec.Name,
+	g.audit.write(api.AuditEntry{Kind: "org", Action: "org.member_removed", KeyID: p.KeyID, User: p.User, Tenant: rec.tenant(),
 		Remote: remoteIP(r.RemoteAddr), Target: memberTarget(user, tenant), Result: "ok"})
 	// Before the answer: what the member had open in the organisation ends
 	// now, not at the next recheck.
@@ -686,11 +739,17 @@ func (g *Gateway) removeOrgMember(w http.ResponseWriter, r *http.Request, p Prin
 }
 
 func (g *Gateway) adminListOrgs(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeAdmin) {
 		return
 	}
 	out := api.AdminOrgList{Orgs: []api.AdminOrg{}}
-	for _, o := range g.store.Orgs() {
+	orgs, err := g.store.Orgs(ctx)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
+	for _, o := range orgs {
 		out.Orgs = append(out.Orgs, api.AdminOrg{Name: o.Name, Created: o.Created, CreatedBy: o.CreatedBy,
 			CreatedByTenant: o.CreatedByTenant, Members: len(o.Members), Owners: owners(o.Members)})
 	}

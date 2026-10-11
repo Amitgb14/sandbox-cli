@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 
 const { token } = JSON.parse(readFileSync(join(__dirname, ".state.json"), "utf8")) as { token: string };
-const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/volumes/", "/settings/"];
+const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/templates/", "/volumes/", "/images/", "/settings/"];
 
 test("every screen renders with no console errors", async ({ page }) => {
   const errors: string[] = [];
@@ -41,19 +41,211 @@ test("a sandbox started elsewhere is listed, labelled, and has events", async ({
   await expect(page.getByText("e2e · fake")).toBeVisible();
   await page.goto("/sandboxes/");
   await expect(page.getByText("suite=studio-e2e")).toBeVisible();
-  await page.getByRole("link", { name: created.id }).click();
-  await expect(page.getByRole("heading", { name: created.id })).toBeVisible();
+  // A click on the row opens it in a panel beside the list.
+  await page.getByRole("row").filter({ hasText: created.id }).getByText(created.id).click();
+  const panel = page.getByRole("dialog");
+  await expect(panel.getByRole("heading", { name: created.id })).toBeVisible();
   // A running sandbox can be connected to from here, as from sandbox-cli shell.
-  await expect(page.getByRole("button", { name: "Terminal" })).toBeVisible();
-  await page.getByRole("tab", { name: "Overview" }).click();
-  await expect(page.getByText("echo hi")).toBeVisible();
-  await page.getByRole("tab", { name: "Logs" }).click();
-  await expect(page.getByText("hi", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Events" }).click();
-  await expect(page.getByText("process.exited")).toBeVisible();
-  page.once("dialog", (d) => d.accept());
+  await expect(panel.getByRole("button", { name: "Terminal", exact: true })).toBeVisible();
+  await panel.getByRole("tab", { name: "Overview" }).click();
+  await expect(panel.getByText("echo hi")).toBeVisible();
+  // The fake backend takes no snapshots, and the overview says so rather than offering a schedule.
+  await expect(panel.getByText("This endpoint takes no snapshots.")).toBeVisible();
+  await panel.getByRole("tab", { name: "Logs" }).click();
+  await expect(panel.getByText("hi", { exact: true })).toBeVisible();
+  await panel.getByRole("tab", { name: "Events" }).click();
+  await expect(panel.getByText("process.exited")).toBeVisible();
+
+  // The same details, as a page of their own.
+  await panel.getByRole("link", { name: "Open as a page" }).click();
+  await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+  await expect(page.getByRole("heading", { level: 1, name: created.id })).toBeVisible();
+  // Wide, the overview is beside the tabs rather than one of them.
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveCount(0);
+  await expect(page.getByText("echo hi").first()).toBeVisible();
+  // Terminating asks for the sandbox's name (its id, with none), not a click.
   await page.getByRole("button", { name: "Terminate" }).click();
+  const confirmTerminate = page.getByRole("dialog", { name: "Terminate sandbox" });
+  await expect(confirmTerminate.getByRole("list", { name: "Sandboxes to terminate" })).toContainText(created.id);
+  const go = confirmTerminate.getByRole("button", { name: "Terminate sandbox" });
+  await expect(go).toBeDisabled();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill("not-it");
+  await expect(go).toBeDisabled();
+  await confirmTerminate.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmTerminate).toHaveCount(0);
+  expect((await (await request.fetch(`/api/v1/sandboxes/${created.id}`, { headers: { Authorization: `Bearer ${token}` } })).json()).state).not.toBe("terminated");
+  await page.getByRole("button", { name: "Terminate" }).click();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill(created.id);
+  await confirmTerminate.getByRole("button", { name: "Terminate sandbox" }).click();
   await expect(page).toHaveURL(/\/sandboxes\//);
+});
+
+test("the list sums what sandboxes were given, walks them in its panel, and terminates a selection", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  const a = await (await api("/v1/sandboxes", "POST", { name: "walk-a", cpus: 2, memory_mb: 2048 })).json();
+  const b = await (await api("/v1/sandboxes", "POST", { name: "walk-b" })).json();
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  // Allocations from the node, against its capacity.
+  await expect(page.getByRole("meter", { name: "vCPU given" })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "walk-a" }).getByText("2 vCPU")).toBeVisible();
+  // What it was given opens what it uses: the last hour, sampled on the host.
+  await page.getByRole("button", { name: "Metrics of walk-a" }).click();
+  const metrics = page.getByRole("dialog");
+  await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
+  // Its charts, or, before the first sample is taken (every 5 s), how often one is.
+  await expect(metrics.getByText(/^(CPU, % of 2 vCPU|No samples yet: one is taken every 5 seconds)/)).toBeVisible();
+  // It stays open while the list polls (every 5 s) under it.
+  await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
+  await page.waitForResponse((r) => r.url().endsWith("/v1/sandboxes") && r.request().method() === "GET");
+  await expect(metrics.getByRole("heading", { name: "Metrics of walk-a" })).toBeVisible();
+  // Once there are samples, memory reads as sizes — "1 GiB", not 1,024.
+  if (await metrics.getByText(/^Memory, of /).count()) {
+    const ticks = metrics.locator("svg text");
+    await expect(ticks.filter({ hasText: /^\d+(\.\d)? (MiB|GiB)$/ }).first()).toBeVisible();
+    expect(await ticks.allTextContents()).not.toContainEqual(expect.stringMatching(/^\d{4}$/));
+  }
+  // A click inside it stays there, and does not open the row's panel too.
+  await metrics.getByText("The last hour", { exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(metrics).toHaveCount(0);
+
+  await page.getByPlaceholder(/Search/).fill("walk-");
+  await page.getByRole("row").filter({ hasText: "walk-b" }).getByText("walk-b").click();
+  const panel = page.getByRole("dialog");
+  await expect(panel.getByRole("heading", { name: "walk-b" })).toBeVisible();
+  // Newest first: walk-b, then walk-a.
+  await panel.getByRole("button", { name: "Next sandbox" }).click();
+  await expect(panel.getByRole("heading", { name: "walk-a" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Next sandbox" })).toBeDisabled();
+  await panel.getByRole("button", { name: "Close" }).click();
+  await expect(panel).toHaveCount(0);
+
+  await page.getByRole("checkbox", { name: "Select all on this page" }).click();
+  await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Terminate 2" }).click();
+  const confirmTerminate = page.getByRole("dialog", { name: "Terminate 2 sandboxes" });
+  await expect(confirmTerminate.getByText("walk-a")).toBeVisible();
+  await expect(confirmTerminate.getByText("walk-b")).toBeVisible();
+  await confirmTerminate.getByRole("textbox", { name: "Type to confirm" }).fill("terminate 2");
+  await confirmTerminate.getByRole("button", { name: "Terminate 2" }).click();
+  await expect(page.getByText("Terminated 2")).toBeVisible();
+  for (const s of [a, b]) {
+    expect((await (await api(`/v1/sandboxes/${s.id}`)).json()).state).toBe("terminated");
+  }
+});
+
+test("the Playground starts a sandbox from the image chosen, and says so in its code", async ({ page, request }) => {
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/launch/");
+  await page.getByText("Command", { exact: true }).first().click();
+  await page.getByRole("textbox", { name: "Command" }).fill("echo from-an-image");
+  // The fake backend takes no snapshots, so that choice is offered but off,
+  // and so is a schedule.
+  await expect(page.getByText("(this endpoint takes none)")).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Snapshot on a schedule" })).toBeDisabled();
+  await expect(page.getByText("(this endpoint takes no snapshots)")).toBeVisible();
+  await page.getByRole("combobox", { name: "Image" }).click();
+  await page.getByPlaceholder("Search, or type any image…").fill("e2e-image:1");
+  await page.getByRole("option", { name: /Use e2e-image:1/ }).click();
+  await expect(page.getByRole("combobox", { name: "Image" })).toContainText("e2e-image:1");
+  const code = page.locator("pre").last();
+  await expect(code).toContainText("sandbox-cli run --image e2e-image:1 -- echo from-an-image");
+  await page.getByRole("tab", { name: "curl" }).click();
+  await expect(code).toContainText('"image":"e2e-image:1"');
+  await page.locator("form").getByRole("button", { name: "Launch" }).click();
+  await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+  const id = new URL(page.url()).searchParams.get("id");
+  const sb = await (await request.fetch(`/api/v1/sandboxes/${id}`, { headers: { Authorization: `Bearer ${token}` } })).json();
+  expect(sb.image).toBe("e2e-image:1");
+});
+
+test("the Playground lists agents with what each needs to log in", async ({ page }) => {
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/launch/");
+  const agents = page.getByRole("radiogroup", { name: "Agent" });
+  await agents.getByRole("radio", { name: /codex/ }).click();
+  await expect(agents.getByRole("radio", { name: /codex/ })).toHaveAttribute("aria-checked", "true");
+  await expect(page.locator("pre").last()).toContainText("sandbox-cli agent codex");
+  // Opened, a row says where the login is kept, which keys it takes, and what it reaches.
+  await page.getByRole("button", { name: "Show claude's login details" }).click();
+  await expect(agents.getByText("~/.claude/.credentials.json")).toBeVisible();
+  await expect(agents.getByText("ANTHROPIC_API_KEY")).toBeVisible();
+  await expect(agents.getByText("api.anthropic.com").first()).toBeVisible();
+});
+
+test("the Desktop tab explains a sandbox whose image has no desktop", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  // The fake backend runs builtins only, so sandbox-desktop is "no such command" there,
+  // as it is in any image but the desktop one.
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "no-desktop" })).json();
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  await page.getByRole("row").filter({ hasText: "no-desktop" }).getByText("no-desktop").click();
+  const panel = page.getByRole("dialog");
+  await panel.getByRole("tab", { name: "Desktop" }).click();
+  await expect(panel.getByText("No desktop is running in this sandbox.", { exact: false })).toBeVisible();
+  await panel.getByRole("button", { name: "Start desktop" }).click();
+  await expect(panel.getByText("image has no desktop", { exact: false })).toBeVisible();
+  await expect(panel.locator("pre").last()).toContainText("--image");
+  await expect(panel.locator("pre").last()).toContainText("sandbox-desktop");
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
+});
+
+test("a snapshot being taken shows how far it has got, in the panel and the list", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "snapping" })).json();
+  // The fake takes no snapshots and would take one at once if it did, so the
+  // endpoint is said to take them and the sandbox to be half way through one.
+  const progress = { started_at: new Date().toISOString(), phase: "capture", bytes: 2 ** 30, estimated_bytes: 2 * 2 ** 30 };
+  await page.route("**/api/info", async (route) => {
+    const res = await route.fetch();
+    const info = await res.json();
+    info.capabilities.capabilities.disk_snapshot = true;
+    await route.fulfill({ response: res, json: info });
+  });
+  const withProgress = (s: { id: string }) => (s.id === sb.id ? { ...s, snapshotting: progress } : s);
+  await page.route(`**/api/v1/sandboxes/${sb.id}`, async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: withProgress(await res.json()) });
+  });
+  await page.route("**/api/v1/sandboxes", async (route) => {
+    const res = await route.fetch();
+    if (route.request().method() !== "GET") return route.fulfill({ response: res });
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, sandboxes: body.sandboxes.map(withProgress) } });
+  });
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  const row = page.getByRole("row").filter({ hasText: "snapping" });
+  await expect(row.getByText("reading 50%")).toBeVisible();
+  await row.getByText("snapping").click();
+  const panel = page.getByRole("dialog");
+  // Three steps: preparing done, reading half way, storing to come.
+  await expect(panel.getByRole("progressbar", { name: "Reading files" })).toHaveAttribute("aria-valuenow", "50");
+  await expect(panel.getByText("1.0 GiB of about 2.0 GiB")).toBeVisible();
+  // One at a time: there is no Snapshot button while one is taken.
+  await expect(panel.getByRole("button", { name: "Snapshot", exact: true })).toHaveCount(0);
+
+  // Storing says nothing as it goes, so it has no percentage.
+  progress.phase = "store";
+  const storing = panel.getByRole("progressbar", { name: "Storing" });
+  await expect(storing).toBeVisible({ timeout: 8000 });
+  await expect(storing).not.toHaveAttribute("aria-valuenow", /./);
+  await panel.getByRole("button", { name: "Close" }).click();
+  await expect(row.getByText("storing")).toBeVisible({ timeout: 8000 });
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
 });
 
 test("Agents lists only the verified agents, and Launch starts a sandbox", async ({ page }) => {
@@ -109,9 +301,44 @@ test("the Playground writes the same sandbox as code, and the list filters by st
   await api(`/v1/sandboxes/${gone.id}`, "DELETE");
   await page.goto("/sandboxes/");
   await page.getByPlaceholder(/Search/).fill("filter-");
-  await page.getByRole("combobox", { name: "State" }).click();
-  await page.getByRole("option", { name: "Running" }).click();
+  // Live sandboxes only, until asked for the rest.
   await expect(page.getByText("filter-keep")).toBeVisible();
   await expect(page.getByText("filter-gone")).toHaveCount(0);
+  await page.getByRole("button", { name: /^State/ }).click();
+  await page.getByRole("option", { name: /Terminated/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("filter-gone")).toBeVisible();
   await api(`/v1/sandboxes/${keep.id}`, "DELETE");
+});
+
+test("the theme switch shows the theme in force after a reload", async ({ page }) => {
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  const theme = page.getByRole("radiogroup", { name: "Theme" });
+  await theme.getByRole("radio", { name: "Light" }).click();
+  await expect(page.locator("html")).toHaveClass(/light/);
+  // A fresh load hydrates the pre-rendered switch, which cannot know the
+  // stored choice; it used to keep showing Dark on a light page.
+  await page.goto("/sandboxes/");
+  await expect(page.locator("html")).toHaveClass(/light/);
+  await expect(theme.getByRole("radio", { name: "Light" })).toHaveAttribute("aria-checked", "true");
+  await expect(theme.getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "false");
+  await theme.getByRole("radio", { name: "Dark" }).click();
+  await expect(theme.getByRole("radio", { name: "Dark" })).toHaveAttribute("aria-checked", "true");
+});
+
+test("a sandbox with a lifetime says when it ends", async ({ page, request }) => {
+  const created = await (
+    await request.fetch("/api/v1/sandboxes", {
+      method: "POST",
+      data: { name: "short-lived", lifetime_secs: 1800 },
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json();
+  expect(created.expires_at).toBeTruthy();
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto(`/sandbox/?id=${created.id}`);
+  await expect(page.getByText("Ends", { exact: true })).toBeVisible();
+  await expect(page.getByText(/^in 29m \d+s$|^in 30m 0s$/)).toBeVisible();
 });

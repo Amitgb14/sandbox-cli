@@ -18,10 +18,11 @@ import { SetupGuide } from "@/components/setup-guide";
 import { InstallCard } from "@/components/install-card";
 import { UninstallSteps } from "@/components/uninstall-steps";
 import { CodeBlock } from "@/components/code-block";
+import { StudioShot } from "@/components/studio-shot";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { AGENTS } from "@/lib/agents";
-import { DOC_URL, REPO_URL, SETUP_PATH } from "@/lib/site";
+import { DOC_URL, RELEASED, REPO_URL, SETUP_PATH, STUDIO_PATH, docPath } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 const EXPOSED = [
@@ -70,6 +71,13 @@ const PARALLEL = `sandbox-cli agent claude --fallback codex -p "fix the flaky te
 sandbox-cli agent claude --detach -p "clone github.com/you/app and fix issue 12"
 sandbox-cli agent codex --detach -- exec "clone github.com/you/app and fix issue 31"
 sandbox-cli agent state                    # what each one is doing`;
+
+/** The Studio screens the home page shows beside Sandboxes; /studio has them all. */
+const HOME_SHOTS = [
+  { name: "sandbox", title: "One sandbox", caption: "Its details beside a terminal, its output from the first byte, its files and events." },
+  { name: "playground", title: "Playground", caption: "A command or an agent, with the same run as CLI, curl, Python and TypeScript." },
+  { name: "images", title: "Images", caption: "What sandboxes start from, installed ahead of the first one." },
+];
 
 export default function Home() {
   return (
@@ -157,14 +165,9 @@ export default function Home() {
               <>
                 Make a sandbox, run something, read what it printed, throw it away. The CLI, curl, and
                 the Python and TypeScript SDKs do it with the same calls — documented in{" "}
-                <a
-                  href={DOC_URL.api}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline underline-offset-4"
-                >
-                  docs/api/v1.md
-                </a>
+                <Link href={docPath("api")} className="underline underline-offset-4">
+                  the API reference
+                </Link>
                 , with files, background processes, a real terminal over attach, tunnels, snapshots,
                 volumes and an event log on top.
               </>
@@ -232,7 +235,7 @@ export default function Home() {
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
                   sandbox-cli agent claude --dangerously-skip-permissions
                 </code>{" "}
-                is <code className="font-mono text-[0.85em]">run</code> with an agent&apos;s
+                is <code className="font-mono text-[0.85em]">run</code>{" "}with an agent&apos;s
                 conveniences on top: its login copied in and back out, its own environment
                 variables forwarded when set, and everything after the sandbox flags handed to the
                 agent untouched. None of it is required to use a sandbox.
@@ -253,8 +256,48 @@ export default function Home() {
           </div>
         </Section>
 
+        {/* --------------------------------------------------------- studio */}
+        <Section id="studio">
+          <SectionHead
+            eyebrow="studio"
+            title="The same sandboxes, in a browser"
+            lead={
+              <>
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">sandbox-cli studio</code>{" "}
+                serves it on a loopback port, for whichever sandboxd your context points at: every sandbox,
+                wherever it was started, with a terminal, its output, files and events; a Playground that launches
+                a command or an agent and shows the same run as code; images, templates and snapshots. Taken from a
+                real sandboxd.
+              </>
+            }
+          />
+          <figure className="flex flex-col gap-3">
+            <StudioShot name="sandboxes" title="Sandboxes" />
+            <figcaption className="text-sm leading-relaxed text-muted-foreground">
+              <span className="font-medium text-foreground">Sandboxes.</span> Every sandbox on the server, with what
+              it was given and what the machine has left.
+            </figcaption>
+          </figure>
+          <div className="mt-8 grid grid-cols-1 gap-x-6 gap-y-8 md:grid-cols-3">
+            {HOME_SHOTS.map((s) => (
+              <figure key={s.name} className="flex flex-col gap-3">
+                <StudioShot name={s.name} title={s.title} />
+                <figcaption className="text-sm leading-relaxed text-muted-foreground">
+                  <span className="font-medium text-foreground">{s.title}.</span> {s.caption}
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+          <Link
+            href={STUDIO_PATH}
+            className="mt-8 inline-flex items-center gap-1.5 text-sm font-medium underline-offset-4 hover:underline"
+          >
+            Every screen, and who may use it →
+          </Link>
+        </Section>
+
         {/* -------------------------------------------------------- compare */}
-        <Section id="compare">
+        <Section id="compare" tinted>
           <SectionHead
             eyebrow="the alternatives, honestly"
             title="Where this sits, including where it loses"
@@ -273,7 +316,7 @@ export default function Home() {
         </Section>
 
         {/* ---------------------------------------------------------- setup */}
-        <Section id="setup" tinted>
+        <Section id="setup">
           <SectionHead
             className="mb-6"
             eyebrow="setup"
@@ -290,14 +333,18 @@ export default function Home() {
         </Section>
 
         {/* -------------------------------------------------------- install */}
-        <Section id="install">
+        <Section id="install" tinted>
           <div className="grid grid-cols-1 items-start gap-10 lg:grid-cols-[1fr_minmax(0,30rem)]">
             <div>
               <SectionHead
                 className="mb-6"
                 eyebrow="get started"
-                title="One script: client, server, guest agent."
-                lead="On Linux and Apple-silicon Macs it installs all three; elsewhere, the client, which talks to a sandboxd somewhere else. Go 1.25+ only if you build from source."
+                title={RELEASED ? "One script: client, server, guest agent." : "One build: client, server, guest agent."}
+                lead={
+                  RELEASED
+                    ? "On Linux and Apple-silicon Macs it installs all three; elsewhere, the client, which talks to a sandboxd somewhere else. Go 1.25+ only if you build from source."
+                    : "The first microVM release is not out yet, so for now you build from a checkout: Go 1.25+, and Node 20+ for Studio's UI. On Linux and Apple-silicon Macs, install all three; elsewhere, the client, which talks to a sandboxd somewhere else."
+                }
               />
               <div className="flex flex-wrap items-center gap-2.5">
                 <a
@@ -325,7 +372,7 @@ export default function Home() {
               <p className="mt-6 max-w-xl text-sm leading-relaxed text-muted-foreground">
                 Uninstalling is cautious: <code className="font-mono text-[0.9em]">--uninstall</code>{" "}
                 removes the binaries and <em>reports</em> what else is on disk —{" "}
-                <code className="font-mono text-[0.9em]">~/.config/sandbox</code> holds your agent
+                <code className="font-mono text-[0.9em]">~/.config/sandbox</code>{" "}holds your agent
                 logins, and sandboxd&apos;s state directory your volumes. Add{" "}
                 <code className="font-mono text-[0.9em]">--purge</code> when you mean it.
               </p>

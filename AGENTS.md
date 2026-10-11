@@ -52,6 +52,7 @@ go vet ./...
 go test ./...               # unit tests; no VM, no daemon
 go test -race ./...
 make e2e                    # the real binaries: two fake-backend nodes, a gateway, sandbox-cli and ssh
+make docs-cli               # regenerate docs/cli.md after changing a command, a flag or its help
 go test ./internal/policy -run TestProjectConfigRefusesPrivilegedKeys   # one test
 go build -o bin/sandboxd ./cmd/sandboxd
 
@@ -66,9 +67,11 @@ gofmt -w cmd internal
 ```
 
 Go 1.25+. Dependencies are the standard library, `cobra` and `yaml.v3` — nothing
-else without a decision recorded in the plan. The one recorded exception:
-`golang.org/x/crypto/ssh`, for `sandbox-gateway`'s SSH server only (plan, open
-question 2).
+else without a decision recorded in the plan. The recorded exceptions, all for
+`sandbox-gateway` only (`internal/gateway`, `cmd/sandbox-gateway`; plan, open
+question 2): `golang.org/x/crypto/ssh` for its SSH server, and
+`github.com/jackc/pgx/v5` and `modernc.org/sqlite` for its database. Neither the
+CLI nor `sandboxd` may import `internal/gateway` (tests may).
 
 ## Layout
 
@@ -76,7 +79,7 @@ question 2).
 cmd/sandbox-cli         client
 cmd/sandboxd            the API server
 cmd/sandbox-guestd      the guest agent: PID 1 of a Firecracker guest, and the only thing the host talks to
-cmd/sandbox-gateway     one API endpoint in front of many sandboxd nodes: users' keys, ownership, scheduling, SSH (docs/fleet.md)
+cmd/sandbox-gateway     one API endpoint in front of many sandboxd nodes: users' keys, ownership, scheduling, SSH (docs/fleet.md and the pages it links)
 images/base/            the base image's Dockerfile (built in CI only)
 internal/
   api/          v1 wire types and client; api/conformance is the suite every endpoint must pass
@@ -95,12 +98,14 @@ internal/
   guestproto/   host <-> guest agent protocol; the host treats the guest as hostile
   vsock/        guest vsock listener, host dial through the VMM's bridge
   image/        OCI pull, safe unpack (paths resolved inside the root), ext4 root disks
-  gateway/      sandbox-gateway: key store, ownership router, scheduler, node pool, SSH server; the only package that may use x/crypto/ssh
+  gateway/      sandbox-gateway: its store (SQLite or PostgreSQL, sql_*.go and migrations/), ownership router, scheduler, node pool, SSH server; the only package that may use x/crypto/ssh, pgx or sqlite
 packaging/systemd/      sandboxd and sandbox-gateway units, an example operator policy (docs/self-hosting.md)
 packaging/fleet/        certificates for a gateway and its nodes, an example node file (docs/fleet.md)
 packaging/launchd/      the macOS launch agent (docs/local-macos.md)
 test/e2e/               the real binaries end to end (build tag e2e; make e2e)
 sdk/                    Python (tested: make test-sdk) and TypeScript clients
+docs/                   user documentation, one page per component (index: docs/README.md); web/ renders it at /docs.
+                        docs/cli.md is generated from the command tree (make docs-cli; a test fails when it is stale)
   agenthome/  agent logins and the tools volume, copied in and out of the sandbox user's home
   state/ cli/ version/
 ```
@@ -190,6 +195,7 @@ support can read them as plain instructions.
 - [ ] `gofmt -l cmd internal` prints nothing; `go vet ./...` is clean
 - [ ] `go test -race -count=1 ./...` passes
 - [ ] Help text, CLI usage and web docs updated for user-visible changes
+      (`make docs-cli` regenerates docs/cli.md; the site renders docs/)
 - [ ] Summary says what was tested, what wasn't, and any skipped bug tests
 - [ ] A change Studio shows (the API, a CLI behaviour it reuses) has its screen
       updated, and `cd studio && npm run typecheck && npm run lint && npm run

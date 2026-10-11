@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -129,24 +130,76 @@ func usernameForLog(u string) string {
 // In an organisation (orgs.go) the user's keys are in their own tenant, and
 // what counts is a key there while the user is still a member: removing a
 // member stops their work in the organisation as revoking their keys would.
-func userActive(st Store, user, tenant string) bool {
-	for _, k := range st.Keys() {
-		if k.User == user && !k.Revoked && keyActsIn(st, k, tenant) {
-			return true
+func userActive(ctx context.Context, st Store, user, tenant string) (bool, error) {
+	keys, err := st.KeysOfUser(ctx, user)
+	if err != nil {
+		return false, err
+	}
+	for _, k := range keys {
+		if !k.Active(time.Now()) {
+			continue
+		}
+		if ok, err := keyActsIn(ctx, st, k, tenant); err != nil || ok {
+			return ok, err
 		}
 	}
-	return false
+	return false, nil
+}
+
+// activeCache holds userActive's answers for a few seconds, for the paths
+// that ask on every request (a public service's routing). accessChanged
+// clears it, so a revocation on this gateway holds at once; one made on
+// another gateway sharing the database holds within activeFor.
+type activeCache struct {
+	mu sync.Mutex
+	m  map[[2]string]activeEntry
+}
+
+type activeEntry struct {
+	ok bool
+	at time.Time
+}
+
+const activeFor = 5 * time.Second
+
+func (c *activeCache) clear() {
+	c.mu.Lock()
+	c.m = nil
+	c.mu.Unlock()
+}
+
+// userActiveCached is userActive, answered from the cache while fresh.
+func (g *Gateway) userActiveCached(user, tenant string) (bool, error) {
+	k := [2]string{user, tenant}
+	now := time.Now()
+	g.active.mu.Lock()
+	if e, ok := g.active.m[k]; ok && now.Sub(e.at) < activeFor {
+		g.active.mu.Unlock()
+		return e.ok, nil
+	}
+	g.active.mu.Unlock()
+	ok, err := userActive(g.baseCtx(), g.store, user, tenant)
+	if err != nil {
+		return false, err
+	}
+	g.active.mu.Lock()
+	if g.active.m == nil {
+		g.active.m = map[[2]string]activeEntry{}
+	}
+	g.active.m[k] = activeEntry{ok: ok, at: now}
+	g.active.mu.Unlock()
+	return ok, nil
 }
 
 // keyActsIn reports whether k's user may act in tenant: k's own, or an
 // organisation they are a member of through k's tenant. Scopes are the
 // caller's to check.
-func keyActsIn(st Store, k Key, tenant string) bool {
+func keyActsIn(ctx context.Context, st Store, k Key, tenant string) (bool, error) {
 	if k.Tenant == tenant {
-		return true
+		return true, nil
 	}
-	_, ok := st.MemberRole(tenant, k.User, k.Tenant)
-	return ok
+	_, ok, err := st.MemberRole(ctx, tenant, k.User, k.Tenant)
+	return ok, err
 }
 
 // userMaySSH reports whether user, in tenant, still holds an API key that is
@@ -160,13 +213,23 @@ func keyActsIn(st Store, k Key, tenant string) bool {
 // kept a shell in every sandbox they own for as long as an SSH key stayed
 // registered. SSH is a capability of its own, and it lasts as long as a key
 // granting it does.
-func userMaySSH(st Store, user, tenant string) bool {
-	for _, k := range st.Keys() {
-		if k.User == user && !k.Revoked && (Principal{Scopes: k.Scopes}).Can(ScopeSSH) && keyActsIn(st, k, tenant) {
-			return true
+//
+// A check that cannot be made refuses: a login is not let in, and an open
+// connection is held to the answer the next check gives.
+func userMaySSH(ctx context.Context, st Store, user, tenant string) (bool, error) {
+	keys, err := st.KeysOfUser(ctx, user)
+	if err != nil {
+		return false, err
+	}
+	for _, k := range keys {
+		if !k.Active(time.Now()) || !(Principal{Scopes: k.Scopes}).Can(ScopeSSH) {
+			continue
+		}
+		if ok, err := keyActsIn(ctx, st, k, tenant); err != nil || ok {
+			return ok, err
 		}
 	}
-	return false
+	return false, nil
 }
 
 // authToken is "none" authentication: the username is a short-lived token.
@@ -177,7 +240,13 @@ func (s *SSHServer) authToken(cm ssh.ConnMetadata, login *sshLogin) error {
 		// client tries "none" first.
 		return errors.New("a key is required")
 	}
-	tok, ok := s.cfg.Store.RedeemSSHToken(user)
+	ctx := s.baseCtx
+	tok, ok, err := s.cfg.Store.RedeemSSHToken(ctx, user)
+	if err != nil {
+		s.cfg.Logf("ssh: %s: a token could not be checked: %v", cm.RemoteAddr(), err)
+		login.refused = "token"
+		return errors.New("token refused")
+	}
 	// The store is expected to refuse an expired token; the gateway checks
 	// again rather than trust that, and a token with no expiry is refused.
 	if !ok || tok.Sandbox == "" || tok.User == "" || tok.Expires.IsZero() || !s.cfg.Now().Before(tok.Expires) {
@@ -185,7 +254,7 @@ func (s *SSHServer) authToken(cm ssh.ConnMetadata, login *sshLogin) error {
 		login.refused = "token"
 		return errors.New("token refused")
 	}
-	if !userMaySSH(s.cfg.Store, tok.User, tok.Tenant) {
+	if may, err := userMaySSH(ctx, s.cfg.Store, tok.User, tok.Tenant); !may || err != nil {
 		s.cfg.Logf("ssh: %s: a token for user %q was refused: the user holds no active API key with %s", cm.RemoteAddr(), termsafe.Clean(tok.User), ScopeSSH)
 		login.refused = "token"
 		return refusal(ErrNotFound)
@@ -215,7 +284,13 @@ func (s *SSHServer) keyCandidates(user string, key ssh.PublicKey) []SSHKey {
 	}
 	want := key.Marshal()
 	var out []SSHKey
-	for _, k := range s.cfg.Store.SSHKeysByFingerprint(ssh.FingerprintSHA256(key)) {
+	keys, err := s.cfg.Store.SSHKeysByFingerprint(s.baseCtx, ssh.FingerprintSHA256(key))
+	if err != nil {
+		// No candidate: the login is refused, as for a key nobody holds.
+		s.cfg.Logf("ssh: keys could not be looked up: %v", err)
+		return nil
+	}
+	for _, k := range keys {
 		if k.User == "" {
 			continue
 		}
@@ -242,7 +317,7 @@ func (s *SSHServer) authKey(cm ssh.ConnMetadata, key ssh.PublicKey, login *sshLo
 	var found *sshLogin
 	var lastErr error = ErrNotFound
 	for _, k := range s.keyCandidates(ref, key) {
-		if !userMaySSH(s.cfg.Store, k.User, k.Tenant) {
+		if may, err := userMaySSH(s.baseCtx, s.cfg.Store, k.User, k.Tenant); !may || err != nil {
 			s.cfg.Logf("ssh: %s: key %s (%s) refused: user %q holds no active API key with %s", cm.RemoteAddr(), k.ID, fp, termsafe.Clean(k.User), ScopeSSH)
 			continue
 		}
@@ -294,14 +369,15 @@ func (s *SSHServer) orgPrincipal(p Principal, ref string) (Principal, bool) {
 	if !spec.ValidID(ref) {
 		return Principal{}, false
 	}
-	o, ok := s.cfg.Store.OwnerOf(ref)
-	if !ok || o.User != p.User || o.Tenant == p.KeyTenant {
+	ctx := s.baseCtx
+	o, ok, err := s.cfg.Store.OwnerOf(ctx, ref)
+	if err != nil || !ok || o.User != p.User || o.Tenant == p.KeyTenant {
 		return Principal{}, false
 	}
-	if _, member := s.cfg.Store.MemberRole(o.Tenant, p.User, p.KeyTenant); !member {
+	if _, member, err := s.cfg.Store.MemberRole(ctx, o.Tenant, p.User, p.KeyTenant); err != nil || !member {
 		return Principal{}, false
 	}
-	if !userMaySSH(s.cfg.Store, p.User, o.Tenant) {
+	if may, err := userMaySSH(ctx, s.cfg.Store, p.User, o.Tenant); err != nil || !may {
 		return Principal{}, false
 	}
 	p.Tenant = o.Tenant

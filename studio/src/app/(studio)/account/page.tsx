@@ -1,6 +1,12 @@
 "use client";
 
+import { useState } from "react";
+import { toast } from "sonner";
 import { PageHeader, SectionHeader } from "@/components/common/page-header";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { apiFetch } from "@/lib/api/client";
 import { Gate } from "@/components/shell/gate";
 import { Badge } from "@/components/ui/badge";
 import { useCaller } from "@/lib/caller";
@@ -35,6 +41,23 @@ function Account() {
       <dl className="grid max-w-xl grid-cols-[10rem_1fr] gap-y-1.5 text-sm">
         <dt className="text-muted-foreground">user</dt>
         <dd className="font-mono">{who.user}</dd>
+        {who.email && (
+          <>
+            <dt className="text-muted-foreground">email</dt>
+            <dd data-testid="account-email">{who.email}</dd>
+          </>
+        )}
+        {who.policy ? (
+          <>
+            <dt className="text-muted-foreground">policy</dt>
+            <dd data-testid="account-policy">
+              <span className="font-mono">{who.policy.name}</span>
+              {who.policy.max_lifetime_secs ? (
+                <span className="text-muted-foreground"> — each sandbox ends {Math.round(who.policy.max_lifetime_secs / 60)} min after it starts</span>
+              ) : null}
+            </dd>
+          </>
+        ) : null}
         <dt className="text-muted-foreground">tenant</dt>
         <dd className="font-mono">{who.tenant || <span className="text-muted-foreground">the default tenant</span>}</dd>
         <dt className="text-muted-foreground">organization</dt>
@@ -42,6 +65,7 @@ function Account() {
         <dt className="text-muted-foreground">key</dt>
         <dd className="font-mono">{who.key_id}</dd>
       </dl>
+      {who.email && <ChangePassword />}
       <section className="flex flex-col gap-3">
         <SectionHeader title="Scopes" description="Fixed when the key was issued. Studio hides what they do not allow; the gateway refuses it." />
         <ul className="flex max-w-3xl flex-col divide-y rounded-lg border">
@@ -56,6 +80,50 @@ function Account() {
         </ul>
       </section>
     </div>
+  );
+}
+
+/**
+ * An account's own change of password, at the gateway with this session's
+ * key. Every other sign-in of the account ends; this one stays.
+ */
+function ChangePassword() {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <section className="flex flex-col gap-3">
+      <SectionHeader title="Password" description="Changing it signs you out everywhere else." />
+      <form
+        className="flex max-w-xl flex-col gap-3"
+        aria-label="Change password"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setBusy(true);
+          apiFetch("/v1/auth/password", { method: "POST", json: { current, new: next }, noOrg: true })
+            .then(() => {
+              toast.success("Password changed");
+              setCurrent("");
+              setNext("");
+            })
+            .catch((err: Error) => toast.error(err.message))
+            .finally(() => setBusy(false));
+        }}
+      >
+        <input type="email" autoComplete="username" hidden readOnly />
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="current-password">Current password</Label>
+          <Input id="current-password" type="password" autoComplete="current-password" required value={current} onChange={(e) => setCurrent(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="next-password">New password</Label>
+          <Input id="next-password" type="password" autoComplete="new-password" minLength={10} required value={next} onChange={(e) => setNext(e.target.value)} />
+        </div>
+        <div>
+          <Button type="submit" disabled={busy}>Change password</Button>
+        </div>
+      </form>
+    </section>
   );
 }
 

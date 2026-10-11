@@ -34,7 +34,7 @@ func TestStudioPassesTheSelectedOrgOn(t *testing.T) {
 	}
 	var launched LaunchRequest
 	s := &Server{Client: c.WithOrg("from-context"), Context: "t", Token: testToken,
-		Launch: func(_ context.Context, req LaunchRequest) (LaunchResult, error) {
+		Launch: func(_ context.Context, _ *api.Client, req LaunchRequest) (LaunchResult, error) {
 			launched = req
 			return LaunchResult{Sandbox: "sbx_x"}, nil
 		}}

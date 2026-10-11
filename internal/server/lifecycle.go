@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"sort"
@@ -35,6 +37,12 @@ func (s *Server) snaps() *snapshots {
 		s.snapshotStore = &snapshots{m: map[string]*snapshotRecord{}}
 	}
 	return s.snapshotStore
+}
+
+// canSnapshot is whether the backend captures sandboxes at all: whole, or
+// their files only.
+func canSnapshot(caps map[string]bool) bool {
+	return caps[api.CapMemorySnapshot] || caps[api.CapDiskSnapshot]
 }
 
 func newSnapshotID() string {
@@ -79,6 +87,7 @@ func (s *Server) suspend(w http.ResponseWriter, r *http.Request) {
 	rec.sbx.State = api.StateSuspended
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	s.event(api.Event{Type: api.EventSandboxSuspended, Sandbox: out.ID})
 	writeJSON(w, http.StatusOK, out)
 }
@@ -107,13 +116,13 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	rec.lastActive = s.now()
 	out := rec.sbx
 	rec.mu.Unlock()
+	s.persist(rec)
 	s.event(api.Event{Type: api.EventSandboxResumed, Sandbox: out.ID})
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
-	sn, ok := s.Backend.(backend.Snapshotter)
-	if !ok || !s.Backend.Capabilities()[api.CapMemorySnapshot] {
+	if _, ok := s.Backend.(backend.Snapshotter); !ok || !canSnapshot(s.Backend.Capabilities()) {
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot snapshot a sandbox")
 		return
 	}
@@ -121,26 +130,89 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sb := rec.snapshot()
-	if len(sb.Volumes) > 0 {
-		// A fork would boot with the same volume drive as its parent: two
-		// kernels writing one filesystem.
-		writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox with volumes cannot be snapshotted; its forks would share them")
+	// Not cancelled with the request: a snapshot takes minutes on some
+	// backends, its progress is on the sandbox for any client to follow, and
+	// a browser tab closed part way would otherwise throw the work away.
+	out, err := s.takeSnapshot(context.WithoutCancel(r.Context()), rec, false)
+	if errors.Is(err, errSnapshotVolumes) || errors.Is(err, errSnapshotBusy) {
+		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
 		return
 	}
-	id := newSnapshotID()
-	info, err := sn.Snapshot(r.Context(), sb.ID, id)
 	if err != nil {
+		// The caller gets a generic message for most backend errors; the
+		// operator gets the cause, or a failed snapshot has none anywhere.
+		s.logf("sandbox %s: snapshot: %v", rec.snapshot().ID, err)
 		writeBackendErr(w, err)
 		return
 	}
-	out := api.Snapshot{ID: id, Sandbox: sb.ID, Image: sb.Image, Bytes: info.Bytes, CreatedAt: s.now().UTC()}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// errSnapshotVolumes refuses a snapshot of a sandbox with volumes: a fork
+// would boot with the same volume drive as its parent, two kernels writing
+// one filesystem.
+var errSnapshotVolumes = errors.New("a sandbox with volumes cannot be snapshotted; its forks would share them")
+
+// errSnapshotBusy refuses a second snapshot while one is being taken: two
+// exports of one disk at once take twice the room and neither finishes sooner.
+var errSnapshotBusy = errors.New("a snapshot of this sandbox is already being taken")
+
+// takeSnapshot captures a sandbox and records it: the one way a snapshot is
+// made, by request or by the sandbox's schedule, so both are refused, logged
+// and listed alike.
+func (s *Server) takeSnapshot(ctx context.Context, rec *record, scheduled bool) (api.Snapshot, error) {
+	sn, ok := s.Backend.(backend.Snapshotter)
+	if !ok {
+		return api.Snapshot{}, backend.ErrUnsupported
+	}
+	sb := rec.snapshot()
+	if len(sb.Volumes) > 0 {
+		return api.Snapshot{}, errSnapshotVolumes
+	}
+	// Its progress is on the sandbox while it runs, so whoever looks — the
+	// client that asked, another, or nobody, for a scheduled one — sees the
+	// same. Each report replaces the value rather than changing it: a copy of
+	// the sandbox taken under the lock keeps the pointer, and is read without it.
+	rec.mu.Lock()
+	if rec.sbx.Snapshotting != nil {
+		rec.mu.Unlock()
+		return api.Snapshot{}, errSnapshotBusy
+	}
+	started := s.now().UTC()
+	rec.sbx.Snapshotting = &api.SnapshotProgress{StartedAt: started, Scheduled: scheduled, Phase: api.SnapshotPhaseCapture}
+	rec.mu.Unlock()
+	defer func() {
+		rec.mu.Lock()
+		rec.sbx.Snapshotting = nil
+		rec.mu.Unlock()
+	}()
+	ctx = backend.WithSnapshotProgress(ctx, func(p backend.SnapshotProgress) {
+		rec.mu.Lock()
+		if rec.sbx.Snapshotting != nil {
+			rec.sbx.Snapshotting = &api.SnapshotProgress{
+				StartedAt: started, Scheduled: scheduled,
+				Phase: p.Phase, Bytes: p.Bytes, EstimatedBytes: p.EstimatedBytes,
+			}
+		}
+		rec.mu.Unlock()
+	})
+
+	id := newSnapshotID()
+	info, err := sn.Snapshot(ctx, sb.ID, id)
+	if err != nil {
+		return api.Snapshot{}, err
+	}
+	if info.Kind == "" {
+		info.Kind = api.SnapshotMemory
+	}
+	out := api.Snapshot{ID: id, Sandbox: sb.ID, Image: sb.Image, Kind: info.Kind, Scheduled: scheduled, Bytes: info.Bytes, CreatedAt: s.now().UTC()}
 	st := s.snaps()
 	st.mu.Lock()
 	st.m[id] = &snapshotRecord{info: out, spec: info}
 	st.mu.Unlock()
+	s.persistSnapshot(out, info)
 	s.event(api.Event{Type: api.EventSnapshotCreated, Sandbox: sb.ID, Snapshot: id, Bytes: info.Bytes})
-	writeJSON(w, http.StatusCreated, out)
+	return out, nil
 }
 
 func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
@@ -166,9 +238,11 @@ func (s *Server) deleteSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such snapshot")
 		return
 	}
+	s.forgetSnapshot(id)
 	if sn, ok := s.Backend.(backend.Snapshotter); ok {
 		_ = sn.DeleteSnapshot(r.Context(), id)
 	}
+	s.event(api.Event{Type: api.EventSnapshotDeleted, Snapshot: id, Reason: "request"})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -185,6 +259,25 @@ func (s *Server) fromSnapshot(req *api.CreateSandboxRequest) (string, string) {
 		return api.CodeNotFound, "no such snapshot"
 	}
 	sp := rec.spec
+	if rec.info.Kind == api.SnapshotDisk {
+		// The files are the snapshot; nothing captured was running with the
+		// original's resources, so a fork may ask for others. Unasked, it
+		// gets the original's.
+		if req.Image != "" && req.Image != sp.Image {
+			return api.CodeInvalidRequest, "image is fixed by the snapshot"
+		}
+		req.Image = sp.Image
+		if req.CPUs == 0 {
+			req.CPUs = sp.CPUs
+		}
+		if req.MemoryMB == 0 {
+			req.MemoryMB = sp.MemoryMB
+		}
+		if req.DiskMB == 0 {
+			req.DiskMB = sp.DiskMB
+		}
+		return "", ""
+	}
 	for _, c := range []struct {
 		asked, have any
 		zero        bool

@@ -9,7 +9,8 @@ cd web
 npm install
 npm run dev      # http://localhost:3000
 npm run lint
-npm run build    # static export -> web/out
+npm run build    # static export -> web/out, then check:docs
+npm run check:docs   # every internal link and anchor in web/out resolves
 ```
 
 ## Routes
@@ -18,6 +19,7 @@ npm run build    # static export -> web/out
 |---|---|
 | `/` | The landing page — the argument, the three ways to run it, the API, the interactive proofs, setup, install. |
 | `/studio` | Studio, the browser client of the same API. |
+| `/docs`, `/docs/<page>` | **The documentation**, rendered at build time from the repository's `docs/` (and `sdk/README.md`): one page per component, a sidebar of segments, "On this page", previous and next. `src/lib/docs.ts` is the manifest of which file is which page; `src/lib/markdown.ts` renders them with `marked`, GitHub-style heading ids, links between docs rewritten to `/docs` and every other relative link to GitHub. Nothing of the text is copied here. |
 | `/setup` | **The setup guide**: a Mac, Linux without root, a Linux server under systemd, and a client, each from install to `sandbox-cli doctor` and a first run, then troubleshooting by the error you saw. The landing page's setup band is the short version and links here. |
 
 Every terminal frame on these pages is output captured from the CLI, not
@@ -34,6 +36,28 @@ is applied if the site is ever served from a subpath. In-page anchors stay plain
 anchors. `SiteHeader` and `SiteFooter` therefore take their nav as a prop, with
 the landing page's sections as the default — a sub-page that inherited `#threat`
 would render links that quietly do nothing.
+
+## The waitlist
+
+"Join the waitlist" in the hero opens a form (first name, last name, email)
+that posts to `/api/waitlist`. That is `api/waitlist.ts`, a Vercel function
+beside the static export, the only part of the site that runs on a server:
+a static export cannot take a POST. It checks the fields and mails them to
+the waitlist inbox through the email service's API, as plain text, with the
+visitor's address as reply-to.
+
+Set in the Vercel project's environment (Settings → Environment Variables),
+then redeploy:
+
+| Variable | |
+|---|---|
+| `RESEND_API_KEY` | required; without it every sign-up answers 503 |
+| `WAITLIST_TO` | default `waitlist@sandbox-cli.com` |
+| `WAITLIST_FROM` | default `sandbox-cli waitlist <waitlist@sandbox-cli.com>`; its domain must be verified with the email service, or every send is refused (502, logged) |
+
+`npm run test:waitlist` tests the function with a stand-in for the email
+service. `npm run dev` does not serve `api/`; `vercel dev` does. On a host
+without functions (GitHub Pages, a bucket) the form says it could not send.
 
 ## Design direction
 

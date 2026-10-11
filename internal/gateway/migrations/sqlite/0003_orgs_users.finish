@@ -1,0 +1,20 @@
+-- Indexes on the organisation and user tables, made once the old tables
+-- (and their indexes, of the same names) are gone (sql_migrate3.go).
+
+-- One user holds an address, and one live account key stands for a user.
+CREATE UNIQUE INDEX users_email ON users(email) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX api_keys_account ON api_keys(user_id) WHERE account AND NOT revoked;
+CREATE INDEX api_keys_user ON api_keys(user_id);
+CREATE INDEX api_keys_parent ON api_keys(parent);
+CREATE INDEX invites_email ON invites(email);
+CREATE INDEX ssh_keys_fingerprint ON ssh_keys(fingerprint);
+CREATE INDEX ssh_keys_user ON ssh_keys(user_id);
+CREATE INDEX ssh_tokens_expires ON ssh_tokens(expires);
+CREATE INDEX org_members_user ON org_members(user_id);
+CREATE INDEX sandboxes_org ON sandboxes(org_id, user_id);
+CREATE INDEX sandboxes_node ON sandboxes(node);
+CREATE INDEX sandboxes_terminated ON sandboxes(terminated_at);
+CREATE INDEX volumes_org ON volumes(org_id, user_id);
+CREATE INDEX snapshots_node ON snapshots(node);
+CREATE INDEX jobs_org ON jobs(org_id, user_id);
+CREATE INDEX services_user ON services(user_id);

@@ -18,13 +18,33 @@ import type { NextConfig } from "next";
  */
 const admin = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off";
 
+// NEXT_PUBLIC_STUDIO_HOSTED=on builds the Studio `sandbox-cli studio host`
+// serves to many users: sign-in by invite link and a session cookie, no
+// Studio token, nothing of the host (`npm run build:hosted`, checked by
+// scripts/check-hosted.mjs). It carries the admin screens, shown only to a
+// session whose key is an admin's — which the server lets sign in only with
+// --allow-admin — and refused by the gateway to any other. An operator who
+// wants none of their code served adds NEXT_PUBLIC_STUDIO_ADMIN=off.
+
 const nextConfig: NextConfig = {
+  // Always defined, so the minifier sees a literal on both sides of every
+  // hosted comparison and drops the other build's code from each bundle; an
+  // unset NEXT_PUBLIC_ variable is left as a run-time lookup instead.
+  env: { NEXT_PUBLIC_STUDIO_HOSTED: process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" ? "on" : "off" },
   output: "export",
   trailingSlash: true,
   images: { unoptimized: true },
   pageExtensions: admin ? ["admin.tsx", "tsx", "ts"] : ["tsx", "ts"],
   // A second build (the admin-off check) goes elsewhere, so it never replaces out/.
   distDir: process.env.STUDIO_DIST_DIR || ".next",
+  // noVNC (the Desktop tab) awaits at the top level of a module. Every browser
+  // Studio runs in has async functions, but webpack's default target does not
+  // say so, and it warned that the output might not run. Saying so is what
+  // makes the generated code right, not just quiet.
+  webpack(config) {
+    config.output.environment = { ...config.output.environment, asyncFunction: true };
+    return config;
+  },
 };
 
 export default nextConfig;

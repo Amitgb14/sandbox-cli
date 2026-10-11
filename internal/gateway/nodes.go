@@ -514,6 +514,10 @@ func readSecretFile(path string) (string, error) {
 	return tok, nil
 }
 
+// ReadSecretFile is readSecretFile, for the command's own secrets: the
+// mail relay's password.
+func ReadSecretFile(path string) (string, error) { return readSecretFile(path) }
+
 func checkPrivate(path string) error {
 	fi, err := os.Stat(path)
 	if err != nil {

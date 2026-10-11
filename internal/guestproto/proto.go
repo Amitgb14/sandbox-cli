@@ -11,6 +11,13 @@
 //	  read    guest sends Response.Size raw bytes
 //	  write   host sends Request.Size raw bytes, guest answers a second Response
 //	  exec    frames both ways until the guest sends FrameExit
+//	  attach  the same, on a kept process (below)
+//
+// A process the host starts with Keep outlives the connection that started
+// it: its output is buffered in the guest, and a later connection rejoins it
+// by its session id with OpAttach. That is how a restarted sandboxd takes back
+// the processes of a sandbox it kept running (sandboxd --keep-sandboxes).
+// Without Keep a process ends with its connection, as it always has.
 //
 // A frame is a type byte, a big-endian uint32 length, and that many bytes.
 //
@@ -29,7 +36,7 @@ import (
 
 // Version is sent in a ping reply, so the host can tell an out-of-date guest
 // agent from a broken one.
-const Version = "1"
+const Version = "2"
 
 // Ops.
 const (
@@ -46,6 +53,11 @@ const (
 	// before it stops a VM that has volumes: a VMM that is killed takes the
 	// guest's page cache with it, and a volume is meant to outlive the VM.
 	OpSync = "sync"
+	// OpAttach rejoins a kept process by its session id: the buffered output
+	// from Request.Offset on, then live, then FrameExit — the frames of exec.
+	OpAttach = "attach"
+	// OpSessions lists the kept processes the guest holds.
+	OpSessions = "sessions"
 )
 
 // Request is the first line of every connection.
@@ -67,6 +79,33 @@ type Request struct {
 	// them clean, so the next VM can mount one read-only. A sync before a
 	// suspend is not final — the sandbox runs again afterwards.
 	Final bool `json:"final,omitempty"`
+	// Keep, on an exec, keeps the process running when the connection goes,
+	// under Session, an id the host chooses (SessionIDOK). Offset, on an
+	// attach, is how many bytes of output the host already has.
+	Keep    bool   `json:"keep,omitempty"`
+	Session string `json:"session,omitempty"`
+	Offset  int64  `json:"offset,omitempty"`
+}
+
+// SessionInfo is one kept process.
+type SessionInfo struct {
+	ID       string `json:"id"`
+	Running  bool   `json:"running"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+}
+
+// SessionIDOK reports whether s is a session id a host may choose: 1 to 64
+// letters, digits, '-' and '_'.
+func SessionIDOK(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // Response is the guest's answer line.
@@ -76,6 +115,8 @@ type Response struct {
 	Version string     `json:"version,omitempty"`
 	Size    int64      `json:"size,omitempty"`
 	Entries []DirEntry `json:"entries,omitempty"`
+	// Sessions answers OpSessions.
+	Sessions []SessionInfo `json:"sessions,omitempty"`
 }
 
 // DirEntry is one entry of a listing.
@@ -122,6 +163,9 @@ const (
 	FrameStdout   byte = 'o' // guest -> host
 	FrameStderr   byte = 'E' // guest -> host
 	FrameExit     byte = 'x' // guest -> host: int32 exit code; last frame
+	// FrameDropped, on an attach, says output older than the guest keeps was
+	// dropped before the replay that follows: uint64 bytes dropped.
+	FrameDropped byte = 'd'
 )
 
 // Limits. The guest is untrusted, so the host refuses anything larger before it

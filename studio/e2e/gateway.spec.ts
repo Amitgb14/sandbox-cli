@@ -75,12 +75,30 @@ test("a tenant key sees the tenant screens and not the admin ones, by sidebar or
     await expect(page.getByRole("heading", { name: "Not available" })).toBeVisible();
   }
   expect(seen.filter((p) => p.startsWith("/api/v1/admin"))).toEqual([]);
+  // A node's images are its operator's: no gateway key is offered them yet.
+  await expect(nav(page).getByRole("link", { name: "Images", exact: true })).toHaveCount(0);
+  await page.goto(`${base}/images/`);
+  await expect(page.getByText("a gateway does not offer it")).toBeVisible();
+  expect(seen.filter((p) => p.startsWith("/api/v1/images"))).toEqual([]);
 
   await page.goto(`${base}/account/`);
   await expect(page.locator("main").getByText("alice", { exact: true })).toBeVisible();
   await expect(page.locator("main").getByText("team-a", { exact: true }).first()).toBeVisible();
   // With nothing selected, the organization is the key's own tenant.
   await expect(page.getByTestId("account-org")).toHaveText("team-a");
+});
+
+test("the sandbox list on a gateway sums what was given, and never asks for a node's status", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  const seen = record(page);
+  await page.goto(`${base}/sandboxes/`);
+  await expect(page.locator("main h1")).toHaveText("Sandboxes");
+  await page.waitForTimeout(1500);
+  // Totals from the list, with no capacity to measure them against.
+  if (await page.getByText("vCPU given").count()) {
+    await expect(page.getByRole("meter")).toHaveCount(0);
+  }
+  expect(seen.filter((p) => p === "/api/v1/node")).toEqual([]);
 });
 
 test("a tenant submits a job and reads its output", async ({ page }) => {
@@ -92,10 +110,84 @@ test("a tenant submits a job and reads its output", async ({ page }) => {
   await page.getByRole("button", { name: "Submit", exact: true }).click();
   await expect(page).toHaveURL(/\/job\/?\?id=job_/);
   await expect(page.getByRole("heading", { name: "e2e-job" })).toBeVisible();
-  await expect(page.getByText("hello-from-a-job")).toBeVisible();
+  // Exact: the page also shows the command, "echo hello-from-a-job". A
+  // substring match found that alone before the output arrived, passing
+  // without it, and both after, failing strict mode.
+  await expect(page.getByText("hello-from-a-job", { exact: true })).toBeVisible();
   await expect(page.locator("main").getByText("Succeeded").first()).toBeVisible();
   await page.goto(`${base}/jobs/`);
   await expect(page.getByRole("link", { name: /e2e-job/ })).toBeVisible();
+});
+
+test("a job is submitted with labels, and the list filters by them", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/jobs/`);
+  await page.getByRole("button", { name: "Submit job" }).click();
+  await page.getByLabel("Name").fill("e2e-labelled");
+  await page.getByLabel("Command").fill("echo labelled");
+  const labels = page.getByLabel("Labels");
+  await labels.fill("team=e2e");
+  await labels.press("Enter");
+  await labels.fill("nightly");
+  await labels.press("Enter");
+  // One the gateway would refuse is marked, and stops the submit.
+  await labels.fill("Bad Key");
+  await labels.press("Enter");
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(/\/jobs\/?$/);
+  await page.getByRole("button", { name: "Remove Key" }).click();
+  await page.getByRole("button", { name: "Remove Bad" }).click();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(/\/job\/?\?id=job_/);
+  await expect(page.locator("main").getByText("team=e2e")).toBeVisible();
+
+  await page.goto(`${base}/jobs/`);
+  await expect(page.getByRole("link", { name: /e2e-labelled/ })).toBeVisible();
+  await page.getByRole("button", { name: "Labels" }).click();
+  await page.getByRole("option", { name: /team=e2e/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("link", { name: /e2e-labelled/ })).toBeVisible();
+  await expect(page.locator("tbody tr")).toHaveCount(1);
+  await page.getByRole("button", { name: "Reset" }).click();
+  await page.getByLabel("Search jobs").fill("no-such-job-anywhere");
+  await expect(page.getByText("No job matches.")).toBeVisible();
+});
+
+/**
+ * A command line using the shell runs in one, and a run that never started
+ * says why in plain sight. The fake backend has no sh, so the run fails, as
+ * a missing program does on a real one — which is what the box is for.
+ */
+test("a shell command runs as sh -c, and a failed run says why", async ({ page }) => {
+  // The default image is built on the node once anything has started from
+  // it, and the gateway lists it after its next poll of the node. The page
+  // asks once, so wait for the list here rather than count on an earlier
+  // test having run long enough before this one.
+  const { gatewayURL, adminKey } = e2eState();
+  const admin = (method: string, path: string, body?: object) =>
+    fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${adminKey}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  const sb = (await (await admin("POST", "/v1/sandboxes", {})).json()) as { id: string };
+  await admin("DELETE", `/v1/sandboxes/${sb.id}`);
+  await expect
+    .poll(async () => ((await (await admin("GET", "/v1/fleet/images")).json()) as { images: unknown[] }).images.length, { timeout: 20_000 })
+    .toBeGreaterThan(0);
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/jobs/`);
+  await page.getByRole("button", { name: "Submit job" }).click();
+  // The image picker offers what the gateway's nodes have built.
+  await page.getByRole("combobox", { name: "Image" }).click();
+  await expect(page.getByRole("group", { name: "Built on the gateway's nodes" })).toBeVisible({ timeout: 15_000 });
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Name").fill("e2e-loop");
+  await page.getByLabel("Command").fill('for i in 1 2 3; do echo "n $i"; done');
+  await expect(page.getByTestId("runs-in-shell")).toBeVisible();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(page).toHaveURL(/\/job\/?\?id=job_/);
+  await expect(page.locator("main").getByText(/^sh -c 'for i in 1 2 3; do echo "n \$i"; done'$/)).toBeVisible();
+  const why = page.getByRole("alert").filter({ hasText: "Why it failed" });
+  await expect(why).toBeVisible({ timeout: 15_000 });
+  await expect(why).toContainText("no such command");
+  await expect(page.getByText("The command never started, so there is no output.")).toBeVisible();
 });
 
 test("a tenant sets a secret it can never read back", async ({ page }) => {
@@ -111,6 +203,23 @@ test("a tenant sets a secret it can never read back", async ({ page }) => {
   expect(await page.content()).not.toContain("value-that-stays-put");
 });
 
+// The examples a deploy starts from are specs the gateway takes.
+test("the service examples, a Git repository's among them, are specs the gateway accepts", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/services/`);
+  await page.getByRole("button", { name: "Deploy service" }).click();
+  await page.getByRole("button", { name: "From a Git repository" }).click();
+  await expect(page.getByLabel("Service spec")).toHaveValue(/git clone --depth 1 https:\/\/github\.com\/OWNER\/REPO/);
+  const spec = JSON.parse(await page.getByLabel("Service spec").inputValue());
+  spec.name = "e2e-git";
+  await page.getByLabel("Service spec").fill(JSON.stringify(spec));
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await expect(page).toHaveURL(/\/service\/?\?name=e2e-git/);
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Remove" }).click();
+  await expect(page).toHaveURL(/\/services\/?$/);
+});
+
 test("a tenant deploys, scales and removes a service", async ({ page }) => {
   const base = await open(page, "gw-tenant", "alice@team-a");
   await page.goto(`${base}/services/`);
@@ -124,6 +233,17 @@ test("a tenant deploys, scales and removes a service", async ({ page }) => {
   await page.getByRole("button", { name: "Scale" }).click();
   await expect(page.getByText("2/2 ready")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("main").getByText("Healthy")).toHaveCount(2);
+  // The list finds it by search and by health, and says when nothing matches.
+  await page.goto(`${base}/services/`);
+  await page.getByLabel("Search services").fill("e2e-web");
+  await expect(page.getByRole("link", { name: /e2e-web/ })).toBeVisible();
+  await page.getByRole("button", { name: "Health" }).click();
+  await page.getByRole("option", { name: /Unhealthy/ }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("No service matches.")).toBeVisible();
+  await page.getByRole("button", { name: "Reset" }).click();
+  await page.getByRole("link", { name: /e2e-web/ }).click();
+  await expect(page).toHaveURL(/\/service\/?\?name=e2e-web/);
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Remove" }).click();
   await expect(page).toHaveURL(/\/services\/?$/);
@@ -192,7 +312,10 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
   expect(html).not.toContain(e2eState().dir);
   await page.getByRole("button", { name: "Actions for n1" }).click();
   await page.getByRole("menuitem", { name: "Cordon" }).click();
-  await expect(page.locator("main").getByText("Cordoned")).toBeVisible();
+  // Exact: the page's description says "A cordoned node…", and a substring
+  // match found it and the badge both, failing before the uncordon below —
+  // which left the node cordoned for every test after this one.
+  await expect(page.locator("main").getByText("Cordoned", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Actions for n1" }).click();
   await page.getByRole("menuitem", { name: "Uncordon" }).click();
   await expect(page.locator("main").getByText("Healthy")).toBeVisible();
@@ -218,4 +341,47 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
 
   await page.goto(`${base}/admin/audit/`);
   await expect(page.getByRole("cell", { name: "GET /v1/whoami" }).first()).toBeVisible();
+});
+
+test("an admin gives a user a policy, and moves a sandbox's end both ways", async ({ page }) => {
+  const { gatewayURL } = e2eState();
+  const base = await open(page, "gw-admin", "ops");
+  await page.goto(`${base}/admin/keys/`);
+  await page.getByLabel("Policy name").fill("demo");
+  await page.getByLabel("Max lifetime in minutes").fill("30");
+  await page.getByRole("button", { name: "Save policy" }).click();
+  await expect(page.getByRole("cell", { name: "30 min" })).toBeVisible();
+
+  await page.getByLabel("User", { exact: true }).fill("pia");
+  await page.getByLabel("Tenant", { exact: true }).fill("pia");
+  await page.getByRole("combobox", { name: "Policy", exact: true }).click();
+  await page.getByRole("option", { name: "demo" }).click();
+  await page.getByRole("button", { name: "Issue key" }).click();
+  const key = (await page.getByTestId("new-key-secret").textContent())!;
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "pia" }).getByRole("combobox")).toHaveText("demo");
+
+  // pia's sandbox gets the policy's lifetime, and she may not push it out.
+  const as = (method: string, path: string, body?: object) =>
+    fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  const sb = (await (await as("POST", "/v1/sandboxes", { name: "pia-box" })).json()) as { id: string; lifetime_secs: number };
+  expect(sb.lifetime_secs).toBe(1800);
+  expect((await as("PATCH", `/v1/sandboxes/${sb.id}`, { lifetime_secs: 3600 })).status).toBe(403);
+
+  // The admin's list says whose it is and when it ends.
+  await page.goto(`${base}/sandboxes/`);
+  const row = page.getByRole("row").filter({ hasText: "pia-box" });
+  await expect(row.getByRole("cell", { name: "pia", exact: true })).toBeVisible();
+  await expect(row.getByText(/^in (29|30)m/)).toBeVisible();
+
+  // The admin may move it, from the sandbox's page.
+  await page.goto(`${base}/sandbox/?id=${sb.id}`);
+  await expect(page.getByText("Ends")).toBeVisible();
+  await expect(page.getByText("Owner", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Extend lifetime by 15 minutes" }).click();
+  await expect.poll(async () => ((await (await as("GET", `/v1/sandboxes/${sb.id}`)).json()) as { lifetime_secs: number }).lifetime_secs).toBe(2700);
+  await page.getByRole("button", { name: "Shorten lifetime by 15 minutes" }).click();
+  await expect.poll(async () => ((await (await as("GET", `/v1/sandboxes/${sb.id}`)).json()) as { lifetime_secs: number }).lifetime_secs).toBe(1800);
+  // The one node is shared with every other test: give its room back.
+  await as("DELETE", `/v1/sandboxes/${sb.id}`);
 });

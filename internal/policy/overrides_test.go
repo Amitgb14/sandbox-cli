@@ -80,3 +80,36 @@ func TestNoOverrideChangesNothing(t *testing.T) {
 		t.Errorf("modes = %q / %q, want none unchanged", plain.Network.Mode, empty.Network.Mode)
 	}
 }
+
+// --no-baseline turns the baseline off and never on: a config that turned it
+// off keeps it off with the flag absent, and the flag cannot be a way to get
+// the baseline back.
+func TestNoBaselineOverride(t *testing.T) {
+	cfgPath := writeConfig(t, "network:\n  mode: allowlist\n  allow: [proxy.golang.org]\n")
+	on, err := LoadProfileWith(t.TempDir(), cfgPath, ProfileDev, Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !on.Network.BaselineEnabled() {
+		t.Fatal("precondition: the baseline is on without the flag")
+	}
+	off, err := LoadProfileWith(t.TempDir(), cfgPath, ProfileDev, Overrides{NoBaseline: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Network.BaselineEnabled() {
+		t.Error("--no-baseline left the baseline on")
+	}
+	if got := off.Network.EgressDomains(); len(got) != 1 || got[0] != "proxy.golang.org" {
+		t.Errorf("allowlist %v, want the named host alone", got)
+	}
+
+	cfgPath = writeConfig(t, "network:\n  mode: allowlist\n  baseline: false\n  allow: [a.example.com]\n")
+	kept, err := LoadProfileWith(t.TempDir(), cfgPath, ProfileDev, Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.Network.BaselineEnabled() {
+		t.Error("a config's baseline: false was turned back on")
+	}
+}

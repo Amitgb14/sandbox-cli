@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -226,7 +227,9 @@ func TestAuditEndpointWithoutALog(t *testing.T) {
 // ownerStore answers OwnerOf for the SSH harness, whose memStore has none.
 type ownerStore struct{ Store }
 
-func (ownerStore) OwnerOf(string) (Owner, bool) { return Owner{User: "alice", Node: "n1"}, true }
+func (ownerStore) OwnerOf(context.Context, string) (Owner, bool, error) {
+	return Owner{User: "alice", Node: "n1"}, true, nil
+}
 
 func TestSSHAuditAndMetrics(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "gateway.jsonl")
@@ -478,14 +481,14 @@ func TestNodeLossRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	n1.down.Store(true)
-	waitFor(t, "lost", func() bool { return len(tg.g.lostSandboxes()) == 1 })
-	if u := tg.g.usageOf("acme"); u.Sandboxes != 0 {
+	waitFor(t, "lost", func() bool { return len(tg.lost()) == 1 })
+	if u := tg.usage("acme"); u.Sandboxes != 0 {
 		t.Fatalf("a lost sandbox counts: %+v", u)
 	}
 	n1.down.Store(false)
 	waitFor(t, "n1 back", func() bool { return tg.g.nodes.get("n1").isHealthy() })
-	if u := tg.g.usageOf("acme"); u.Sandboxes != 1 || len(tg.g.lostSandboxes()) != 0 {
-		t.Fatalf("after the node came back: usage %+v, lost %v", u, tg.g.lostSandboxes())
+	if u := tg.usage("acme"); u.Sandboxes != 1 || len(tg.lost()) != 0 {
+		t.Fatalf("after the node came back: usage %+v, lost %v", u, tg.lost())
 	}
 	if got, err := alice.Sandbox(ctx, sb.ID); err != nil || got.State != api.StateRunning {
 		t.Fatalf("%+v %v", got, err)
@@ -503,7 +506,7 @@ func TestSandboxOnARemovedNodeIsLost(t *testing.T) {
 	if err != nil || len(lost) != 1 || lost[0].Node != "gone" || !lost[0].NodeDownSince.IsZero() {
 		t.Fatalf("%+v %v", lost, err)
 	}
-	if u := tg.g.usageOf(""); u.Sandboxes != 0 {
+	if u := tg.usage(""); u.Sandboxes != 0 {
 		t.Fatalf("a sandbox on a removed node counts: %+v", u)
 	}
 }

@@ -1,0 +1,31 @@
+#!/bin/sh
+# sandbox-desktop: a desktop in this sandbox, served over VNC on the guest's
+# own loopback. Run it in the background (Studio's Desktop tab does); it stays
+# in the foreground as the VNC server, so stopping it stops the desktop.
+#
+#   SANDBOX_DESKTOP_SIZE   the screen, WxHxDEPTH (default 1280x800x24)
+#   SANDBOX_DESKTOP_PORT   the VNC port on 127.0.0.1 (default 5900)
+set -eu
+
+display=:1
+size=${SANDBOX_DESKTOP_SIZE:-1280x800x24}
+port=${SANDBOX_DESKTOP_PORT:-5900}
+export DISPLAY=$display
+
+# The display. -nolisten tcp: X is reached through its unix socket only.
+Xvfb "$display" -screen 0 "$size" -nolisten tcp &
+i=0
+until xdpyinfo >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -lt 50 ] || { echo "sandbox-desktop: the X display did not start" >&2; exit 1; }
+  sleep 0.1
+done
+
+openbox &
+xterm -geometry 100x30+40+40 &
+chromium --new-window "about:blank" >/dev/null 2>&1 &
+
+# The VNC server, on loopback only and with no password: the only way to it is
+# the API's tunnel, which only a caller allowed to use this sandbox can open.
+# -shared lets a second viewer join rather than cut off the first.
+exec x11vnc -display "$display" -rfbport "$port" -localhost -nopw -forever -shared -quiet

@@ -1,0 +1,11 @@
+# Sourced by Debian's chromium wrapper each time it starts.
+#
+# Chromium's own sandbox stays on where the guest kernel lets the sandbox user
+# make a user namespace, as a second wall inside the VM. Where it does not (a
+# guest kernel built without them), Chromium would refuse to start at all, so
+# it runs without: the VM is still the boundary that matters.
+# /dev/shm in a small guest is small; Chromium falls back to /tmp.
+if ! unshare --user --map-root-user true 2>/dev/null; then
+  CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox"
+fi
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --disable-dev-shm-usage --no-first-run --password-store=basic"

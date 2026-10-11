@@ -136,6 +136,27 @@ export function formatArgv(argv: string[]): string {
   return argv.map(shellQuote).join(" ");
 }
 
+/**
+ * What a command typed in one line runs as. Plain words and quotes are
+ * split as a shell would (`make test` is ["make", "test"]); a line using the
+ * shell itself — a loop, `;`, `&&`, a pipe, a redirect, `$VAR`, a glob — is
+ * run by one, as `sh -c LINE`, since there is no shell between the command
+ * and the sandbox to read it otherwise.
+ */
+export function commandArgv(line: string): string[] {
+  const s = line.trim();
+  if (!s) return [];
+  return needsShell(s) ? ["sh", "-c", s] : splitArgs(s);
+}
+
+/** Whether a command line uses the shell's syntax, not just words and quotes. */
+export function needsShell(s: string): boolean {
+  // Outside single quotes: operators, expansions, globs, and the keywords
+  // that open a compound command.
+  const unquoted = s.replace(/'[^']*'/g, "''");
+  return /[;&|<>$`(){}*?~\n]/.test(unquoted) || /^\s*(for|while|until|if|case|export|cd|source|\.)\s/.test(unquoted);
+}
+
 /** Splits a command line the way a shell would for plain words and quotes. */
 export function splitArgs(s: string): string[] {
   const out: string[] = [];

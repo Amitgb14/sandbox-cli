@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { GithubMark } from "@/components/logo";
 import { buttonVariants } from "@/components/ui/button";
 import { InstallCard } from "@/components/install-card";
+import { WaitlistButton } from "@/components/waitlist-dialog";
 import { ContainmentSimulator } from "@/components/containment-simulator";
 import { FIRST_RUN, HERO_STATS, REPO_URL } from "@/lib/site";
 import { cn } from "@/lib/utils";
@@ -69,6 +70,7 @@ export function Hero() {
                 <GithubMark className="size-4" />
                 Source on GitHub
               </a>
+              <WaitlistButton />
             </div>
 
             <p className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">

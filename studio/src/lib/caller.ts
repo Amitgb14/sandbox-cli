@@ -14,6 +14,7 @@
  * keeps a button from offering what will be refused.
  */
 
+import { useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, apiFetch } from "@/lib/api/client";
 import type { Scope, Whoami } from "@/lib/types";
@@ -80,5 +81,11 @@ export function isAdmin(caller: Caller): boolean {
 /** useCaller and can, together, for a component that asks several times. */
 export function useCan(): (scope: Scope) => boolean {
   const caller = useCaller();
-  return (scope) => can(caller, scope);
+  // Stable while the caller is: a table's column definitions depend on it, and
+  // a new function every render remounted every cell on every poll.
+  // useCaller builds a new object each time, so this keys on its parts: the
+  // query's data is kept the same object while it is unchanged.
+  const who = caller.kind === "gateway" ? caller.who : null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useCallback((scope: Scope) => can(caller, scope), [caller.kind, who]);
 }

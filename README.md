@@ -36,6 +36,14 @@ API always on it.
 beyond what `sandbox-cli doctor` reports. `sandbox-gateway` serves the same API in front of many machines, with a key per
 user, sandboxes only their owner can see, and SSH on one port ([docs/fleet.md](docs/fleet.md)).
 
+On a Linux server, give sandboxes a disk of their own before installing: images,
+sandboxes' disks, snapshots and volumes all live under `/var/lib/sandboxd`, and
+mounted there they fill that disk and not `/`. With `--keep-sandboxes`, sandboxd
+restarts and upgrades without stopping the sandboxes it runs. The install, the
+disk, the [production checklist](docs/self-hosting.md#in-production) and
+upgrades are in [docs/self-hosting.md](docs/self-hosting.md); the `/setup` page
+of the website walks through each path step by step.
+
 ## Use it
 
 ```sh
@@ -54,7 +62,16 @@ sandbox-cli snapshot · suspend · resume · tunnel
 sandbox-cli events ID                # what the sandbox was asked to do, and how it ended
 sandbox-cli volume create cache; sandbox-cli run --volume cache:/sandbox/home/.cache -- npm ci
 sandbox-cli run --label team=infra -- make; sandbox-cli list --label team=infra
+sandbox-cli run --template large -- make            # a size by name; template ls lists them
+sandbox-cli update dev --name api --idle 2h         # rename, relabel, retime or re-network a live sandbox
+sandbox-cli image pull IMAGE · image ls · image rm IMAGE   # install an image before its first sandbox waits for it
 ```
+
+A sandbox starts from the server's default image, which has git, Node, Python
+and four agents, unless you name another: `--image python:3.13-slim`, or any
+public Linux image (`ghcr.io/owner/name:tag`, `name@sha256:…`). It is pulled
+the first time a sandbox asks for it; a private image cannot be pulled.
+Which names work and what an image needs: [docs/self-hosting.md](docs/self-hosting.md#choosing-the-image-a-sandbox-starts-from).
 
 Work done in a sandbox stays there. To keep it, push it from inside (a commit
 made in a sandbox carries a neutral `sandbox` identity), read it out through the
@@ -84,7 +101,7 @@ sandbox-cli ssh-access demo --ttl 15m   # a short-lived `ssh TOKEN@gateway …` 
 The token in an `ssh-access` line is the whole credential until it expires;
 hand it only to whoever should have that access. Every SSH login needs an
 active API key with the `sandbox:ssh` scope, and revoking it closes open
-sessions too ([docs/fleet.md](docs/fleet.md#revoking)). Against a plain sandboxd,
+sessions too ([docs/operations.md](docs/operations.md#revoking); all of SSH is in [docs/ssh.md](docs/ssh.md)). Against a plain sandboxd,
 `sandbox-cli ssh` opens the session through the API instead, since a sandboxd
 has no SSH server.
 
@@ -125,7 +142,10 @@ run's environment by name, only for jobs that name it; the API never returns
 it. Secrets need the gateway started with `--secrets-key-file` (32 random
 bytes, mode 0600), and setting one needs a key with the `secrets:write` scope.
 A finished job is kept for a day (`--job-retention`). A restarted gateway
-picks its jobs up again: a running command is followed where it runs.
+picks its jobs up again: a running command is followed where it runs. Jobs,
+batches, secrets and notify webhooks are in [docs/jobs.md](docs/jobs.md);
+services, which keep a count of sandboxes running, in
+[docs/services.md](docs/services.md).
 
 ## Coding agents
 
@@ -176,7 +196,7 @@ The same sandboxes in a browser: launch a command or an agent, use its
 terminal, watch its output, files and audit events. Studio is served by
 `sandbox-cli` itself on a loopback port, needs the token it prints, and talks to
 the current context's `sandboxd` without handing that `sandboxd`'s token to the
-browser. See [studio/README.md](studio/README.md).
+browser. See [docs/studio.md](docs/studio.md).
 
 ## Build
 
@@ -191,8 +211,13 @@ The microVM tests need `/dev/kvm`; see [AGENTS.md](AGENTS.md) and
 ## Documents
 
 - [docs/api/v1.md](docs/api/v1.md): the API every mode serves.
-- [docs/self-hosting.md](docs/self-hosting.md), [docs/local-macos.md](docs/local-macos.md): running sandboxd.
-- [docs/fleet.md](docs/fleet.md): many sandboxd nodes behind one `sandbox-gateway`, for one machine or many.
+- [docs/self-hosting.md](docs/self-hosting.md), [docs/local-macos.md](docs/local-macos.md): running sandboxd —
+  install, where it keeps things and the disk to give it, upgrading without stopping sandboxes, images, volumes.
+- [docs/fleet.md](docs/fleet.md): many sandboxd nodes behind one `sandbox-gateway`, for one machine or many;
+  with [SSH](docs/ssh.md), [organizations](docs/organizations.md), [jobs and secrets](docs/jobs.md),
+  [services](docs/services.md) and [operations](docs/operations.md) on pages of their own.
+- [docs/cli.md](docs/cli.md), [docs/sandboxd.md](docs/sandboxd.md), [docs/studio.md](docs/studio.md): the CLI's every command, the server's flags and policy file, Studio.
+- [docs/README.md](docs/README.md): every page, grouped as on the website's `/docs`.
 - [docs/rewrite/PLAN.md](docs/rewrite/PLAN.md): the plan, milestones and what was measured.
 - [docs/security/](docs/security/): the audit ledger and open items.
 - [AGENTS.md](AGENTS.md): for anyone, human or agent, changing this repository.

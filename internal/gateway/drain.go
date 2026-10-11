@@ -159,13 +159,13 @@ func (g *Gateway) terminateOn(ctx context.Context, n *node, id string) error {
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
 		return readAPIError(resp)
 	}
-	if o, ok := g.store.OwnerOf(id); ok {
+	if o, ok, _ := g.store.OwnerOf(context.WithoutCancel(ctx), id); ok {
 		g.tombs.add(id, o)
 	}
 	if resp.StatusCode == http.StatusNoContent {
-		g.roomBack(n.cfg.Name, id)
+		g.roomBack(ctx, n.cfg.Name, id)
 	}
-	if err := g.store.ForgetSandbox(id); err != nil {
+	if err := g.store.ForgetSandbox(context.WithoutCancel(ctx), id); err != nil {
 		g.logf("drain: forgetting %s: %v", id, err)
 	}
 	g.metrics.terminated.Inc("drain")

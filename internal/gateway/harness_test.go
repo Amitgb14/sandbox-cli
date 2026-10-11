@@ -65,6 +65,8 @@ func startNodeWith(t *testing.T, name string, wrap func(*fake.Backend) backend.B
 	tn.reportAs.Store(&empty)
 	tn.be = fake.New(caps...)
 	pol := spec.DefaultPolicyFor(capSet(caps...))
+	// So a snapshot schedule runs within a test, not five minutes after it.
+	pol.Limits.MinSnapshotEverySecs = 1
 	var be backend.Backend = tn.be
 	if wrap != nil {
 		be = wrap(tn.be)
@@ -137,7 +139,9 @@ func (tn *testNode) status(w http.ResponseWriter, r *http.Request) {
 	var list api.SandboxList
 	tn.inner("/v1/sandboxes", &list)
 	st := api.NodeStatus{Node: *tn.reportAs.Load(), Version: "test", Capabilities: caps,
-		Capacity: tn.capacity, Free: tn.capacity, Cordoned: tn.cordoned.Load()}
+		Capacity: tn.capacity, Free: tn.capacity, Cordoned: tn.cordoned.Load(),
+		// What a sandboxd reports as built (server/node.go).
+		Images: tn.be.CachedImages()}
 	for _, sb := range list.Sandboxes {
 		if sb.State == api.StateTerminated {
 			continue
@@ -179,19 +183,15 @@ type testGateway struct {
 	t     *testing.T
 	g     *Gateway
 	ts    *httptest.Server
-	store *FileStore
+	store *testStore
 	nodes []*testNode
 	admin *api.Client
 }
 
 func startGateway(t *testing.T, mod func(*Config), nodes ...*testNode) *testGateway {
 	t.Helper()
-	st, err := OpenFileStore(filepath.Join(t.TempDir(), "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
-	cfg := Config{Store: st, PollInterval: 100 * time.Millisecond, FailAfter: 2, Logf: t.Logf}
+	st := newTestStore(t)
+	cfg := Config{Store: st.Store, JobsDir: filepath.Join(t.TempDir(), "jobs"), PollInterval: 100 * time.Millisecond, FailAfter: 2, Logf: t.Logf}
 	for _, n := range nodes {
 		cfg.StaticNodes = append(cfg.StaticNodes, n.config())
 	}

@@ -143,6 +143,11 @@ archives:
       sandbox-gateway_{{ .Version }}_linux_{{ .Arch }}
     files:
       - docs/fleet.md
+      - docs/ssh.md
+      - docs/organizations.md
+      - docs/jobs.md
+      - docs/services.md
+      - docs/operations.md
       - packaging/fleet/*
       - packaging/systemd/sandbox-gateway.service
 

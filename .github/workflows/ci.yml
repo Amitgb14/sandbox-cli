@@ -32,7 +32,9 @@ jobs:
   #   studio  studio/ (but not its Markdown), and anything Go under cmd/ or
   #           internal/ or the module files, because Studio's e2e suite runs
   #           the real sandbox-cli, sandboxd and sandbox-gateway;
-  #   web     web/;
+  #   web     web/, and the Markdown the site renders at /docs: docs/,
+  #           sdk/**/*.md and studio/README.md (web/src/lib/docs.ts), so a
+  #           doc whose link or anchor breaks fails the site's link check;
   #   sdks    sdk/, and the same Go, since the Python tests start a sandboxd.
   #
   # A push to main, a manual run, and a change to this file run everything.
@@ -62,7 +64,7 @@ jobs:
           {
             echo "go=$(echo "$files" | grep -Ev '^(studio/|web/|docs/|sdk/)|\.md$' | grep -q . && echo true || echo false)"
             echo "studio=$(echo "$files" | grep -E "^studio/|$gocode" | grep -Ev '\.md$' | grep -q . && echo true || echo false)"
-            echo "web=$(has '^web/')"
+            echo "web=$(has '^web/|^docs/|^sdk/.*\.md$|^studio/README\.md$')"
             echo "sdks=$(has "^sdk/|$gocode")"
           } | tee -a "$GITHUB_OUTPUT"
 
@@ -106,6 +108,37 @@ jobs:
       # fleet and studioapi) once -race on everything gets slow.
       - name: test -race
         run: go test -race ./...
+
+  # The gateway's tests again on PostgreSQL, which the check job runs on
+  # SQLite: every gateway test, plus what only PostgreSQL has — row-level
+  # security between tenants and a standby taking over (make test-postgres).
+  # Each test makes and drops a database of its own on the service.
+  postgres:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s
+          --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: test on PostgreSQL
+        env:
+          SANDBOX_TEST_POSTGRES_DSN: postgres://postgres:ci@127.0.0.1:5432/postgres?sslmode=disable
+        run: go test -count=1 ./internal/gateway/... ./cmd/sandbox-gateway/...
 
   # Compile every target the release actually ships. Kept a separate job so its
   # verdict is legible on its own: "the release would not build" is a different
@@ -176,7 +209,9 @@ jobs:
           go build -o bin/sandbox-gateway ./cmd/sandbox-gateway
           cd studio && npx playwright install --with-deps chromium && npm run test:e2e
 
-  # The site in web/: typecheck, lint, build.
+  # The site in web/: typecheck, lint, build. The build renders docs/ into
+  # /docs and then checks every internal link and anchor of the export
+  # (npm run check:docs, run by npm run build).
   web:
     needs: changes
     if: needs.changes.outputs.web == 'true'
@@ -190,7 +225,7 @@ jobs:
 
       - name: Web — typecheck, lint, build
         working-directory: web
-        run: npm ci --no-audit --no-fund && npx tsc --noEmit && npm run lint && npm run build
+        run: npm ci --no-audit --no-fund && npx tsc --noEmit && npm run lint && npm run test:waitlist && npm run build
 
   # The SDKs. Python at both ends of what it supports: 3.9 is what macOS still
   # ships as /usr/bin/python3, the interpreter somebody's agent script finds

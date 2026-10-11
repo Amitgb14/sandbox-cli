@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -200,7 +201,7 @@ func (s *FileStore) DeleteSecret(tenant, name string) error {
 
 // secretValues opens the named secrets of tenant, for one run. An error
 // names the secret, never its value.
-func (g *Gateway) secretValues(tenant string, names []string) (map[string]string, error) {
+func (g *Gateway) secretValues(ctx context.Context, tenant string, names []string) (map[string]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
@@ -209,7 +210,10 @@ func (g *Gateway) secretValues(tenant string, names []string) (map[string]string
 	}
 	out := make(map[string]string, len(names))
 	for _, name := range names {
-		sealed, ok := g.store.SealedSecret(tenant, name)
+		sealed, ok, err := g.store.SealedSecret(ctx, tenant, name)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			return nil, fmt.Errorf("secret %s does not exist", name)
 		}
@@ -223,6 +227,7 @@ func (g *Gateway) secretValues(tenant string, names []string) (map[string]string
 }
 
 func (g *Gateway) putSecret(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeSecretsWrite) {
 		return
 	}
@@ -247,7 +252,7 @@ func (g *Gateway) putSecret(w http.ResponseWriter, r *http.Request, p Principal)
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "a secret's value cannot hold a NUL byte: it becomes an environment variable")
 		return
 	}
-	if err := g.store.PutSecret(p.Tenant, name, g.sealer.seal([]byte(req.Value), secretAD(p.Tenant, name))); err != nil {
+	if err := g.storeFor(p).PutSecret(ctx, p.Tenant, name, g.sealer.seal([]byte(req.Value), secretAD(p.Tenant, name))); err != nil {
 		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
 		return
 	}
@@ -256,18 +261,25 @@ func (g *Gateway) putSecret(w http.ResponseWriter, r *http.Request, p Principal)
 }
 
 func (g *Gateway) listSecrets(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeRead) {
 		return
 	}
-	writeJSON(w, http.StatusOK, api.SecretList{Secrets: g.store.SecretsOf(p.Tenant)})
+	list, err := g.storeFor(p).SecretsOf(ctx, p.Tenant)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.SecretList{Secrets: list})
 }
 
 func (g *Gateway) deleteSecret(w http.ResponseWriter, r *http.Request, p Principal) {
+	ctx := r.Context()
 	if !need(w, p, ScopeSecretsWrite) {
 		return
 	}
 	name := r.PathValue("name")
-	if err := g.store.DeleteSecret(p.Tenant, name); err != nil {
+	if err := g.storeFor(p).DeleteSecret(ctx, p.Tenant, name); err != nil {
 		if errors.Is(err, ErrNoSuchSecret) {
 			writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such secret")
 			return

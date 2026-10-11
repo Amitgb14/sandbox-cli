@@ -36,12 +36,46 @@ type Spec struct {
 	// IdleTimeoutSecs is enforced by the server, not the backend; carried here
 	// so the resolved spec is the whole decision.
 	IdleTimeoutSecs int
+	// LifetimeSecs, like IdleTimeoutSecs, is the server's to enforce.
+	LifetimeSecs int
+	// SnapshotEverySecs and SnapshotKeep are the snapshot schedule, kept by
+	// the server like the idle timeout; carried for the same reason.
+	SnapshotEverySecs int
+	SnapshotKeep      int
 	// FromSnapshot, when set, starts the sandbox from a snapshot of another —
 	// memory, processes and disk as they were — instead of booting the image.
 	FromSnapshot string
 	// Volumes are mounted at their paths. The server has checked that each
 	// exists, is attached nowhere else, and that the paths are allowed.
 	Volumes []api.VolumeMount
+}
+
+// Keeper can leave its sandboxes running when sandboxd exits, and take back,
+// when the next sandboxd starts on the same state directory, the ones an
+// earlier one left. That is how sandboxd is upgraded or restarted without
+// interrupting the VMs it serves: their disks, memory and network carry on.
+// Their processes do not: the guest agent ends a process whose host
+// connection goes, so a restart ends every running command.
+//
+// A backend takes back only what it can prove is its own and unchanged: a VM
+// whose record it wrote, whose VMM is the same live process, and whose guest
+// agent answers. Anything else it finds is removed, as a backend that keeps
+// nothing removes everything.
+type Keeper interface {
+	// Kept lists the sandboxes this backend took back when it started, by id.
+	// The server pairs them with its own records and terminates any it has
+	// none for, so a VM is never served without the record that says whose
+	// it is.
+	Kept() map[string]Kept
+	// Detach lets go of every sandbox without stopping it: sandboxd is about
+	// to exit and a later one will take them back. Nothing may be called
+	// after it.
+	Detach()
+}
+
+// Kept is one sandbox a Keeper took back.
+type Kept struct {
+	Suspended bool
 }
 
 // VolumeStore keeps named volumes: filesystems that outlive the sandboxes they
@@ -60,6 +94,40 @@ type VolumeInfo struct {
 	CreatedAt time.Time
 }
 
+// ImageStore lets an operator manage the images a backend starts sandboxes
+// from, rather than only pulling one when a sandbox first asks for it: list
+// those ready, install one ahead of use (pull it, and build its root disk
+// where the backend has one), and remove one. What is installed survives a
+// restart of sandboxd; the backend's own storage is the record.
+type ImageStore interface {
+	Images(ctx context.Context) ([]ImageInfo, error)
+	// InstallImage makes ref ready to start sandboxes from, reporting how far
+	// it has got to progress, which may be nil. Installing one already
+	// installed checks it against the registry and is otherwise quick.
+	InstallImage(ctx context.Context, ref string, progress func(ImageProgress)) error
+	// RemoveImage removes ref and what only it needed, returning the bytes
+	// freed: ErrNotFound if it is not installed, ErrBusy if a sandbox
+	// running or suspended here starts from it.
+	RemoveImage(ctx context.Context, ref string) (int64, error)
+}
+
+// ImageInfo is one installed image.
+type ImageInfo struct {
+	Ref    string
+	Digest string // "" where the backend does not say
+	// Bytes is what it takes on the host — its root disk, on Linux — or 0
+	// where the backend does not say. Layers shared with other images are
+	// not counted.
+	Bytes       int64
+	InstalledAt time.Time // zero where the backend does not say
+}
+
+// ImageProgress is how far an install has got.
+type ImageProgress struct {
+	Phase       string // "pulling", then "building" where there is a disk to build
+	Done, Total int64  // bytes pulled of the image's total; 0 where unknown
+}
+
 // Suspender can stop a sandbox and bring it back later with its memory,
 // processes and disk exactly as they were, costing no CPU or memory meanwhile.
 type Suspender interface {
@@ -67,21 +135,57 @@ type Suspender interface {
 	Resume(ctx context.Context, id string) error
 }
 
-// Snapshotter can capture a running sandbox — memory and disk — without
-// stopping it, and start new sandboxes from the capture (Spec.FromSnapshot).
+// Snapshotter can capture a running sandbox without stopping it, and start
+// new sandboxes from the capture (Spec.FromSnapshot): memory and disk where
+// the backend has CapMemorySnapshot, the files only where it has
+// CapDiskSnapshot.
 type Snapshotter interface {
 	Snapshot(ctx context.Context, id, snapshotID string) (SnapshotInfo, error)
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
 }
 
+// SnapshotLister can say which snapshots it holds on disk, by id. A server
+// that keeps its records across a restart pairs them with its own and deletes
+// the rest: a snapshot no record names is one nobody can use or remove.
+type SnapshotLister interface {
+	StoredSnapshots() []string
+}
+
 // SnapshotInfo describes a capture.
 type SnapshotInfo struct {
-	ID       string
+	ID string
+	// Kind is api.SnapshotMemory or api.SnapshotDisk.
+	Kind     string
 	Bytes    int64 // on the host's disk
 	Image    string
 	CPUs     float64
 	MemoryMB int
 	DiskMB   int
+}
+
+// SnapshotProgress is what a Snapshotter reports as it goes: the phase
+// (api.SnapshotPhaseCapture, then api.SnapshotPhaseStore), the bytes read of
+// the sandbox, and an estimate of the total, 0 when there is none.
+type SnapshotProgress struct {
+	Phase          string
+	Bytes          int64
+	EstimatedBytes int64
+}
+
+type snapshotProgressKey struct{}
+
+// WithSnapshotProgress has Snapshot calls under ctx report to fn. A backend
+// that does not report leaves the caller with the phase it started in.
+func WithSnapshotProgress(ctx context.Context, fn func(SnapshotProgress)) context.Context {
+	return context.WithValue(ctx, snapshotProgressKey{}, fn)
+}
+
+// ReportSnapshotProgress is how a Snapshotter reports; without a listener it
+// does nothing.
+func ReportSnapshotProgress(ctx context.Context, p SnapshotProgress) {
+	if fn, ok := ctx.Value(snapshotProgressKey{}).(func(SnapshotProgress)); ok {
+		fn(p)
+	}
 }
 
 // ImageLister can say which images it already has a root disk for, so a
@@ -110,6 +214,20 @@ type ProcSpec struct {
 	// are then one stream, delivered on stdout.
 	Tty        bool
 	Rows, Cols uint16
+	// Keep keeps the process running when the server goes, under Session,
+	// an id the server chooses: a Reattacher takes it back after a restart.
+	// Only asked for by a server that keeps its sandboxes.
+	Keep    bool
+	Session string
+}
+
+// Reattacher can take back a process started with ProcSpec.Keep, after the
+// server that started it has gone: its output — what the sandbox kept of it,
+// then live — goes to stdout and stderr, and dropped, if not nil, is told how
+// many bytes from before that were not kept. A session the sandbox does not
+// hold is ErrNotFound.
+type Reattacher interface {
+	Reattach(ctx context.Context, id, session string, stdout, stderr io.Writer, dropped func(int64)) (Proc, error)
 }
 
 // Resizer is a Proc on a terminal whose size can change.
@@ -172,4 +290,26 @@ var (
 	ErrUnavailable = errors.New("backend unavailable")
 	ErrBusy        = errors.New("busy")
 	ErrUnsupported = errors.New("unsupported for this sandbox")
+	// ErrNoSpace: the host has too little free disk for what was asked. Its
+	// message may say how much is free and needed — sizes, never paths.
+	ErrNoSpace = errors.New("the host has too little free disk")
 )
+
+// Usage is a sandbox's resource use, as the host measures it.
+type Usage struct {
+	CPUUsec          int64 // CPU time used since the sandbox started, in microseconds
+	MemoryBytes      int64
+	MemoryLimitBytes int64
+	NetRxBytes       int64
+	NetTxBytes       int64
+	DiskReadBytes    int64
+	DiskWriteBytes   int64
+	Processes        int
+}
+
+// UsageReader can say how much of the host each of its running sandboxes is
+// using, from outside the guest. All at once: one reading per sample, however
+// many sandboxes there are.
+type UsageReader interface {
+	Usage(ctx context.Context) (map[string]Usage, error)
+}

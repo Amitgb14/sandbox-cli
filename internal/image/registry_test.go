@@ -60,6 +60,12 @@ func newRegistry(t *testing.T, arch string) (*registry, string, string) {
 func (r *registry) handler(host *string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/token" {
+			// As ghcr.io does: no anonymous token for a repository that is
+			// not served here, whether private or misspelt.
+			if req.URL.Query().Get("scope") != "repository:team/app:pull" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			r.tokens.Add(1)
 			json.NewEncoder(w).Encode(map[string]string{"token": "t0k"})
 			return
@@ -197,6 +203,20 @@ func TestPullByDigestMustMatch(t *testing.T) {
 	}
 }
 
+func TestPullNamesAnImageTheRegistryWillNotServe(t *testing.T) {
+	r, _, _ := newRegistry(t, "amd64")
+	p, host := puller(t, r)
+	_, err := p.Pull(context.Background(), host+"/team/ap:1.0")
+	if err == nil {
+		t.Fatal("pulled a repository the registry does not serve")
+	}
+	for _, want := range []string{host + "/team/ap", "403", "no such image, or it is private"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to say %q", err, want)
+		}
+	}
+}
+
 func TestPullRefusesAMissingPlatform(t *testing.T) {
 	r, _, _ := newRegistry(t, "arm64")
 	p, host := puller(t, r)
@@ -232,6 +252,18 @@ func TestBuildRootFS(t *testing.T) {
 	fs3, err := BuildRootFS(context.Background(), p, host+"/team/app:1.0", agent, dir)
 	if err != nil || fs3.Path == fs1.Path {
 		t.Fatalf("a changed guest agent reused the old disk: %v", err)
+	}
+	// The old agent's disk is what an upgrade leaves behind: pruning removes
+	// it and keeps the one this agent uses.
+	n, _, err := PruneRootFS(dir, agent, nil)
+	if err != nil || n != 1 {
+		t.Fatalf("prune: removed %d, %v", n, err)
+	}
+	if _, err := os.Stat(fs1.Path); !os.IsNotExist(err) {
+		t.Fatalf("the old agent's disk survived the prune: %v", err)
+	}
+	if _, err := os.Stat(fs3.Path); err != nil {
+		t.Fatalf("the current agent's disk was pruned: %v", err)
 	}
 }
 

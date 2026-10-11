@@ -24,6 +24,8 @@ package macos
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +50,29 @@ const AgentDir = "/.sbx"
 // remove what an earlier sandboxd left behind — and touch nothing else.
 const LabelManaged = "sbx.managed"
 
+// LabelOwner says which sandboxd created a container: Owner of its state
+// directory. The runtime is one per Mac and shared, so "managed" alone was
+// every sandboxd's: one starting removed the running sandboxes of another —
+// a dev build beside the launch agent, or either restarted by launchd.
+const LabelOwner = "sbx.owner"
+
+// Owner is the owner label of the sandboxd whose state directory is dir: the
+// same across its restarts, different for any other on the Mac. A hash, so a
+// path is not published in every `container ls`. Two spellings of one
+// directory (a symlink) make two owners, and each leaves the other's leftovers
+// alone, which errs toward a leak rather than a removal.
+func Owner(stateDir string) (string, error) {
+	dir, err := filepath.Abs(stateDir)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = real
+	}
+	sum := sha256.Sum256([]byte(dir))
+	return hex.EncodeToString(sum[:8]), nil
+}
+
 // Config is how this Mac runs sandboxes.
 type Config struct {
 	Container string // the `container` CLI
@@ -54,15 +80,30 @@ type Config struct {
 	// read-only into every sandbox.
 	Agent string
 	Logf  func(format string, a ...any)
+	// Owner labels every sandbox this backend creates, and it removes
+	// leftovers carrying it alone (Owner). Required: without it, a restart
+	// could only remove every sandboxd's sandboxes or none.
+	Owner string
 	// BootTimeout bounds how long a create waits for the guest agent.
 	BootTimeout time.Duration
+	// ScratchDir holds a snapshot's archive while it is made: the size of
+	// the sandbox's files, for the minute it takes to load. Empty is the
+	// system's temporary directory.
+	ScratchDir string
+	// FreeBytes reports the free space of the filesystem holding a
+	// directory; nil is the real one (statfs). A test stands in a full disk.
+	FreeBytes func(dir string) (int64, error)
 }
 
 // Backend runs sandboxes with the `container` runtime.
 type Backend struct {
-	cfg Config
-	mu  sync.Mutex
-	ids map[string]bool
+	cfg   Config
+	mu    sync.Mutex
+	specs map[string]backend.Spec // the sandboxes this backend started
+	snaps map[string]string       // snapshot id -> the image it is
+	// images is the runtime's image list as last read, at imagesAt.
+	images   []string
+	imagesAt time.Time
 }
 
 // New checks the CLI is there and removes sandboxes an earlier sandboxd left.
@@ -72,6 +113,9 @@ func New(cfg Config) (*Backend, error) {
 		return nil, fmt.Errorf("macos backend: the container CLI: %w", err)
 	}
 	cfg.Container = bin
+	if cfg.Owner == "" {
+		return nil, errors.New("macos backend: no owner: the label that tells this sandboxd's sandboxes from another's")
+	}
 	if _, err := os.Stat(cfg.Agent); err != nil {
 		return nil, fmt.Errorf("macos backend: guest agent: %w", err)
 	}
@@ -81,8 +125,17 @@ func New(cfg Config) (*Backend, error) {
 	if cfg.BootTimeout == 0 {
 		cfg.BootTimeout = 60 * time.Second
 	}
-	b := &Backend{cfg: cfg, ids: map[string]bool{}}
+	if cfg.FreeBytes == nil {
+		cfg.FreeBytes = freeBytes
+	}
+	if cfg.ScratchDir != "" {
+		if err := os.MkdirAll(cfg.ScratchDir, 0o700); err != nil {
+			return nil, fmt.Errorf("macos backend: scratch directory: %w", err)
+		}
+	}
+	b := &Backend{cfg: cfg, specs: map[string]backend.Spec{}, snaps: map[string]string{}}
 	b.reapLeftovers()
+	b.reapSnapshots()
 	return b, nil
 }
 
@@ -92,13 +145,16 @@ func (b *Backend) Capabilities() map[string]bool {
 	return map[string]bool{
 		api.CapEgressOpen: true,
 		api.CapTunnel:     true,
+		// The files only (snapshot.go): the runtime cannot capture memory.
+		api.CapDiskSnapshot: true,
 	}
 }
 
 // BuildRunArgs is the `container run` argument list for a sandbox: a pure
-// function of the resolved spec and the host's agent directory. The agent is
-// mounted read-only, and it is the only host path a sandbox ever sees.
-func BuildRunArgs(s backend.Spec, agentDir string) ([]string, error) {
+// function of the resolved spec, the host's agent directory and the owner
+// label. The agent is mounted read-only, and it is the only host path a
+// sandbox ever sees.
+func BuildRunArgs(s backend.Spec, agentDir, owner string) ([]string, error) {
 	if s.Network.Mode == api.NetworkAllowlist {
 		return nil, errors.New("the macos backend cannot enforce an egress allowlist")
 	}
@@ -110,6 +166,7 @@ func BuildRunArgs(s backend.Spec, agentDir string) ([]string, error) {
 		"run", "--detach",
 		"--name", s.ID,
 		"--label", LabelManaged + "=1",
+		"--label", LabelOwner + "=" + owner,
 		"--cpus", fmt.Sprint(cpus),
 		"--memory", fmt.Sprintf("%dM", s.MemoryMB),
 		"--mount", "type=bind,source=" + agentDir + ",target=" + AgentDir + ",readonly",
@@ -149,9 +206,18 @@ func (b *Backend) reapLeftovers() {
 		return
 	}
 	for _, c := range list {
-		if c.Configuration.Labels[LabelManaged] == "1" {
+		labels := c.Configuration.Labels
+		if labels[LabelManaged] != "1" {
+			continue
+		}
+		switch labels[LabelOwner] {
+		case b.cfg.Owner:
 			_, _ = b.cli(context.Background(), "rm", "--force", c.Configuration.ID)
 			b.cfg.Logf("removed a sandbox left by an earlier run: %s", c.Configuration.ID)
+		case "":
+			// Made before sandboxes carried an owner: perhaps by a sandboxd
+			// still running. Say so, and leave it to whoever knows.
+			b.cfg.Logf("left alone: %s, a sandbox from a build without owner labels; `container rm --force %s` if nothing uses it", c.Configuration.ID, c.Configuration.ID)
 		}
 	}
 }
@@ -165,7 +231,7 @@ func (b *Backend) client(id string) *guestproto.Client {
 func (b *Backend) known(id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.ids[id] {
+	if _, ok := b.specs[id]; !ok {
 		return backend.ErrNotFound
 	}
 	return nil
@@ -173,7 +239,17 @@ func (b *Backend) known(id string) error {
 
 // Create starts the sandbox and waits for the guest agent to answer.
 func (b *Backend) Create(ctx context.Context, s backend.Spec) error {
-	args, err := BuildRunArgs(s, filepath.Dir(b.cfg.Agent))
+	run := s
+	if s.FromSnapshot != "" {
+		// A disk snapshot is an image of the files: the fork runs it, with
+		// the original's image kept in the record for what it was made from.
+		ref, err := b.snapshotImage(s.FromSnapshot)
+		if err != nil {
+			return backend.ErrNotFound
+		}
+		run.Image = ref
+	}
+	args, err := BuildRunArgs(run, filepath.Dir(b.cfg.Agent), b.cfg.Owner)
 	if err != nil {
 		return err
 	}
@@ -190,7 +266,7 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) error {
 	}
 	b.cfg.Logf("sandbox %s: ready in %v", s.ID, time.Since(t0).Round(time.Millisecond))
 	b.mu.Lock()
-	b.ids[s.ID] = true
+	b.specs[s.ID] = s
 	b.mu.Unlock()
 	return nil
 }
@@ -201,8 +277,8 @@ func (b *Backend) UpdateNetwork(context.Context, string, api.NetworkPolicy) erro
 
 func (b *Backend) Terminate(ctx context.Context, id string) error {
 	b.mu.Lock()
-	known := b.ids[id]
-	delete(b.ids, id)
+	_, known := b.specs[id]
+	delete(b.specs, id)
 	b.mu.Unlock()
 	if !known {
 		return nil
@@ -214,8 +290,8 @@ func (b *Backend) Terminate(ctx context.Context, id string) error {
 // Close removes every sandbox this backend started.
 func (b *Backend) Close() {
 	b.mu.Lock()
-	ids := make([]string, 0, len(b.ids))
-	for id := range b.ids {
+	ids := make([]string, 0, len(b.specs))
+	for id := range b.specs {
 		ids = append(ids, id)
 	}
 	b.mu.Unlock()
@@ -362,4 +438,47 @@ func (b *Backend) DialGuest(ctx context.Context, id string, port int) (io.ReadWr
 	}
 	conn, err := b.client(id).DialPort(ctx, port)
 	return conn, mapErr(err)
+}
+
+// CachedImages is backend.ImageLister: the images the runtime already holds,
+// which a sandbox starts from without a pull. Any of them runs here — the guest
+// agent is mounted in from the host, not looked for in the image — so all are
+// listed, but for snapshots, which are named sbx-snapshot/… and started from as
+// snapshots, not as images. Read at most every 30 seconds: the server asks on
+// every node status, and each read is a run of the container CLI.
+func (b *Backend) CachedImages() []string {
+	b.mu.Lock()
+	if !b.imagesAt.IsZero() && time.Since(b.imagesAt) < 30*time.Second {
+		out := b.images
+		b.mu.Unlock()
+		return out
+	}
+	b.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := b.cli(ctx, "image", "ls", "--format", "json")
+	if err != nil {
+		return nil
+	}
+	var list []struct {
+		Configuration struct {
+			Name string `json:"name"`
+		} `json:"configuration"`
+	}
+	if json.Unmarshal([]byte(out), &list) != nil {
+		return nil
+	}
+	images := []string{}
+	for _, img := range list {
+		name := img.Configuration.Name
+		if name == "" || strings.HasPrefix(name, "sbx-snapshot/") || strings.Contains(name, "/sbx-snapshot/") {
+			continue
+		}
+		images = append(images, name)
+	}
+	sort.Strings(images)
+	b.mu.Lock()
+	b.images, b.imagesAt = images, time.Now()
+	b.mu.Unlock()
+	return images
 }

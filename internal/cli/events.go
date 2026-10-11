@@ -89,6 +89,18 @@ func eventDetail(ev api.Event) string {
 		if ev.Network != nil {
 			add("network %s", networkSummary(*ev.Network))
 		}
+	case api.EventSandboxUpdated:
+		// Each changed field after the change; a name or labels removed
+		// leave nothing to show.
+		if ev.Name != "" {
+			add("name %s", termsafe.Clean(ev.Name))
+		}
+		if len(ev.Labels) > 0 {
+			add("labels %s", formatLabels(ev.Labels))
+		}
+		if ev.IdleTimeoutSecs != nil {
+			add("idle %s", idleText(*ev.IdleTimeoutSecs))
+		}
 	case api.EventProcessStarted:
 		add("pid %d", ev.PID)
 		add("%s", termsafe.Clean(ev.Program))

@@ -16,9 +16,16 @@ import { useInfo } from "@/lib/api/queries";
  */
 export function TokenGate() {
   const { error } = useInfo();
+  // Hosted, there is no token to paste: the sign-in page (HostedSignIn)
+  // takes the place of everything when the session ends.
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on") return null;
+  if (!(error instanceof ApiError) || error.status !== 401) return null;
+  return <PasteToken />;
+}
+
+function PasteToken() {
   const qc = useQueryClient();
   const [value, setValue] = useState("");
-  if (!(error instanceof ApiError) || error.status !== 401) return null;
   return (
     <div className="mx-4 mt-4 flex flex-col gap-3 rounded-lg border border-caution/40 bg-caution/10 p-4 md:mx-8">
       <div className="flex items-center gap-2 text-sm font-medium">

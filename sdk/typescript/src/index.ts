@@ -31,6 +31,9 @@ export interface Sandbox {
   network: NetworkPolicy;
   created_at: string;
   idle_timeout_secs: number;
+  /** The snapshot schedule, when it has one. */
+  snapshot_every_secs?: number;
+  snapshot_keep?: number;
   labels?: Record<string, string>;
 }
 
@@ -44,6 +47,9 @@ export interface CreateSandboxRequest {
   network?: NetworkPolicy;
   idle_timeout_secs?: number;
   snapshot_id?: string;
+  /** Snapshot the sandbox this often while it runs, keeping the newest `snapshot_keep` (default 1); within the server's limits. */
+  snapshot_every_secs?: number;
+  snapshot_keep?: number;
   /** Your own metadata: returned with the sandbox, filters `sandboxes()`, recorded in its audit events. */
   labels?: Record<string, string>;
   /** Named volumes to mount (capability `volumes`); one live sandbox at a time. */
@@ -126,6 +132,10 @@ export interface Snapshot {
   id: string;
   sandbox: string;
   image: string;
+  /** "memory": memory, processes and disk; "disk": the files only, a fork boots afresh. */
+  kind: "memory" | "disk";
+  /** Taken by the sandbox's schedule, which may remove it. */
+  scheduled?: boolean;
   bytes: number;
   created_at: string;
 }
@@ -201,6 +211,8 @@ export interface SSHAccess {
 export interface JobSpec {
   name?: string;
   image?: string;
+  /** Your own metadata, returned with the job; bounded as a sandbox's labels are. */
+  labels?: Record<string, string>;
   /** The argv each run starts; or `agent` and `prompt` (or `prompts`, one run each). */
   command?: string[];
   agent?: string;
@@ -268,7 +280,7 @@ export interface SecretInfo {
   updated_at: string;
 }
 
-/** What POST /v1/services and PUT /v1/services/{name} send (docs/fleet.md, "Services"). */
+/** What POST /v1/services and PUT /v1/services/{name} send (docs/services.md). */
 export interface ServiceSpec {
   /** A DNS label with no "--"; unique within the tenant. */
   name: string;
@@ -481,6 +493,20 @@ export class Client {
     return this.json("PATCH", this.sbx(ref), { network });
   }
 
+  /**
+   * Changes a live sandbox; only what is given changes. `name: ""` removes
+   * the name; `labels` replaces them whole (`{}` removes them);
+   * `idle_timeout_secs` is within `limits.max_idle_timeout_secs`, 0 (never)
+   * only where that is 0. `network` needs a running sandbox and capability
+   * `network_policy_update`. A request with one bad field changes nothing.
+   */
+  updateSandbox(
+    ref: string,
+    req: { name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; network?: NetworkPolicy },
+  ): Promise<Sandbox> {
+    return this.json("PATCH", this.sbx(ref), req);
+  }
+
   async terminateSandbox(ref: string): Promise<void> {
     await this.json("DELETE", this.sbx(ref));
   }
@@ -495,6 +521,11 @@ export class Client {
 
   createSnapshot(ref: string): Promise<Snapshot> {
     return this.json("POST", this.sbx(ref) + "/snapshots");
+  }
+
+  /** Snapshot a running sandbox every `everySecs`, keeping the newest `keep`; 0 stops it. */
+  setSnapshotSchedule(ref: string, everySecs: number, keep = 0): Promise<Sandbox> {
+    return this.json("PUT", this.sbx(ref) + "/snapshot-schedule", { every_secs: everySecs, keep });
   }
 
   async snapshots(): Promise<Snapshot[]> {

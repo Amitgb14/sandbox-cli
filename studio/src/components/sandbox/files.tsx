@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ChevronRight, File, Folder } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { authHeaders } from "@/lib/api/client";
-import { useDir } from "@/lib/api/queries";
+import { FILES_TIMEOUT_MS, noAnswer, useDir } from "@/lib/api/queries";
 import { formatBytes } from "@/lib/format";
 
 /**
@@ -18,7 +18,7 @@ const MAX_PREVIEW = 512 << 10;
 export function SandboxFiles({ sandbox }: { sandbox: string }) {
   const [path, setPath] = useState("/sandbox/home");
   const [preview, setPreview] = useState<{ path: string; text: string } | null>(null);
-  const { data, error, isLoading } = useDir(sandbox, path);
+  const { data, error, isLoading, refetch, isFetching } = useDir(sandbox, path);
   const parts = path.split("/").filter(Boolean);
 
   async function open(file: string, size: number) {
@@ -26,12 +26,24 @@ export function SandboxFiles({ sandbox }: { sandbox: string }) {
       setPreview({ path: file, text: `(${formatBytes(size)} — too large to preview here)` });
       return;
     }
-    const resp = await fetch(`/api/v1/sandboxes/${encodeURIComponent(sandbox)}/files?path=${encodeURIComponent(file)}`, {
-      headers: authHeaders(),
-    });
-    const buf = new Uint8Array(await resp.arrayBuffer());
-    const binary = buf.subarray(0, 8000).includes(0);
-    setPreview({ path: file, text: binary ? "(binary)" : new TextDecoder().decode(buf) });
+    setPreview({ path: file, text: "reading…" });
+    try {
+      const resp = await fetch(`/api/v1/sandboxes/${encodeURIComponent(sandbox)}/files?path=${encodeURIComponent(file)}`, {
+        headers: authHeaders(),
+        signal: AbortSignal.timeout(FILES_TIMEOUT_MS),
+      });
+      if (!resp.ok) {
+        // The body is an error, not the file: shown as one.
+        const body = (await resp.json().catch(() => null)) as { error?: { message?: string } } | null;
+        setPreview({ path: file, text: `(could not read it: ${body?.error?.message ?? resp.statusText})` });
+        return;
+      }
+      const buf = new Uint8Array(await resp.arrayBuffer());
+      const binary = buf.subarray(0, 8000).includes(0);
+      setPreview({ path: file, text: binary ? "(binary)" : new TextDecoder().decode(buf) });
+    } catch (e) {
+      setPreview({ path: file, text: `(${noAnswer(e).message})` });
+    }
   }
 
   return (
@@ -49,7 +61,14 @@ export function SandboxFiles({ sandbox }: { sandbox: string }) {
           ))}
         </div>
         {isLoading ? <p className="text-xs text-muted-foreground">reading…</p> : null}
-        {error ? <p className="text-xs text-destructive">{error.message}</p> : null}
+        {error ? (
+          <p className="flex flex-wrap items-center gap-2 text-xs text-destructive">
+            {error.message}
+            <Button variant="outline" size="sm" className="h-6 text-xs" disabled={isFetching} onClick={() => refetch()}>
+              Retry
+            </Button>
+          </p>
+        ) : null}
         <ul className="flex max-h-[28rem] flex-col overflow-auto text-sm">
           {path !== "/" && (
             <li>

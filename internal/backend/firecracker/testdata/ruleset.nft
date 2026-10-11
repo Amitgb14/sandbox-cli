@@ -5,16 +5,16 @@ table inet sandboxd {
 	chain prerouting {
 		type nat hook prerouting priority dstnat; policy accept;
 		iifname "sbx*" ip saddr @egress_on tcp dport { 80, 443 } redirect to :3128
-		iifname "sbx*" ip saddr @egress_on udp dport 53 redirect to :5353
+		iifname "sbx*" ip saddr @egress_on udp dport 53 redirect to :7353
 	}
 	chain input {
 		type filter hook input priority filter; policy accept;
 		iifname "sbx*" ct state established,related accept
 		iifname "sbx*" ct status dnat tcp dport 3128 accept
-		iifname "sbx*" ct status dnat udp dport 5353 accept
+		iifname "sbx*" ct status dnat udp dport 7353 accept
 		iifname "sbx*" counter drop
 		tcp dport 3128 counter drop
-		udp dport 5353 counter drop
+		udp dport 7353 counter drop
 	}
 	chain forward {
 		type filter hook forward priority filter; policy accept;

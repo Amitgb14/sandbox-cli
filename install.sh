@@ -228,6 +228,16 @@ fetch "${BASE}/${ARCHIVE}" "$TMP/$ARCHIVE" || die "download failed: ${BASE}/${AR
   If the repository is private, pass --token or set GITHUB_TOKEN."
 verify "$TMP/$ARCHIVE"
 
+# server_guide: the page that says how to install and start sandboxd on this OS.
+# The pre-rewrite refusal and the closing message both point at it, so someone
+# told to build from source also learns the steps after the build.
+server_guide() {
+  case "$OS" in
+    darwin) echo "docs/local-macos.md" ;;
+    *)      echo "docs/self-hosting.md  (also needs firecracker and a guest kernel)" ;;
+  esac
+}
+
 # ---- check everything, then install ------------------------------------------
 # Every binary is extracted and verified before any is installed. Installing the
 # client and then finding the server missing left a half-install behind, and on
@@ -249,6 +259,8 @@ if [ "$WITH_SERVER" = 1 ]; then
   container-based release, and nothing was installed.
   Install a release that has it (--version), or build the current one from source:
     git clone https://github.com/${REPO} && cd sandbox-cli && make build
+  then install and start it as its guide says:
+    https://github.com/${REPO}/blob/main/$(server_guide)
   --client-only installs this release's client alone."
   fi
   GARCHIVE="${GUEST}_${VERSION}_linux_${ARCH}.tar.gz"
@@ -379,11 +391,7 @@ fi
 # sandboxd is installed, not started: how it runs is the machine's business
 # (a launch agent, a systemd unit) and each guide says how.
 if [ "$WITH_SERVER" = 1 ]; then
-  case "$OS" in
-    darwin) guide="docs/local-macos.md" ;;
-    *)      guide="docs/self-hosting.md  (also needs firecracker and a guest kernel)" ;;
-  esac
-  info "Start sandboxd: https://github.com/${REPO}/blob/main/${guide}"
+  info "Start sandboxd: https://github.com/${REPO}/blob/main/$(server_guide)"
 else
   info "This machine runs the client only. Point it at a sandboxd:"
   info "  ${BINARY} context add NAME https://HOST:PORT --token-file FILE --ca CA.pem"

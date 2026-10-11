@@ -11,6 +11,10 @@ sandbox-cli studio          # prints http://127.0.0.1:7080/#token=…
 Next.js 15 (App Router) · TypeScript · Tailwind CSS 4 · shadcn/ui (on Radix) ·
 TanStack Query · Zustand · xterm.js. Dark by default.
 
+This is the developer's page. What each screen does for a user, how scopes
+decide them on a gateway, organizations and the hosted build are in
+[docs/studio.md](../docs/studio.md), which the website renders too.
+
 ## How it is served
 
 Studio is a **static export embedded in `sandbox-cli`** (`internal/studio`).
@@ -22,6 +26,7 @@ from the same origin:
 | `/` and every route | this app, as files (`out/`) |
 | `/api/v1/…` | sandboxd's API, proxied to the current context with that sandboxd's token; the browser never holds it |
 | `/api/ws/attach` | a WebSocket bridge to a process's terminal |
+| `/api/ws/desktop` | a WebSocket bridge to a sandbox's desktop: its VNC port (5900) only, binary frames, drawn by the bundled noVNC ([docs/desktop.md](../docs/desktop.md)) |
 | `/api/info`, `/api/agents`, `/api/agents/state` | the context and version, the agents and their saved logins, and each agent's state |
 | `POST /api/runs` | launching a run, through the same code the CLI uses |
 
@@ -73,7 +78,7 @@ API goes in the main one.
 
 | Route | Screen |
 |---|---|
-| `/` (also `/sandboxes`), `/sandbox?id=` | Home: every sandbox, searched and filtered by state, with what each was given and a menu to open, copy or terminate it; a first-run panel with code when there are none. One sandbox's overview, terminal (Terminal opens a shell in it, as `sandbox-cli shell` does), logs, files and events |
+| `/` (also `/sandboxes`), `/sandbox?id=` | Home: a strip of what sandboxes were given (`GET /v1/node` where offered), then every sandbox, searched, filtered by state, sorted, paged and selectable, with what each was given; a row opens its details in a panel (`components/sandbox/details.tsx`), which is also the page at `/sandbox?id=` — overview, terminal (Terminal opens a shell in it, as `sandbox-cli shell` does), logs, files and events, two panes when wide; a first-run panel with code when there are none |
 | `/launch` | The Playground: a command, an unattended agent or an agent's console, starting in `/sandbox/home`, with the same command run written as CLI, curl, Python and TypeScript beside the form |
 | `/snapshots` | Sandboxes captured whole, to start new ones from; delete one |
 | `/agents`, `/volumes`, `/settings` | The agents Studio runs (those with a verified headless mode) and their logins; volumes; the context |
@@ -82,7 +87,7 @@ API goes in the main one.
 
 On load Studio asks `GET /v1/whoami` (`src/lib/caller.ts`). A plain sandboxd
 answers 404 and gets the screens above and nothing else. A gateway answers with
-the key's scopes, which decide the rest ([docs/fleet.md](../docs/fleet.md#studio)):
+the key's scopes, which decide the rest ([docs/studio.md](../docs/studio.md#scopes-and-screens)):
 
 | Route | Screen | Shown to |
 |---|---|---|

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The desktop's right-click menu: what a sandbox desktop is for. -->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="Sandbox">
+    <item label="Terminal"><action name="Execute"><command>xterm</command></action></item>
+    <item label="Browser"><action name="Execute"><command>chromium</command></action></item>
+  </menu>
+</openbox_menu>

@@ -12,14 +12,17 @@ import { formatBytes, formatRelative } from "@/lib/format";
 import { useCan } from "@/lib/caller";
 
 /**
- * Snapshots: a sandbox's memory, processes and disk, captured so new
- * sandboxes start from that moment instead of from the image — the template
- * every hosted sandbox product has under some name. Taken from a running
- * sandbox's page; started from with --from-snapshot.
+ * Snapshots: a sandbox captured so new sandboxes start from it instead of from
+ * the image — whole (memory, processes and disk) where the backend can, its
+ * files only where it can capture no more (the macOS backend). Taken from a
+ * running sandbox's panel; started from in the Playground or with
+ * --from-snapshot.
  */
+const KIND = { memory: "Whole machine", disk: "Files only" } as const;
 export default function SnapshotsPage() {
   const { data: info } = useInfo();
-  const can = info?.capabilities?.capabilities?.memory_snapshot;
+  const caps = info?.capabilities?.capabilities;
+  const can = caps ? !!(caps.memory_snapshot || caps.disk_snapshot) : undefined;
   const { data, isLoading, error } = useSnapshots(can !== false);
   const del = useDeleteSnapshot();
   const allows = useCan();
@@ -29,13 +32,17 @@ export default function SnapshotsPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Snapshots"
-        description="A running sandbox captured whole — memory, processes and disk — so new sandboxes start from that moment. Take one from a sandbox's page."
+        description={
+          caps?.memory_snapshot
+            ? "A running sandbox captured whole — memory, processes and disk — so new sandboxes start from that moment. Take one from a sandbox's panel."
+            : "A running sandbox's files, captured so new sandboxes start from them. What was running is not kept: a sandbox started from one boots afresh. Take one from a sandbox's panel."
+        }
       />
       {can === false ? (
         <EmptyState
           icon={Camera}
           title="This sandboxd cannot take snapshots"
-          description="Its backend does not offer memory snapshots (capability memory_snapshot), so a request for one is refused rather than served without it."
+          description="Its backend captures neither a whole sandbox (memory_snapshot) nor its files (disk_snapshot), so a request for a snapshot is refused rather than served without it."
         />
       ) : error ? (
         <p className="text-sm text-destructive">{error.message}</p>
@@ -51,6 +58,7 @@ export default function SnapshotsPage() {
             <TableRow>
               <TableHead>Snapshot</TableHead>
               <TableHead>From sandbox</TableHead>
+              <TableHead>Kind</TableHead>
               <TableHead>Image</TableHead>
               <TableHead className="text-right">Size</TableHead>
               <TableHead className="text-right">Taken</TableHead>
@@ -62,6 +70,7 @@ export default function SnapshotsPage() {
               <TableRow key={s.id}>
                 <TableCell className="font-mono text-xs">{s.id}</TableCell>
                 <TableCell className="font-mono text-xs text-muted-foreground">{s.sandbox}</TableCell>
+                <TableCell className="text-xs whitespace-nowrap">{KIND[s.kind ?? "memory"]}</TableCell>
                 <TableCell className="max-w-48 truncate font-mono text-xs" title={s.image}>
                   {s.image}
                 </TableCell>

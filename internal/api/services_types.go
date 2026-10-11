@@ -2,7 +2,7 @@ package api
 
 import "time"
 
-// Services are a gateway's (docs/fleet.md, "Services"): a sandbox spec and a
+// Services are a gateway's (docs/services.md): a sandbox spec and a
 // count the gateway keeps true, with health checks, rolling updates and an
 // HTTP router in front. A plain sandboxd answers every /v1/services endpoint
 // 404.

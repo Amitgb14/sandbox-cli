@@ -101,7 +101,11 @@ func DefaultPolicy() Policy {
 		DefaultMemoryMB: 1024,
 		DefaultDiskMB:   10240,
 		DefaultIdleSecs: 1800,
-		Limits:          api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400, MaxIdleTimeoutSecs: 7 * 24 * 3600},
+		// A scheduled snapshot is a copy of the sandbox on the host's disk —
+		// about 2 GB of the base image on macOS — so how often, and how many,
+		// is the operator's to bound.
+		Limits: api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400, MaxIdleTimeoutSecs: 7 * 24 * 3600,
+			MinSnapshotEverySecs: 300, MaxSnapshotKeep: 5},
 		Network: NetworkPolicy{
 			Default:  api.NetworkPolicy{Mode: api.NetworkOpen},
 			Ceiling:  api.NetworkOpen,
@@ -126,6 +130,9 @@ func (p Policy) Validate() error {
 	}
 	if api.NetworkRank(p.Network.Ceiling) < 0 {
 		return fmt.Errorf("policy: network ceiling %q is not a mode", p.Network.Ceiling)
+	}
+	if p.Limits.MaxLifetimeSecs < 0 {
+		return fmt.Errorf("policy: max_lifetime_secs must not be negative")
 	}
 	// The default must itself be a request the policy would grant, or a client
 	// that sends nothing would get more than one that asked politely.
@@ -155,6 +162,10 @@ func (p Policy) Validate() error {
 		p.DefaultMemoryMB <= 0 || p.DefaultMemoryMB > p.Limits.MaxMemoryMB ||
 		p.DefaultDiskMB <= 0 || p.DefaultDiskMB > p.Limits.MaxDiskMB {
 		return fmt.Errorf("policy: default resources must be positive and within the limits")
+	}
+	// Under a second, a schedule is a sandbox being copied continuously.
+	if p.Limits.MinSnapshotEverySecs < 1 || p.Limits.MaxSnapshotKeep < 0 {
+		return fmt.Errorf("policy: limits.min_snapshot_every_secs must be at least 1, and limits.max_snapshot_keep not negative")
 	}
 	return nil
 }
@@ -245,6 +256,27 @@ func ValidID(s string) bool { return idRE.MatchString(s) }
 // ValidName reports whether s is a legal sandbox name.
 func ValidName(s string) bool { return nameRE.MatchString(s) }
 
+// CheckImage is the rule an image a request names is held to, whether a
+// sandbox is created from it or it is installed ahead of one: a reference,
+// and one the policy's images list permits where it has one.
+func CheckImage(img string, pol Policy) error {
+	if !imageRE.MatchString(img) {
+		return invalid("image %q is not an image reference", img)
+	}
+	if len(pol.Images) > 0 && !contains(pol.Images, img) {
+		return refused("image %q is not one this server permits", img)
+	}
+	return nil
+}
+
+// CheckName is ValidName as the error a request gets; "" (no name) passes.
+func CheckName(name string) error {
+	if name != "" && !ValidName(name) {
+		return invalid("name %q: lowercase letters, digits and dashes, starting with a letter or digit, at most 63", name)
+	}
+	return nil
+}
+
 // MaxVolumeMounts bounds one sandbox's volumes.
 const MaxVolumeMounts = 8
 
@@ -326,8 +358,8 @@ func ValidateLabels(labels map[string]string) error {
 
 // Resolve turns a create request into a backend.Spec with the given id.
 func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec, error) {
-	if req.Name != "" && !ValidName(req.Name) {
-		return backend.Spec{}, invalid("name %q: lowercase letters, digits and dashes, starting with a letter or digit, at most 63", req.Name)
+	if err := CheckName(req.Name); err != nil {
+		return backend.Spec{}, err
 	}
 	if err := ValidateLabels(req.Labels); err != nil {
 		return backend.Spec{}, err
@@ -340,11 +372,8 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 	if img == "" {
 		img = pol.DefaultImage
 	}
-	if !imageRE.MatchString(img) {
-		return backend.Spec{}, invalid("image %q is not an image reference", img)
-	}
-	if len(pol.Images) > 0 && !contains(pol.Images, img) {
-		return backend.Spec{}, refused("image %q is not one this server permits", img)
+	if err := CheckImage(img, pol); err != nil {
+		return backend.Spec{}, err
 	}
 
 	s := backend.Spec{ID: id, Image: img, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
@@ -377,6 +406,26 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 	default:
 		s.IdleTimeoutSecs = idle
 	}
+
+	// A lifetime may only be shortened by a request: where the operator set
+	// one, a request without one gets it, and one asking for longer is
+	// refused rather than clamped.
+	switch life, max := req.LifetimeSecs, pol.Limits.MaxLifetimeSecs; {
+	case life < 0:
+		return backend.Spec{}, invalid("lifetime_secs must not be negative")
+	case life == 0:
+		s.LifetimeSecs = max
+	case max > 0 && life > max:
+		return backend.Spec{}, invalid("lifetime_secs %d: at most %d", life, max)
+	default:
+		s.LifetimeSecs = life
+	}
+
+	sched, err := ResolveSchedule(api.SnapshotSchedule{EverySecs: req.SnapshotEverySecs, Keep: req.SnapshotKeep}, pol.Limits)
+	if err != nil {
+		return backend.Spec{}, err
+	}
+	s.SnapshotEverySecs, s.SnapshotKeep = sched.EverySecs, sched.Keep
 
 	env, err := ResolveEnv(req.Env)
 	if err != nil {
@@ -414,6 +463,38 @@ func ResolveEnv(in map[string]string) (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// ResolveIdleUpdate checks a live sandbox's new idle timeout. Unlike at
+// create, 0 is not "the server's default" — a sandbox already has one — but
+// "never", which only a server without a bound allows.
+func ResolveIdleUpdate(idle int, pol Policy) (int, error) {
+	max := pol.Limits.MaxIdleTimeoutSecs
+	switch {
+	case idle < 0:
+		return 0, invalid("idle_timeout_secs must not be negative")
+	case idle == 0 && max > 0:
+		return 0, invalid("idle_timeout_secs 0 (never) is not allowed here; at most %d", max)
+	case max > 0 && idle > max:
+		return 0, invalid("idle_timeout_secs %d: at most %d", idle, max)
+	}
+	return idle, nil
+}
+
+// ResolveLifetimeUpdate checks a live sandbox's new lifetime, counted from
+// its creation as at create. 0 is refused rather than read as "the
+// maximum" or "none": a change that took a sandbox's end away should be
+// asked for by number. A lifetime already past ends the sandbox at the
+// reaper's next look, which is what shortening to now means.
+func ResolveLifetimeUpdate(life int, pol Policy) (int, error) {
+	max := pol.Limits.MaxLifetimeSecs
+	switch {
+	case life <= 0:
+		return 0, invalid("lifetime_secs must be at least 1")
+	case max > 0 && life > max:
+		return 0, invalid("lifetime_secs %d: at most %d", life, max)
+	}
+	return life, nil
 }
 
 // ResolveNetworkUpdate validates a policy change on a running sandbox. It is the
@@ -556,4 +637,28 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ResolveSchedule checks a snapshot schedule against the server's limits, and
+// fills in what it leaves out: one kept. A schedule the limits do not allow
+// is refused, not narrowed to one they do: a sandbox asked to be captured
+// every minute and captured every five would not be what was asked for.
+func ResolveSchedule(s api.SnapshotSchedule, l api.Limits) (api.SnapshotSchedule, error) {
+	switch {
+	case s.EverySecs < 0 || s.Keep < 0:
+		return api.SnapshotSchedule{}, invalid("snapshot_every_secs and snapshot_keep must not be negative")
+	case s.EverySecs == 0 && s.Keep != 0:
+		return api.SnapshotSchedule{}, invalid("snapshot_keep needs snapshot_every_secs")
+	case s.EverySecs == 0:
+		return api.SnapshotSchedule{}, nil
+	case s.EverySecs < l.MinSnapshotEverySecs:
+		return api.SnapshotSchedule{}, invalid("snapshot_every_secs %d: at least %d", s.EverySecs, l.MinSnapshotEverySecs)
+	}
+	if s.Keep == 0 {
+		s.Keep = 1
+	}
+	if s.Keep > l.MaxSnapshotKeep {
+		return api.SnapshotSchedule{}, invalid("snapshot_keep %d: at most %d", s.Keep, l.MaxSnapshotKeep)
+	}
+	return s, nil
 }

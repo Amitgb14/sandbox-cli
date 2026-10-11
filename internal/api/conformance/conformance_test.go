@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
@@ -17,7 +18,9 @@ import (
 // audit log when withAudit is set.
 func serveFake(t *testing.T, pol spec.Policy, withAudit bool, caps ...string) *api.Client {
 	t.Helper()
-	s := &server.Server{Backend: fake.New(caps...), Policy: pol, Token: "conformance-token"}
+	// Usage sampled every second, so the metrics test waits seconds, not
+	// the default ten-second intervals.
+	s := &server.Server{Backend: fake.New(caps...), Policy: pol, Token: "conformance-token", MetricsInterval: time.Second}
 	if withAudit {
 		s.Audit = audit.NewLog(filepath.Join(t.TempDir(), "events.jsonl"))
 	}
@@ -31,6 +34,16 @@ func serveFake(t *testing.T, pol spec.Policy, withAudit bool, caps ...string) *a
 func TestFakeDefaultPolicy(t *testing.T) {
 	caps := []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes}
 	Run(t, serveFake(t, spec.DefaultPolicyFor(capSet(caps...)), true, caps...))
+}
+
+// An endpoint that snapshots disks rather than whole machines, as the macOS
+// backend does: forks get the files, boot afresh, and may choose resources.
+func TestFakeDiskSnapshots(t *testing.T) {
+	caps := []string{api.CapEgressAllowlist, api.CapDiskSnapshot}
+	pol := spec.DefaultPolicyFor(capSet(caps...))
+	// Short enough that the suite waits for a schedule to run.
+	pol.Limits.MinSnapshotEverySecs = 1
+	Run(t, serveFake(t, pol, false, caps...))
 }
 
 // An endpoint that cannot filter egress — a backend without host networking.
@@ -47,6 +60,8 @@ func TestFakeNoEgress(t *testing.T) {
 func TestFakeNarrowPolicy(t *testing.T) {
 	pol := spec.DefaultPolicyFor(capSet(api.CapEgressAllowlist))
 	pol.Network.MayAllow = nil
+	// Long enough for every other test, so only the lifetime tests see it.
+	pol.Limits.MaxLifetimeSecs = 3600
 	Run(t, serveFake(t, pol, false, api.CapEgressAllowlist))
 }
 

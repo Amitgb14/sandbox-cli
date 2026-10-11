@@ -1,6 +1,6 @@
 # none
-run --detach --name sbx_0123456789abcdef --label sbx.managed=1 --cpus 2 --memory 2048M --mount type=bind,source=/usr/local/libexec/sandboxd,target=/.sbx,readonly --network none -- img:1 /.sbx/sandbox-guestd idle
+run --detach --name sbx_0123456789abcdef --label sbx.managed=1 --label sbx.owner=0123456789abcdef --cpus 2 --memory 2048M --mount type=bind,source=/usr/local/libexec/sandboxd,target=/.sbx,readonly --network none -- img:1 /.sbx/sandbox-guestd idle
 # open
-run --detach --name sbx_0123456789abcdef --label sbx.managed=1 --cpus 2 --memory 2048M --mount type=bind,source=/usr/local/libexec/sandboxd,target=/.sbx,readonly -- img:1 /.sbx/sandbox-guestd idle
+run --detach --name sbx_0123456789abcdef --label sbx.managed=1 --label sbx.owner=0123456789abcdef --cpus 2 --memory 2048M --mount type=bind,source=/usr/local/libexec/sandboxd,target=/.sbx,readonly -- img:1 /.sbx/sandbox-guestd idle
 # exec
 exec --interactive sbx_0123456789abcdef /.sbx/sandbox-guestd serve --stdio

@@ -16,11 +16,11 @@ import { useCaller } from "@/lib/caller";
 export function Gate({ need, scope, children }: Pick<NavItem, "need" | "scope"> & { children: React.ReactNode }) {
   const caller = useCaller();
   if (caller.kind === "loading") return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (!allowed({ need, scope }, caller)) return <NotAvailable />;
+  if (!allowed({ need, scope }, caller)) return <NotAvailable why={need === "sandboxd" ? "it is a sandboxd's own, and a gateway does not offer it" : undefined} />;
   return <>{children}</>;
 }
 
-export function NotAvailable() {
+export function NotAvailable({ why = "it needs a gateway, or a key with more scopes than this one" }: { why?: string }) {
   return (
     <div className="flex flex-col items-center gap-4 py-24 text-center">
       <div className="flex size-11 items-center justify-center rounded-full bg-muted">
@@ -29,7 +29,7 @@ export function NotAvailable() {
       <div className="space-y-1.5">
         <h1 className="text-lg font-semibold">Not available</h1>
         <p className="max-w-md text-sm text-muted-foreground">
-          This screen is not available here: it needs a gateway, or a key with more scopes than this one.
+          This screen is not available here: {why}.
         </p>
       </div>
       <Button asChild size="sm" variant="outline">

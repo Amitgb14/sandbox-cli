@@ -21,7 +21,11 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
 
-// FileStore is the Store kept in one JSON file.
+// FileStore is the state file of a gateway from before databases. The
+// gateway no longer serves from it: `sandbox-gateway store import` reads one
+// (ImportState) into SQLite or PostgreSQL (sql_store.go), and its methods
+// remain for that and for tests that write a file to import. What follows
+// describes the file as it was kept.
 //
 // The file holds no secret. An API key and an SSH token are kept as the hex
 // SHA-256 of the secret, which is a 256-bit random string: a hash of that
@@ -70,6 +74,13 @@ type fileState struct {
 	// Orgs are the organisations users made and who belongs to each
 	// (orgs.go). A state file from before them has none, and loads.
 	Orgs []orgRecord `json:"orgs,omitempty"`
+	// Policies are the operator's user policies and UserPolicies who holds
+	// which (policies.go). A state file from before them has none, and loads.
+	Policies     []api.UserPolicy   `json:"policies,omitempty"`
+	UserPolicies []userPolicyRecord `json:"user_policies,omitempty"`
+	// Invites are the sign-up links an admin has sent and nobody has used
+	// yet (accounts.go), each by its hash.
+	Invites []inviteRecord `json:"invites,omitempty"`
 }
 
 type tokenRecord struct {
@@ -305,6 +316,12 @@ func ValidateScopes(scopes []string) error {
 
 // CreateKey issues an API key. The secret is returned once and never stored.
 func (s *FileStore) CreateKey(user, tenant string, scopes []string) (string, Key, error) {
+	return s.CreateKeyExpiring(user, tenant, scopes, nil)
+}
+
+// CreateKeyExpiring is CreateKey for a key that stops working at expires;
+// nil never.
+func (s *FileStore) CreateKeyExpiring(user, tenant string, scopes []string, expires *time.Time) (string, Key, error) {
 	if !ValidUser(user) {
 		return "", Key{}, fmt.Errorf("user %q: letters, digits and . _ @ + -, at most 64", user)
 	}
@@ -317,6 +334,13 @@ func (s *FileStore) CreateKey(user, tenant string, scopes []string) (string, Key
 	secret := newSecret(keySecretPrefix)
 	k := Key{ID: newID("key_"), User: user, Tenant: tenant, Scopes: slices.Clone(scopes),
 		Hash: hashSecret(secret), Created: s.now().UTC()}
+	if expires != nil {
+		if !expires.After(k.Created) {
+			return "", Key{}, errors.New("a key's expiry must be in the future")
+		}
+		t := expires.UTC()
+		k.Expires = &t
+	}
 	err := s.change(func() error {
 		if err := s.nameTakenInOrg(tenant, user, tenant); err != nil {
 			return err
@@ -346,10 +370,17 @@ func (s *FileStore) KeyBySecret(secret string) (Key, bool) {
 			found = i
 		}
 	}
-	if found < 0 || s.st.Keys[found].Revoked {
+	if found < 0 || !s.st.Keys[found].Active(s.now()) {
 		return Key{}, false
 	}
 	k := s.st.Keys[found]
+	// A sign-in's key is cut off with its account even if a change to the
+	// account missed it.
+	if k.Parent != "" {
+		if a := s.keyIndex(k.Parent); a < 0 || !s.st.Keys[a].Active(s.now()) {
+			return Key{}, false
+		}
+	}
 	k.Scopes = slices.Clone(k.Scopes)
 	return k, true
 }
@@ -361,18 +392,64 @@ var ErrNoSuchKey = errors.New("no such key")
 var ErrNoSuchNode = errors.New("no such node")
 
 // RevokeKey marks a key revoked. It stays listed, so the record says it
-// existed and when it stopped working.
+// existed and when it stopped working. An account's sign-ins go with it.
 func (s *FileStore) RevokeKey(id string) error {
 	return s.change(func() error {
 		for i := range s.st.Keys {
 			if s.st.Keys[i].ID == id {
 				s.st.Keys[i].Revoked = true
+				for j := range s.st.Keys {
+					if s.st.Keys[j].Parent == id {
+						s.st.Keys[j].Revoked = true
+					}
+				}
 				return nil
 			}
 		}
 		return ErrNoSuchKey
 	})
 }
+
+// keyIndex is the index of key id in the state, -1 for none. Under mu.
+func (s *FileStore) keyIndex(id string) int {
+	return slices.IndexFunc(s.st.Keys, func(k Key) bool { return k.ID == id })
+}
+
+// SetKeyExpiry sets when a key stops working; nil is never. A revoked key
+// is refused: it is not coming back, and renewing it would read as if it
+// were.
+func (s *FileStore) SetKeyExpiry(id string, at *time.Time) (Key, error) {
+	var out Key
+	err := s.change(func() error {
+		for i := range s.st.Keys {
+			if s.st.Keys[i].ID == id {
+				if s.st.Keys[i].Revoked {
+					return ErrKeyRevoked
+				}
+				if at != nil {
+					t := at.UTC()
+					at = &t
+				}
+				s.st.Keys[i].Expires = at
+				// An account's sign-ins end no later than it does. Renewing
+				// it does not lengthen them; the next sign-in gets the new end.
+				for j := range s.st.Keys {
+					if c := &s.st.Keys[j]; c.Parent == id && at != nil && (c.Expires == nil || at.Before(*c.Expires)) {
+						c.Expires = at
+					}
+				}
+				out = s.st.Keys[i]
+				out.Scopes = slices.Clone(out.Scopes)
+				return nil
+			}
+		}
+		return ErrNoSuchKey
+	})
+	return out, err
+}
+
+// ErrKeyRevoked refuses a change to a revoked key.
+var ErrKeyRevoked = errors.New("the key is revoked")
 
 // Keys lists every key, oldest first.
 func (s *FileStore) Keys() []Key {
@@ -675,6 +752,30 @@ func (s *FileStore) SnapshotOwner(id string) (Owner, bool) {
 	return o, ok
 }
 
+// ForgetSnapshotsGoneFrom drops the records of a node's snapshots that it no
+// longer holds, given the whole of what it does. A schedule's retention
+// removes snapshots on the node, not through here, and each left a record
+// behind: at one every five minutes, hundreds a day per sandbox.
+func (s *FileStore) ForgetSnapshotsGoneFrom(node string, holds map[string]bool) error {
+	s.mu.RLock()
+	var gone []string
+	for id, o := range s.st.Snapshots {
+		if o.Node == node && !holds[id] {
+			gone = append(gone, id)
+		}
+	}
+	s.mu.RUnlock()
+	if len(gone) == 0 {
+		return nil
+	}
+	return s.change(func() error {
+		for _, id := range gone {
+			delete(s.st.Snapshots, id)
+		}
+		return nil
+	})
+}
+
 // ForgetSnapshot drops a snapshot's record.
 func (s *FileStore) ForgetSnapshot(id string) error {
 	return s.change(func() error { delete(s.st.Snapshots, id); return nil })
@@ -721,5 +822,3 @@ func (s *FileStore) Nodes() []NodeConfig {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
-
-var _ Store = (*FileStore)(nil)

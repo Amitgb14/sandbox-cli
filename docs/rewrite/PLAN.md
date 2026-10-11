@@ -894,7 +894,18 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
      server). `sandboxd`, the guest agent and the CLI stay stdlib, cobra and
      yaml.v3. Pinned to a release that still supports Go 1.25.
    - The gateway keeps its state in a file first; PostgreSQL is a later,
-     separate decision.
+     separate decision. *Decided 2026-10-10
+     ([`docs/roadmap/task-8-postgres-store.md`](../roadmap/task-8-postgres-store.md)):*
+     the gateway keeps its state in SQLite (the default, one gateway) or
+     PostgreSQL (one or more), never again in a file; a state file is
+     imported once (`sandbox-gateway store import`). Organisations are
+     isolated in PostgreSQL with row-level security as well as by the
+     gateway's checks. Two more dependencies, **for the gateway only**
+     (`internal/gateway`, `cmd/sandbox-gateway`): `github.com/jackc/pgx/v5`
+     (pure Go; LISTEN/NOTIFY and advisory locks for several gateways) and
+     `modernc.org/sqlite` (pure Go, no cgo, so the release matrix still
+     cross-compiles), each pinned to a release that builds with Go 1.25
+     (sqlite v1.59.0: v1.60 needs Go 1.26).
    - A sandbox id may name its node (`sbx_<node>_<hex>`), so the gateway routes
      without a lookup.
    - Users authenticate with gateway-issued API keys; single sign-on later.

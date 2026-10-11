@@ -9,6 +9,14 @@
  * here once, kept in sessionStorage — this tab, not every tab, and not after
  * the browser closes — and wiped from the address bar so it is not copied
  * along with a link.
+ *
+ * A hosted build (NEXT_PUBLIC_STUDIO_HOSTED=on, served by `sandbox-cli studio
+ * host`) has no Studio token. A user's invite link carries their gateway key
+ * in the fragment instead (`#key=sgk_…`); it is posted once to /api/session,
+ * which answers with an HttpOnly cookie, and from then on the cookie is the
+ * only credential this page's requests carry. The key is not kept here.
+ * Every hosted branch is an inline comparison with the literal, so the
+ * minifier drops the other build's code (scripts/check-hosted.mjs checks).
  */
 
 import type { OutputEvent } from "@/lib/types";
@@ -21,6 +29,7 @@ const TOKEN_KEY = "sandbox-studio-token";
 
 function readToken(): string {
   if (typeof window === "undefined") return "";
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on") return "";
   const m = window.location.hash.match(/(?:^#|&)token=([0-9a-f]+)/);
   if (m) {
     try {
@@ -46,12 +55,68 @@ export function getToken(): string {
 }
 
 export function setToken(t: string) {
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on") return;
   token = t.trim();
   try {
     sessionStorage.setItem(TOKEN_KEY, token);
   } catch {
     // see readToken
   }
+}
+
+/**
+ * The gateway key an invite link carries, taken out of the address bar at
+ * once whether or not it is used, so it is not left in the URL, the history
+ * entry or a link copied from it: null with no key= in the fragment, "" for
+ * one that is not a key's shape. Hosted builds only.
+ */
+export function takeInviteKey(): string | null {
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" || typeof window === "undefined") return null;
+  if (!/(?:^#|&)key=/.test(window.location.hash)) return null;
+  const m = window.location.hash.match(/(?:^#|&)key=(sgk_[a-z0-9]+)/);
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return m ? m[1] : "";
+}
+
+/**
+ * The invite token a sign-up link carries (`#invite=sgi_…`), taken out of
+ * the address bar as takeInviteKey does: null with none, "" for one that is
+ * not a token's shape. Hosted builds only.
+ */
+export function takeInviteToken(): string | null {
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" || typeof window === "undefined") return null;
+  if (!/(?:^#|&)invite=/.test(window.location.hash)) return null;
+  const m = window.location.hash.match(/(?:^#|&)invite=(sgi_[a-z0-9]+)/);
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return m ? m[1] : "";
+}
+
+/** What an invite is for: the address it was sent to. Hosted builds only. */
+export async function inviteInfo(invite: string): Promise<{ email: string; user: string; reset?: boolean }> {
+  return apiFetch("/invite", { method: "POST", json: { invite }, noOrg: true });
+}
+
+/** Sets the password an invite asks for, and signs in. Hosted builds only. */
+export async function register(invite: string, password: string): Promise<{ user: string }> {
+  return apiFetch("/register", { method: "POST", json: { invite, password }, noOrg: true });
+}
+
+/** Signs in with an email and password. Hosted builds only. */
+export async function logIn(email: string, password: string): Promise<{ user: string }> {
+  return apiFetch("/login", { method: "POST", json: { email, password }, noOrg: true });
+}
+
+/** The window event apiFetch sends when a hosted session has ended. */
+export const SESSION_ENDED = "studio:session-ended";
+
+/** Exchanges an invite link's key for a session cookie. Hosted builds only. */
+export async function signIn(key: string): Promise<{ user: string; tenant?: string }> {
+  return apiFetch("/session", { method: "POST", json: { key }, noOrg: true });
+}
+
+/** Ends this browser's session. Hosted builds only. */
+export async function signOut(): Promise<void> {
+  await apiFetch("/session", { method: "DELETE", noOrg: true });
 }
 
 /** A failed request, with the server's own message. */
@@ -80,6 +145,9 @@ export function authHeaders(noOrg = false): Record<string, string> {
   return h;
 }
 
+/** Hosted routes whose 401 is a refused sign-in, not an ended session. */
+const SIGN_IN_PATHS = ["/session", "/login", "/register", "/invite"];
+
 export async function apiFetch<T>(path: string, opts: RequestInit & { json?: unknown; noOrg?: boolean } = {}): Promise<T> {
   const { noOrg, ...init } = opts;
   const headers = new Headers(init.headers);
@@ -90,6 +158,12 @@ export async function apiFetch<T>(path: string, opts: RequestInit & { json?: unk
     body = JSON.stringify(init.json);
   }
   const resp = await fetch(`/api${path}`, { ...init, headers, body });
+  // Hosted, a 401 from anything but sign-in means the session is over —
+  // signed out elsewhere, expired, or its key revoked — and every screen
+  // should say so now, not at the next poll of /api/info.
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" && resp.status === 401 && !SIGN_IN_PATHS.includes(path)) {
+    window.dispatchEvent(new Event(SESSION_ENDED));
+  }
   if (!resp.ok) {
     let message = resp.statusText;
     let code: string | undefined;
@@ -151,9 +225,21 @@ export async function followOutput(
 }
 
 /** The WebSocket address of a process's terminal bridge. */
+/** A sandbox's desktop: its VNC stream, bridged by Studio's server (internal/studio/desktop.go). */
+export function desktopURL(sandbox: string): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const q = new URLSearchParams({ sandbox });
+  // Hosted, the session cookie goes with the upgrade; there is no token.
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on") q.set("token", getToken());
+  const org = currentOrg();
+  if (org) q.set("org", org);
+  return `${proto}//${window.location.host}/api/ws/desktop?${q.toString()}`;
+}
+
 export function attachURL(sandbox: string, pid?: number): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const q = new URLSearchParams({ sandbox, token: getToken() });
+  const q = new URLSearchParams({ sandbox });
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on") q.set("token", getToken());
   if (pid) q.set("pid", String(pid));
   // A browser cannot give a WebSocket headers, so the organisation rides in
   // the query, as the token does; Studio's server passes it on as a header.
