@@ -53,6 +53,13 @@ type NetworkPolicy struct {
 	Mode  string   `json:"mode"`
 	Allow []string `json:"allow"`
 	Deny  []string `json:"deny,omitempty"`
+	// Groups names a gateway's allowlist groups (EgressGroup), in a request
+	// for mode allowlist only. The gateway adds their hosts to Allow and
+	// sends the node hosts alone, so a sandbox's policy never carries
+	// Groups; a server that is not a gateway refuses them. With Allow
+	// absent, the groups' hosts are the whole list, not added to the
+	// server's default one.
+	Groups []string `json:"groups,omitempty"`
 }
 
 // Capabilities is what an endpoint can do. A client asks rather than assumes.
@@ -768,6 +775,20 @@ type UserPolicy struct {
 // UserPolicyList is GET /v1/admin/policies.
 type UserPolicyList struct {
 	Policies []UserPolicy `json:"policies"`
+}
+
+// EgressGroup is a gateway's allowlist group: a named set of hosts an admin
+// keeps (PUT /v1/admin/egress-groups/{name}) and any user may name in a
+// network policy's Groups. A change holds for sandboxes created after it.
+type EgressGroup struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Hosts       []string `json:"hosts"`
+}
+
+// EgressGroupList is GET /v1/egress-groups and GET /v1/admin/egress-groups.
+type EgressGroupList struct {
+	Groups []EgressGroup `json:"groups"`
 }
 
 // AssignPolicyRequest is PUT /v1/admin/user-policy: assigns Policy to User,

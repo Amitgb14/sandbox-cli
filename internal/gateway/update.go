@@ -100,6 +100,13 @@ func (g *Gateway) updateHandler(w http.ResponseWriter, r *http.Request, p Princi
 		}
 	}
 
+	// A new network policy may name allowlist groups, which the node does
+	// not know: they become hosts here, as at create (egress_groups.go).
+	if f := g.applyGroups(ctx, &req.Network); f != nil {
+		f.write(w)
+		return
+	}
+
 	sb, err := n.client.UpdateSandbox(ctx, id, req)
 	if err != nil {
 		var ae *api.Error

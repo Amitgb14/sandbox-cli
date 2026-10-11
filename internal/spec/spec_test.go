@@ -178,6 +178,10 @@ func TestNetworkTightenNeverLoosen(t *testing.T) {
 		{"a bare star is not a name", net(api.NetworkAllowlist, []string{"*"}, nil), "invalid", "", nil},
 		{"case and trailing dot normalize", net(api.NetworkAllowlist, []string{"GitHub.com."}, nil), "ok", api.NetworkAllowlist, []string{"github.com"}},
 		{"empty mode means the default mode", net("", []string{"pypi.org"}, nil), "ok", api.NetworkAllowlist, []string{"pypi.org"}},
+		// A node does not know a gateway's groups: dropping the names would
+		// run the sandbox on its default list instead of the hosts asked for.
+		{"groups are a gateway's", &api.NetworkPolicy{Mode: api.NetworkAllowlist, Groups: []string{"go"}}, "invalid", "", nil},
+		{"groups beside an allow list", &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com"}, Groups: []string{"go"}}, "invalid", "", nil},
 	}
 	for _, tc := range cases {
 		got, err := resolveNetwork(tc.in, pol)

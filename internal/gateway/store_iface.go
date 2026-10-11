@@ -125,6 +125,12 @@ type Store interface {
 	PolicyOf(ctx context.Context, user, keyTenant string) (api.UserPolicy, bool, error)
 	PolicyActingIn(ctx context.Context, user, tenant string) (api.UserPolicy, bool, error)
 
+	// --- allowlist groups (egress_groups.go) ---
+
+	PutEgressGroup(ctx context.Context, g api.EgressGroup) error
+	DeleteEgressGroup(ctx context.Context, name string) error
+	EgressGroups(ctx context.Context) ([]api.EgressGroup, error)
+
 	// --- jobs (sql_jobs.go) ---
 
 	PutJob(ctx context.Context, r *jobRecord) error

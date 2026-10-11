@@ -19,7 +19,7 @@ import (
 // flag names changes.
 func newUpdateCmd() *cobra.Command {
 	var ctxFlag, name, network, lifetime string
-	var labels, unlabel, allow, deny []string
+	var labels, unlabel, allow, deny, groups []string
 	var idle time.Duration
 	var noBaseline bool
 	cmd := &cobra.Command{
@@ -32,15 +32,16 @@ func newUpdateCmd() *cobra.Command {
 			"ends, busy or not, counted from its creation: 45m sets it, +15m pushes its end\n" +
 			"out and -10m brings it nearer. Through a gateway only an admin can push it out.\n\n" +
 			"--network changes the network of a running sandbox, as run's flags would set\n" +
-			"it: --allow adds to the built-in hosts unless --no-baseline, and an agent's\n" +
-			"sandbox keeps its agent's API. Not every endpoint can change a running\n" +
-			"sandbox's network.\n\n" +
+			"it: --allow and --allow-group add to the built-in hosts unless --no-baseline,\n" +
+			"and an agent's sandbox keeps its agent's API. Not every endpoint can change a\n" +
+			"running sandbox's network.\n\n" +
 			"vCPUs and memory are fixed while a VM runs.",
 		Example: "  sandbox-cli update web --name api\n" +
 			"  sandbox-cli update api --label team=infra --label ticket-\n" +
 			"  sandbox-cli update api --idle 2h\n" +
 			"  sandbox-cli update api --lifetime +15m\n" +
-			"  sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline",
+			"  sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline\n" +
+			"  sandbox-cli update api --network allowlist --allow-group go   # through a gateway",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f := cmd.Flags()
@@ -55,8 +56,8 @@ func newUpdateCmd() *cobra.Command {
 				}
 				req.IdleTimeoutSecs = &secs
 			}
-			if (len(allow) > 0 || noBaseline) && network != api.NetworkAllowlist {
-				return errors.New("--allow and --no-baseline go with --network allowlist")
+			if (len(allow) > 0 || len(groups) > 0 || noBaseline) && network != api.NetworkAllowlist {
+				return errors.New("--allow, --allow-group and --no-baseline go with --network allowlist")
 			}
 			if len(deny) > 0 && network == "" {
 				return errors.New("--deny goes with --network")
@@ -93,7 +94,7 @@ func newUpdateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				n, err := updatedNetwork(network, allow, deny, noBaseline, caps, cur.Labels["agent"])
+				n, err := updatedNetwork(network, allow, deny, groups, noBaseline, caps, cur.Labels["agent"])
 				if err != nil {
 					return err
 				}
@@ -124,6 +125,7 @@ func newUpdateCmd() *cobra.Command {
 	f.StringVar(&lifetime, "lifetime", "", "when it ends, from its creation: 45m sets it, +15m or -10m moves its end")
 	f.StringVar(&network, "network", "", "none, allowlist or open, applied to the running sandbox")
 	f.StringArrayVar(&allow, "allow", nil, "with --network allowlist: a host it may reach (repeatable)")
+	f.StringArrayVar(&groups, "allow-group", nil, "with --network allowlist: a gateway allowlist group whose hosts it may reach (repeatable)")
 	f.StringArrayVar(&deny, "deny", nil, "with --network: a host it may not reach (repeatable)")
 	f.BoolVar(&noBaseline, "no-baseline", false, "with --network allowlist: only the hosts named, without the built-in ones")
 	return cmd
@@ -157,8 +159,9 @@ func editLabels(cur map[string]string, set, unset []string) (map[string]string, 
 // updatedNetwork is the whole policy an update sends, built as run builds
 // one: an allowlist starts from the server's default list (or the built-in
 // baseline, where the default is not an allowlist) unless noBaseline, and
-// an agent's sandbox keeps its agent's API, without which it stops.
-func updatedNetwork(mode string, allow, deny []string, noBaseline bool, caps api.Capabilities, agent string) (*api.NetworkPolicy, error) {
+// an agent's sandbox keeps its agent's API, without which it stops. groups
+// go to the gateway by name, which adds their hosts.
+func updatedNetwork(mode string, allow, deny, groups []string, noBaseline bool, caps api.Capabilities, agent string) (*api.NetworkPolicy, error) {
 	n := &api.NetworkPolicy{Mode: mode}
 	switch mode {
 	case api.NetworkNone:
@@ -178,7 +181,14 @@ func updatedNetwork(mode string, allow, deny []string, noBaseline bool, caps api
 			hosts = append(hosts, d.ProviderHost)
 		}
 		n.Allow = policy.DedupeDomains(hosts)
-		if len(n.Allow) == 0 {
+		if len(groups) > 0 {
+			// Sent even empty: absent, it would be the server's default
+			// list in the groups' place.
+			if n.Allow == nil {
+				n.Allow = []string{}
+			}
+			n.Groups = slices.Clone(groups)
+		} else if len(n.Allow) == 0 {
 			return nil, errors.New("an allowlist of nothing is refused; use --network none to reach nothing")
 		}
 	default:

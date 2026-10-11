@@ -488,6 +488,85 @@ func newGatewayPoliciesCmd(ctxFlag *string) *cobra.Command {
 	return cmd
 }
 
+func newGatewayEgressGroupsCmd(ctxFlag *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "egress-groups",
+		Short: "Set, list and remove allowlist groups (set and remove: admin key)",
+		Long: "An allowlist group is a named set of hosts, kept by an admin, that any user\n" +
+			"adds to a sandbox's allowlist by name (run --allow-group, update --allow-group,\n" +
+			"or Studio's Network step) instead of listing the hosts. The gateway turns the\n" +
+			"name into hosts; each node's policy still decides which hosts it allows. A\n" +
+			"change holds for sandboxes created after it; running ones keep their hosts.\n" +
+			"A group a running job or a service names cannot be removed.",
+		Example: "  sandbox-cli gateway egress-groups set go --host proxy.golang.org --host sum.golang.org\n" +
+			"  sandbox-cli gateway egress-groups list\n" +
+			"  sandbox-cli run --network allowlist --allow-group go -- go build ./...",
+	}
+
+	var hosts []string
+	var description string
+	set := &cobra.Command{
+		Use:   "set NAME",
+		Short: "Create or replace a group; a change holds for sandboxes created after it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := requireGateway(cmd.Context(), *ctxFlag, "gateway egress-groups")
+			if err != nil {
+				return err
+			}
+			g, err := c.PutEgressGroup(cmd.Context(), api.EgressGroup{Name: args[0], Description: description, Hosts: hosts})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "group %s: %s\n", termsafe.Clean(g.Name), termsafe.Clean(strings.Join(g.Hosts, ", ")))
+			return nil
+		},
+	}
+	set.Flags().StringArrayVar(&hosts, "host", nil, "a host the group allows, such as example.com or *.example.com (repeatable; the whole list)")
+	set.Flags().StringVar(&description, "description", "", "what the group is for")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List the groups any user may name",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, err := requireGateway(cmd.Context(), *ctxFlag, "gateway egress-groups")
+			if err != nil {
+				return err
+			}
+			groups, err := c.EgressGroups(cmd.Context())
+			if err != nil {
+				return err
+			}
+			t := newTable(cmd.OutOrStdout())
+			fmt.Fprintln(t, "NAME\tHOSTS\tDESCRIPTION")
+			for _, g := range groups {
+				fmt.Fprintf(t, "%s\t%s\t%s\n", termsafe.Clean(g.Name), termsafe.Clean(strings.Join(g.Hosts, ",")), orDash(g.Description))
+			}
+			return t.Flush()
+		},
+	}
+
+	remove := &cobra.Command{
+		Use:   "remove NAME",
+		Short: "Remove a group no running job or service names",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := requireGateway(cmd.Context(), *ctxFlag, "gateway egress-groups")
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteEgressGroup(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", termsafe.Clean(args[0]))
+			return nil
+		},
+	}
+	cmd.AddCommand(set, list, remove)
+	return cmd
+}
+
 // expiryText is when a key stops working, or "never".
 func expiryText(at *time.Time) string {
 	if at == nil {

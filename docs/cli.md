@@ -50,6 +50,10 @@ Global flags:
 | [`sandbox-cli gateway audit`](#sandbox-cli-gateway-audit) | Show the gateway's audit log: who did what, newest last |
 | [`sandbox-cli gateway cordon`](#sandbox-cli-gateway-cordon) | Stop placing new sandboxes on a node; what runs there carries on |
 | [`sandbox-cli gateway drain`](#sandbox-cli-gateway-drain) | Cordon a node and report its sandboxes; with --terminate, end them all |
+| [`sandbox-cli gateway egress-groups`](#sandbox-cli-gateway-egress-groups) | Set, list and remove allowlist groups (set and remove: admin key) |
+| [`sandbox-cli gateway egress-groups list`](#sandbox-cli-gateway-egress-groups-list) | List the groups any user may name |
+| [`sandbox-cli gateway egress-groups remove`](#sandbox-cli-gateway-egress-groups-remove) | Remove a group no running job or service names |
+| [`sandbox-cli gateway egress-groups set`](#sandbox-cli-gateway-egress-groups-set) | Create or replace a group; a change holds for sandboxes created after it |
 | [`sandbox-cli gateway invites`](#sandbox-cli-gateway-invites) | Invite people by email to sign in to hosted Studio with a password (admin key) |
 | [`sandbox-cli gateway invites create`](#sandbox-cli-gateway-invites-create) | Make an invite; its link is printed once |
 | [`sandbox-cli gateway invites list`](#sandbox-cli-gateway-invites-list) | List invites not yet used |
@@ -495,7 +499,7 @@ and restart its sandboxd, uncordon NODE. The gateway keeps a node it cordoned
 cordoned across the node's restart, until it is uncordoned here.
 ```
 
-Subcommands: [`audit`](#sandbox-cli-gateway-audit), [`cordon`](#sandbox-cli-gateway-cordon), [`drain`](#sandbox-cli-gateway-drain), [`invites`](#sandbox-cli-gateway-invites), [`keys`](#sandbox-cli-gateway-keys), [`lost`](#sandbox-cli-gateway-lost), [`nodes`](#sandbox-cli-gateway-nodes), [`policies`](#sandbox-cli-gateway-policies), [`uncordon`](#sandbox-cli-gateway-uncordon).
+Subcommands: [`audit`](#sandbox-cli-gateway-audit), [`cordon`](#sandbox-cli-gateway-cordon), [`drain`](#sandbox-cli-gateway-drain), [`egress-groups`](#sandbox-cli-gateway-egress-groups), [`invites`](#sandbox-cli-gateway-invites), [`keys`](#sandbox-cli-gateway-keys), [`lost`](#sandbox-cli-gateway-lost), [`nodes`](#sandbox-cli-gateway-nodes), [`policies`](#sandbox-cli-gateway-policies), [`uncordon`](#sandbox-cli-gateway-uncordon).
 
 Flags:
 
@@ -545,6 +549,64 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--terminate` |  | terminate every sandbox on the node now |
+
+### sandbox-cli gateway egress-groups
+
+Set, list and remove allowlist groups (set and remove: admin key).
+
+```text
+sandbox-cli gateway egress-groups [command]
+```
+
+```text
+An allowlist group is a named set of hosts, kept by an admin, that any user
+adds to a sandbox's allowlist by name (run --allow-group, update --allow-group,
+or Studio's Network step) instead of listing the hosts. The gateway turns the
+name into hosts; each node's policy still decides which hosts it allows. A
+change holds for sandboxes created after it; running ones keep their hosts.
+A group a running job or a service names cannot be removed.
+```
+
+Subcommands: [`list`](#sandbox-cli-gateway-egress-groups-list), [`remove`](#sandbox-cli-gateway-egress-groups-remove), [`set`](#sandbox-cli-gateway-egress-groups-set).
+
+Examples:
+
+```sh
+sandbox-cli gateway egress-groups set go --host proxy.golang.org --host sum.golang.org
+sandbox-cli gateway egress-groups list
+sandbox-cli run --network allowlist --allow-group go -- go build ./...
+```
+
+### sandbox-cli gateway egress-groups list
+
+List the groups any user may name.
+
+```text
+sandbox-cli gateway egress-groups list
+```
+
+### sandbox-cli gateway egress-groups remove
+
+Remove a group no running job or service names.
+
+```text
+sandbox-cli gateway egress-groups remove NAME
+```
+
+### sandbox-cli gateway egress-groups set
+
+Create or replace a group; a change holds for sandboxes created after it.
+
+```text
+sandbox-cli gateway egress-groups set NAME [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--description string` |  | what the group is for |
+| `--host stringArray` |  | a host the group allows, such as example.com or *.example.com (repeatable; the whole list) |
 
 ### sandbox-cli gateway invites
 
@@ -1224,6 +1286,7 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--allow stringArray` |  | also allow egress to this host (repeatable; implies allowlist) |
+| `--allow-group stringArray` |  | also allow the hosts of this gateway allowlist group (repeatable; implies allowlist; sandbox-cli gateway egress-groups list) |
 | `--config string` |  | an explicit config file, trusted like your own |
 | `--context string` |  | which sandboxd to use (sandbox-cli context ls) |
 | `--cpus float64` |  | vCPUs |
@@ -1736,9 +1799,9 @@ ends, busy or not, counted from its creation: 45m sets it, +15m pushes its end
 out and -10m brings it nearer. Through a gateway only an admin can push it out.
 
 --network changes the network of a running sandbox, as run's flags would set
-it: --allow adds to the built-in hosts unless --no-baseline, and an agent's
-sandbox keeps its agent's API. Not every endpoint can change a running
-sandbox's network.
+it: --allow and --allow-group add to the built-in hosts unless --no-baseline,
+and an agent's sandbox keeps its agent's API. Not every endpoint can change a
+running sandbox's network.
 
 vCPUs and memory are fixed while a VM runs.
 ```
@@ -1751,6 +1814,7 @@ sandbox-cli update api --label team=infra --label ticket-
 sandbox-cli update api --idle 2h
 sandbox-cli update api --lifetime +15m
 sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline
+sandbox-cli update api --network allowlist --allow-group go   # through a gateway
 ```
 
 Flags:
@@ -1758,6 +1822,7 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--allow stringArray` |  | with --network allowlist: a host it may reach (repeatable) |
+| `--allow-group stringArray` |  | with --network allowlist: a gateway allowlist group whose hosts it may reach (repeatable) |
 | `--context string` |  | which sandboxd to use |
 | `--deny stringArray` |  | with --network: a host it may not reach (repeatable) |
 | `--idle duration` |  | terminate it after this long idle, e.g. 2h (0: never, where allowed) |

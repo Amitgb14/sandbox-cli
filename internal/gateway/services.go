@@ -173,6 +173,22 @@ func (g *Gateway) checkServiceSecrets(ctx context.Context, sp api.ServiceSpec, t
 	return nil
 }
 
+// checkServiceGroups refuses a spec naming allowlist groups that do not
+// exist, as checkServiceSecrets refuses secrets: its replicas could not be
+// made. One removed later is refused while the service names it
+// (groupInUse).
+func (g *Gateway) checkServiceGroups(ctx context.Context, sp api.ServiceSpec) *specError {
+	err := g.checkGroups(ctx, sp.Network)
+	var ge *groupError
+	switch {
+	case errors.As(err, &ge):
+		return badServiceSpec("network: %s", ge.msg)
+	case err != nil:
+		return &specError{http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error()}
+	}
+	return nil
+}
+
 // shape is the part of a spec that decides what a replica's sandbox is.
 // Changing it is a new revision, rolled out; the rest — the count, whether
 // it is public, how it is spread — applies to the replicas there are.
@@ -295,6 +311,10 @@ func (g *Gateway) createService(w http.ResponseWriter, r *http.Request, p Princi
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}
+	if e := g.checkServiceGroups(r.Context(), sp); e != nil {
+		writeErr(w, e.status, e.code, e.msg)
+		return
+	}
 	now := time.Now().UTC()
 	s := &service{health: map[string]*replicaHealth{}, rec: serviceRecord{
 		Name: sp.Name, User: p.User, Tenant: p.Tenant, Spec: sp, Revision: 1,
@@ -386,6 +406,10 @@ func (g *Gateway) updateService(w http.ResponseWriter, r *http.Request, p Princi
 		return
 	}
 	if e := g.checkServiceSecrets(r.Context(), sp, s.rec.Tenant); e != nil {
+		writeErr(w, e.status, e.code, e.msg)
+		return
+	}
+	if e := g.checkServiceGroups(r.Context(), sp); e != nil {
 		writeErr(w, e.status, e.code, e.msg)
 		return
 	}

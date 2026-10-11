@@ -142,6 +142,8 @@ class Client:
         """Create a sandbox. ``network`` is ``{"mode": "none"|"allowlist"|"open",
         "allow": [...], "deny": [...]}``; ``"allow": None`` (or absent) means the
         server's default list, ``[]`` means nothing — which is refused.
+        Through a gateway, ``"groups": [...]`` names its allowlist groups (mode
+        allowlist), whose hosts it adds; with no allow list, they are the list.
         ``labels`` are your own metadata: returned with the sandbox, usable to
         filter ``sandboxes()``, and recorded in its audit events. ``volumes`` is
         ``[{"name": ..., "path": ..., "read_only": bool}]`` (capability

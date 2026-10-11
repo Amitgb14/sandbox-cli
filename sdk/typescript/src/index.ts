@@ -16,6 +16,12 @@ export interface NetworkPolicy {
   /** Absent or null: the server's default list. [] means nothing, and is refused. */
   allow?: string[] | null;
   deny?: string[];
+  /**
+   * A gateway's allowlist groups, by name (mode allowlist only). The gateway
+   * adds their hosts to `allow`; with `allow` absent, they are the whole list.
+   * A server that is not a gateway refuses them.
+   */
+  groups?: string[];
 }
 
 export interface Sandbox {

@@ -366,6 +366,15 @@ func (g *Gateway) checkJobSpec(ctx context.Context, p Principal, s *api.JobSpec)
 			return badSpec("notify: %v", err)
 		}
 	}
+	// Groups are checked now, not at the first run's sandbox: a job naming
+	// one that does not exist would fail every run.
+	if err := g.checkGroups(ctx, s.Network); err != nil {
+		var ge *groupError
+		if errors.As(err, &ge) {
+			return badSpec("network: %s", ge.msg)
+		}
+		return err
+	}
 	return nil
 }
 

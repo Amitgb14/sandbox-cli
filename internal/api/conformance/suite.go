@@ -81,6 +81,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"NetworkDenyIsKeptAndNormalized", testNetworkDeny},
 		{"NetworkAllowOutsideMayAllowIsRefused", testNetworkMayAllow},
 		{"NetworkUpdateFollowsTheSameRules", testNetworkUpdate},
+		{"NetworkUnknownGroupIsRefused", testNetworkUnknownGroup},
 		{"ALiveSandboxCanBeRenamedRelabelledAndRetimed", testUpdateRecords},
 		{"ImagesAreListedInstalledAndPinned", testImages},
 		{"IdleSandboxIsTerminated", testIdleTimeout},
@@ -603,6 +604,16 @@ func testNetworkMayAllow(t *testing.T, e *env) {
 		Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"not-permitted.conformance.invalid"}},
 	})
 	wantCode(t, err, api.CodeRefused)
+}
+
+// A group the endpoint does not have is refused, never dropped: a node has
+// none (a gateway's are its own), and a gateway refuses a name it does not
+// keep. Dropped, the sandbox would run on the default list instead.
+func testNetworkUnknownGroup(t *testing.T, e *env) {
+	_, err := e.c.CreateSandbox(ctxT(t), api.CreateSandboxRequest{
+		Network: &api.NetworkPolicy{Mode: api.NetworkAllowlist, Groups: []string{"conformance-no-such-group"}},
+	})
+	wantCode(t, err, api.CodeInvalidRequest)
 }
 
 func testNetworkUpdate(t *testing.T, e *env) {

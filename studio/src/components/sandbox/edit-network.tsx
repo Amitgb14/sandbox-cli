@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgents, useEgress, useInfo, useUpdateNetwork } from "@/lib/api/queries";
+import { isAdmin, useCaller } from "@/lib/caller";
 import { cn } from "@/lib/utils";
 import type { NetworkMode, NetworkPolicy, Sandbox } from "@/lib/types";
 
@@ -28,6 +29,10 @@ function hostsOf(text: string): string[] {
  * those typed, and — on an agent's sandbox — that agent's API, without which
  * the agent stops. sandboxd checks it all against its ceiling and may_allow,
  * and the backend applies it to the running VM; one that cannot says so.
+ *
+ * Hosted, the groups are the gateway's, and they go by name (network.groups):
+ * the gateway expands them, from its admin's current list, and checks them
+ * as it checks every host.
  */
 export function EditNetwork({ sb, open, onOpenChange }: { sb: Sandbox; open: boolean; onOpenChange: (o: boolean) => void }) {
   return (
@@ -47,6 +52,8 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
   const baseline = caps?.network.default.mode === "allowlist" ? (caps.network.default.allow ?? []) : (info?.baseline_egress ?? []);
   const agentHost = agents?.find((a) => a.name === sb.labels?.agent)?.provider_host;
   const groups = egress?.groups ?? [];
+  const caller = useCaller();
+  const hosted = process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on";
 
   // Start from what the sandbox has: the built-in hosts kept if it has them
   // all, and every other host it reaches as typed hosts, so saving without a
@@ -61,18 +68,25 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
 
   const groupHosts = groups.filter((g) => picked.includes(g.name)).flatMap((g) => g.hosts);
   const typed = hostsOf(extra);
-  const allow = [...new Set([...(keepBaseline ? baseline : []), ...groupHosts, ...typed, ...(agentHost ? [agentHost] : [])])];
+  // What is sent as allow: hosted, without the groups' hosts, which the
+  // gateway adds itself; shown, with them.
+  const allow = [...new Set([...(keepBaseline ? baseline : []), ...(hosted ? [] : groupHosts), ...typed, ...(agentHost ? [agentHost] : [])])];
+  const reach = [...new Set([...allow, ...groupHosts])];
   const denied = hostsOf(deny);
   const bad = [...typed, ...denied].find((h) => !HOST.test(h));
   const studioDeny = (egress?.rules ?? []).filter((r) => r.enabled && !denied.includes(r.host)).map((r) => r.host);
   const canUpdate = !!caps?.capabilities?.network_policy_update;
-  const empty = mode === "allowlist" && allow.length === 0;
+  const empty = mode === "allowlist" && reach.length === 0;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (bad || empty) return;
     const network: NetworkPolicy = { mode };
-    if (mode === "allowlist") network.allow = allow;
+    if (mode === "allowlist") {
+      // Hosted, with only groups, allow is left out: the groups are the list.
+      if (!hosted || allow.length) network.allow = allow;
+      if (hosted && picked.length) network.groups = picked;
+    }
     if (mode !== "none" && denied.length) network.deny = denied;
     update.mutate(
       { id: sb.id, network },
@@ -150,10 +164,23 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
           ) : (
             <p className="text-xs text-muted-foreground">
               No allowlist groups.{" "}
-              <Link href="/settings" className="underline underline-offset-2">
-                Make some in Settings
-              </Link>
-              .
+              {!hosted ? (
+                <>
+                  <Link href="/settings" className="underline underline-offset-2">
+                    Make some in Settings
+                  </Link>
+                  .
+                </>
+              ) : process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off" && isAdmin(caller) ? (
+                <>
+                  <Link href="/admin/egress-groups" className="underline underline-offset-2">
+                    Make some in Allowlist groups
+                  </Link>
+                  .
+                </>
+              ) : (
+                "An admin of this gateway keeps them."
+              )}
             </p>
           )}
           <div className="flex flex-col gap-1.5">
@@ -172,7 +199,7 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
             </p>
           ) : null}
           <p className="font-mono text-[11px] leading-relaxed break-all text-muted-foreground">
-            {allow.length} hosts: {allow.join(" · ") || "none"}
+            {reach.length} hosts: {reach.join(" · ") || "none"}
           </p>
         </div>
       ) : null}

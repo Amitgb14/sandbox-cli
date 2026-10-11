@@ -157,6 +157,10 @@ func (g *Gateway) Handler() http.Handler {
 	route("PUT /v1/admin/policies/{name}", false, g.adminPutPolicy)
 	route("DELETE /v1/admin/policies/{name}", false, g.adminDeletePolicy)
 	route("PUT /v1/admin/user-policy", false, g.adminAssignPolicy)
+	route("GET /v1/admin/egress-groups", false, g.adminListEgressGroups)
+	route("PUT /v1/admin/egress-groups/{name}", false, g.adminPutEgressGroup)
+	route("DELETE /v1/admin/egress-groups/{name}", false, g.adminDeleteEgressGroup)
+	route("GET /v1/egress-groups", false, g.listEgressGroups)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such endpoint")

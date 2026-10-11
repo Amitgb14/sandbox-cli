@@ -222,9 +222,27 @@ export function useTemplates() {
   return useQuery({ queryKey: keys.templates, queryFn: async () => (await apiFetch<{ templates: VmTemplate[] }>("/templates")).templates });
 }
 
-/** Allowlist groups and the deny rules every Studio launch carries. */
+/**
+ * Allowlist groups and the deny rules every Studio launch carries.
+ *
+ * Hosted, they are the gateway's: the groups its admin keeps
+ * (GET /v1/egress-groups), which a launch or a network change names and the
+ * gateway expands. There are no deny rules of Studio's own there and no
+ * default groups — a gateway group is never picked for a launch that did not
+ * name it — and the local /egress, this machine's user's settings, is not
+ * served.
+ */
 export function useEgress() {
-  return useQuery({ queryKey: keys.egress, queryFn: () => apiFetch<EgressSettings>("/egress") });
+  return useQuery({
+    queryKey: keys.egress,
+    queryFn: async (): Promise<EgressSettings> => {
+      if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on") {
+        const r = await apiFetch<{ groups?: EgressGroup[] }>("/v1/egress-groups");
+        return { rules: [], groups: (r.groups ?? []).map((g) => ({ name: g.name, description: g.description, hosts: g.hosts ?? [] })) };
+      }
+      return apiFetch<EgressSettings>("/egress");
+    },
+  });
 }
 
 // --- writes ------------------------------------------------------------------------

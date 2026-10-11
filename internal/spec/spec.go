@@ -519,6 +519,13 @@ func resolveNetwork(p *api.NetworkPolicy, pol NetworkPolicy) (api.NetworkPolicy,
 	if p == nil {
 		return copyPolicy(pol.Default), nil
 	}
+	// Groups are a gateway's, which turns them into hosts before a request
+	// reaches a node. A node that ignored them would run the sandbox
+	// without the hosts it was asked for, or with its default list in their
+	// place: refused, not dropped.
+	if len(p.Groups) > 0 {
+		return api.NetworkPolicy{}, invalid("network groups %v: allowlist groups are a gateway's; name the hosts in allow", p.Groups)
+	}
 	mode := p.Mode
 	if mode == "" {
 		mode = pol.Default.Mode
@@ -600,6 +607,13 @@ func permitted(name string, mayAllow []string) bool {
 
 // hostRE is a DNS name, optionally behind a single leading "*." wildcard.
 var hostRE = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// NormalizeHosts is normalizeNames for a list kept elsewhere than a request,
+// such as a gateway's allowlist groups, so it holds the names a request's
+// allow list would.
+func NormalizeHosts(field string, in []string) ([]string, error) {
+	return normalizeNames(field, in)
+}
 
 // normalizeNames lowercases, strips a trailing dot, validates, dedupes and sorts.
 // Names only: no scheme, port, path or address. Matching is by name, and a value

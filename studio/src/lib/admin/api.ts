@@ -14,7 +14,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
-import type { Capabilities, SSHKey, UserPolicy } from "@/lib/types";
+import type { Capabilities, EgressGroup, SSHKey, UserPolicy } from "@/lib/types";
 
 const enc = encodeURIComponent;
 
@@ -147,6 +147,7 @@ export const akeys = {
   lost: ["admin", "lost"] as const,
   keys: ["admin", "keys"] as const,
   policies: ["admin", "policies"] as const,
+  egressGroups: ["admin", "egress-groups"] as const,
   invites: ["admin", "invites"] as const,
   sshKeys: (user: string) => ["admin", "ssh-keys", user] as const,
   audit: (since: string) => ["admin", "audit", since] as const,
@@ -289,6 +290,41 @@ export function usePutPolicy() {
 
 export function useDeletePolicy() {
   return useAdminMutation((name: string) => apiFetch<void>(`/v1/admin/policies/${enc(name)}`, { method: "DELETE" }), akeys.policies);
+}
+
+/** The gateway's allowlist groups, which every user picks from (GET /v1/egress-groups is theirs). */
+export function useAdminEgressGroups() {
+  return useQuery({
+    queryKey: akeys.egressGroups,
+    queryFn: async () => (await apiFetch<{ groups?: EgressGroup[] }>("/v1/admin/egress-groups")).groups ?? [],
+  });
+}
+
+/**
+ * The admin's group writes refresh users' list too (the egress key), so a
+ * Playground open in this browser picks from what was saved.
+ */
+function useEgressGroupMutation<V, R>(fn: (v: V) => Promise<R>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => Promise.all([qc.invalidateQueries({ queryKey: akeys.egressGroups }), qc.invalidateQueries({ queryKey: ["egress"] })]),
+  });
+}
+
+/** Creates or replaces a group whole; the answer has its hosts as the gateway normalised them. */
+export function usePutEgressGroup() {
+  return useEgressGroupMutation((g: EgressGroup) =>
+    apiFetch<EgressGroup>(`/v1/admin/egress-groups/${enc(g.name)}`, {
+      method: "PUT",
+      json: { name: g.name, description: g.description || undefined, hosts: g.hosts },
+    }),
+  );
+}
+
+/** Refused (409) while a running job or a service names the group; the error says which. */
+export function useDeleteEgressGroup() {
+  return useEgressGroupMutation((name: string) => apiFetch<void>(`/v1/admin/egress-groups/${enc(name)}`, { method: "DELETE" }));
 }
 
 /** Gives a user a policy, or none with policy "". */

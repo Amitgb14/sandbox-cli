@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
-import { e2eState, gatewayStudio, type GatewayStudio } from "./state";
+import { e2eState, gatewayStudio, HOSTED_PORT, type GatewayStudio } from "./state";
 
 /**
  * Studio in front of a real sandbox-gateway (e2e/global-setup.ts), one Studio
@@ -12,8 +12,8 @@ import { e2eState, gatewayStudio, type GatewayStudio } from "./state";
  */
 
 const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account"];
-const ADMIN = ["Nodes", "Lost sandboxes", "Users & keys", "Audit", "All organizations"];
-const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/audit/", "/admin/orgs/"];
+const ADMIN = ["Nodes", "Lost sandboxes", "Users & keys", "Allowlist groups", "Audit", "All organizations"];
+const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
 
 /** Opens a gateway Studio with its token, once whoami has answered. */
 async function open(page: Page, name: GatewayStudio, user: string) {
@@ -384,4 +384,67 @@ test("an admin gives a user a policy, and moves a sandbox's end both ways", asyn
   await expect.poll(async () => ((await (await as("GET", `/v1/sandboxes/${sb.id}`)).json()) as { lifetime_secs: number }).lifetime_secs).toBe(1800);
   // The one node is shared with every other test: give its room back.
   await as("DELETE", `/v1/sandboxes/${sb.id}`);
+});
+
+/**
+ * The gateway's allowlist groups: an admin makes one on its screen, and a
+ * hosted user — whose Playground reads the gateway's groups, not a local
+ * Studio's — picks it, and the sandbox gets its hosts. Only an admin is
+ * offered the screen; a user is told an admin keeps the groups.
+ */
+test("an admin makes an allowlist group, and a hosted user picks it in the Playground", async ({ page, browser }) => {
+  const base = await open(page, "gw-admin", "ops");
+  await nav(page).getByRole("link", { name: "Allowlist groups", exact: true }).click();
+  await expect(page.locator("main h1")).toHaveText("Allowlist groups");
+  await page.getByRole("button", { name: "New group" }).click();
+  await page.getByLabel("Group name").fill("e2e-go");
+  await page.getByLabel("Group description").fill("Go modules");
+  await page.getByLabel("Group hosts").fill("proxy.golang.org, sum.golang.org");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  const card = page.getByRole("group", { name: "Group e2e-go" });
+  await expect(card.getByRole("list", { name: "e2e-go hosts" })).toContainText("proxy.golang.org");
+  // No default switch: a gateway group is only ever in a launch that names it.
+  await expect(card.getByRole("switch")).toHaveCount(0);
+  await card.getByLabel("Add a host to e2e-go").fill("golang.org");
+  await card.getByRole("button", { name: "Add" }).click();
+  await expect(card.getByText("3 hosts")).toBeVisible();
+  await card.getByRole("button", { name: "Remove sum.golang.org from e2e-go" }).click();
+  await expect(card.getByText("2 hosts")).toBeVisible();
+
+  const { hosted: h, gatewayURL, adminKey } = e2eState();
+  if (!h) {
+    await fetch(`${gatewayURL}/v1/admin/egress-groups/e2e-go`, { method: "DELETE", headers: { Authorization: `Bearer ${adminKey}` } });
+    test.skip(true, "no out-hosted/: run npm run build:hosted first (npm run check does)");
+  }
+  const hostedBase = `http://127.0.0.1:${HOSTED_PORT}`;
+  const user = await browser.newPage();
+  await user.goto(h!.hana.invite);
+  await expect(user.locator("[data-sidebar=sidebar]").getByText("hosted · hana@hana")).toBeVisible();
+  await user.goto(`${hostedBase}/launch/`);
+  await user.locator("label[for=kind-command]").click();
+  await user.getByRole("textbox", { name: "Command" }).fill("echo grouped");
+  await user.locator("label[for=net-allowlist]").click();
+  await expect(user.getByText("Kept by an admin")).toBeVisible();
+  await expect(user.getByRole("link", { name: "Manage groups" })).toHaveCount(0);
+  const pick = user.getByRole("checkbox", { name: "Group e2e-go" });
+  await expect(pick).toHaveAttribute("aria-checked", "false");
+  await pick.click();
+  await expect(pick).toHaveAttribute("aria-checked", "true");
+  await user.getByText(/^Reaches \d+ hosts?/).click();
+  await expect(user.getByText(/proxy\.golang\.org/).first()).toBeVisible();
+  // The launch names the group; the gateway puts its hosts in the allowlist.
+  await user.getByRole("button", { name: "Launch", exact: true }).click();
+  await expect(user).toHaveURL(/\/sandbox\/\?id=sbx_/);
+  const id = new URL(user.url()).searchParams.get("id")!;
+  const as = (method: string, path: string) => fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${h!.hana.key}` } });
+  const got = (await (await as("GET", `/v1/sandboxes/${id}`)).json()) as { network: { mode: string; allow?: string[] } };
+  expect(got.network.mode).toBe("allowlist");
+  expect(got.network.allow).toEqual(expect.arrayContaining(["proxy.golang.org", "golang.org"]));
+  await as("DELETE", `/v1/sandboxes/${id}`);
+  await user.close();
+
+  await page.goto(`${base}/admin/egress-groups/`);
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Delete group e2e-go" }).click();
+  await expect(page.getByRole("group", { name: "Group e2e-go" })).toHaveCount(0);
 });

@@ -190,6 +190,16 @@ in `_old/` as reference, to be ported where this design still wants it.
   `. _ / -`; printable values up to 256 bytes) and refused otherwise. They
   are returned with the job, so `GET /v1/jobs` can be told apart and
   filtered; Studio's Jobs form sets them and its list filters by them.
+- **A gateway keeps allowlist groups.** An admin names a set of hosts once
+  (`sandbox-cli gateway egress-groups set go --host proxy.golang.org`, or
+  hosted Studio's admin screen) and any user adds it to an allowlist by name:
+  `--allow-group go` on `run` and `update`, `"groups": ["go"]` in a network
+  policy, or hosted Studio's Network step. The gateway turns the name into
+  hosts, so each node's policy still decides what it allows. An unknown name
+  is refused, never dropped; a change holds for sandboxes created after it;
+  a group a running job or a service names cannot be removed. There is no
+  default group: a launch reaches a group's hosts only by naming it. A
+  `sandboxd` reached directly refuses `groups`, which are a gateway's.
 
 **Added:**
 

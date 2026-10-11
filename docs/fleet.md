@@ -564,6 +564,37 @@ sandbox-cli update SANDBOX --lifetime +15m                    # one sandbox: +15
 With the gateway stopped, `sandbox-gateway policies set|list|assign|remove` and
 `keys create --policy` do the same on the state file.
 
+### Allowlist groups
+
+An allowlist group is a named set of hosts — Go modules, npm, an internal
+registry — that an admin keeps and any user adds to a sandbox's allowlist by
+name, instead of listing the hosts every time.
+
+```sh
+sandbox-cli gateway egress-groups set go --host proxy.golang.org --host sum.golang.org --description "Go modules"
+sandbox-cli gateway egress-groups list                     # any key
+sandbox-cli run --network allowlist --allow-group go -- go build ./...
+sandbox-cli update SANDBOX --network allowlist --allow-group go --no-baseline
+sandbox-cli gateway egress-groups remove go
+```
+
+- Only an admin key sets or removes a group; every key lists them, and hosted
+  Studio's Network step offers them. A group widens what every user naming it
+  reaches, so it is the operator's to say, as a policy is.
+- The gateway turns names into hosts before a request reaches a node. Each
+  node's `policy.yaml` still decides: a group host outside its `may_allow` is
+  refused at launch, as the same host in `--allow` would be.
+- An unknown group is refused, never dropped. Named with no other host and
+  `--no-baseline`, the groups' hosts are the whole list.
+- A change holds for sandboxes created after it. A running sandbox keeps the
+  hosts it was given; a job's or a service's next sandbox gets the group as it
+  is then. A group a running job or a service names cannot be removed.
+- There is no default group: a launch reaches a group's hosts only by naming
+  it, so editing a group never widens a launch that did not ask for it.
+
+Groups are kept in the gateway's database. A state file has none, so
+`sandbox-gateway store import` brings none.
+
 ### Accounts: invite by email, sign in with a password
 
 A key is a good credential for a program and a poor one for a person: it has

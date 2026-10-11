@@ -14,6 +14,12 @@ export interface NetworkPolicy {
   mode: NetworkMode;
   allow?: string[] | null;
   deny?: string[];
+  /**
+   * A gateway's allowlist groups, by name (mode allowlist only): the gateway
+   * adds their hosts to allow, or makes them the whole list when allow is
+   * absent.
+   */
+  groups?: string[];
 }
 
 export interface VolumeMount {

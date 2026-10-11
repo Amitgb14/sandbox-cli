@@ -109,6 +109,9 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	if _, ok := g.combinedCapabilities(); !ok {
 		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 	}
+	if f := g.applyGroups(ctx, &req.Network); f != nil {
+		return api.Sandbox{}, f
+	}
 	if err := g.applyPolicyLifetime(ctx, p, &req); errors.Is(err, ErrStore) {
 		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, ErrStore.Error())
 	} else if err != nil {
