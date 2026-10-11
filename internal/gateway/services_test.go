@@ -977,3 +977,98 @@ func TestServiceSecretsReachReplicasOnly(t *testing.T) {
 		t.Fatalf("%d replicas with the secret gone", len(s.Replicas))
 	}
 }
+
+// A redeploy is a new revision of the spec the service has: every replica
+// replaced, one at a time, with its env and secrets as they are now.
+func TestRedeployReplacesReplicasWithTheSameSpec(t *testing.T) {
+	e := startServicesWith(t, withKey, "n1")
+	ctx := ctxT(t)
+	alice := e.client("alice", "", ScopeRead, ScopeCreate, ScopeDelete, ScopeSecretsWrite)
+	if err := alice.SetSecret(ctx, "tok", "first"); err != nil {
+		t.Fatal(err)
+	}
+	sp := webSpec(2)
+	sp.Env = map[string]string{"PLAIN": "kept"}
+	sp.Secrets = []string{"TOKEN=tok"}
+	if _, err := alice.DeployService(ctx, sp); err != nil {
+		t.Fatal(err)
+	}
+	before := waitService(t, alice, "web", "ready", ready(2))
+	if err := alice.SetSecret(ctx, "tok", "second"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := alice.RedeployService(ctx, "web")
+	if err != nil || s.Revision != before.Revision+1 {
+		t.Fatalf("redeploy: revision %d, %v; want %d", s.Revision, err, before.Revision+1)
+	}
+	old := map[string]bool{}
+	for _, r := range before.Replicas {
+		old[r.Sandbox] = true
+	}
+	after := waitService(t, alice, "web", "every replica replaced", func(s api.Service) bool {
+		if s.Ready != 2 || len(s.Replicas) != 2 || (s.Rollout != nil && s.Rollout.State != api.RolloutDone) {
+			return false
+		}
+		for _, r := range s.Replicas {
+			if old[r.Sandbox] {
+				return false
+			}
+		}
+		return true
+	})
+	e.app.mu.Lock()
+	for _, r := range after.Replicas {
+		if env := e.app.env[r.Sandbox]; env["TOKEN"] != "second" || env["PLAIN"] != "kept" {
+			t.Errorf("replica %s after a redeploy: %v", r.Sandbox, env)
+		}
+	}
+	e.app.mu.Unlock()
+
+	_, err = alice.RedeployService(ctx, "nope")
+	wantCode(t, err, api.CodeNotFound)
+	_, err = e.client("bob", "", ScopeRead, ScopeCreate).RedeployService(ctx, "web")
+	wantCode(t, err, api.CodeNotFound)
+	_, err = e.client("alice", "", ScopeRead).RedeployService(ctx, "web")
+	wantCode(t, err, api.CodeRefused)
+	// A secret gone is refused here, not found by the rollout.
+	if err := alice.DeleteSecret(ctx, "tok"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = alice.RedeployService(ctx, "web")
+	wantCode(t, err, api.CodeInvalidRequest)
+}
+
+// An edit of a spec read back, which holds env names only, keeps the
+// service's env values with keep_env.
+func TestAnEditKeepsTheEnvItCannotSee(t *testing.T) {
+	e := startServicesWith(t, withKey, "n1")
+	ctx := ctxT(t)
+	alice := e.client("alice", "", ScopeRead, ScopeCreate, ScopeDelete)
+	sp := webSpec(1)
+	sp.Env = map[string]string{"PLAIN": "kept-value"}
+	if _, err := alice.DeployService(ctx, sp); err != nil {
+		t.Fatal(err)
+	}
+	got := waitService(t, alice, "web", "ready", ready(1))
+	edited := got.Spec
+	if len(edited.Env) != 0 {
+		t.Fatalf("a GET returned env values: %v", edited.Env)
+	}
+	edited.Command = []string{"sleep", "7200"}
+	s, err := alice.UpdateServiceKeepingEnv(ctx, edited)
+	if err != nil || s.Revision != got.Revision+1 {
+		t.Fatalf("edit: %+v, %v", s, err)
+	}
+	after := waitService(t, alice, "web", "the edit rolled out", func(s api.Service) bool {
+		return s.Ready == 1 && len(s.Replicas) == 1 && s.Replicas[0].Revision == got.Revision+1
+	})
+	e.app.mu.Lock()
+	if env := e.app.env[after.Replicas[0].Sandbox]; env["PLAIN"] != "kept-value" {
+		t.Errorf("the edited replica's env: %v", env)
+	}
+	e.app.mu.Unlock()
+
+	edited.Env = map[string]string{"OTHER": "x"}
+	_, err = alice.UpdateServiceKeepingEnv(ctx, edited)
+	wantCode(t, err, api.CodeInvalidRequest)
+}

@@ -276,6 +276,37 @@ test("a tenant deploys, scales and removes a service", async ({ page }) => {
   await expect(page).toHaveURL(/\/services\/?$/);
 });
 
+test("a tenant edits a service's spec and redeploys it, and its env is kept", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/services/`);
+  await page.getByRole("button", { name: "Deploy service" }).click();
+  await page.getByLabel("Service spec").fill(JSON.stringify({ name: "e2e-edit", command: ["sleep", "1000"], replicas: 1, env: { KEPT: "env-value-never-shown" } }));
+  await page.getByRole("button", { name: "Deploy", exact: true }).click();
+  await expect(page).toHaveURL(/\/service\/?\?name=e2e-edit/);
+  await expect(page.getByText("1/1 ready")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("· revision 1")).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit spec" }).click();
+  const editor = page.getByLabel("Edit service spec");
+  const spec = JSON.parse(await editor.inputValue());
+  expect(spec.env).toBeUndefined();
+  await expect(page.getByText(/The env \(KEPT\) is kept as it is/)).toBeVisible();
+  spec.command = ["sleep", "2000"];
+  await editor.fill(JSON.stringify(spec));
+  await page.getByRole("button", { name: "Save and roll out" }).click();
+  await expect(page.getByText("· revision 2")).toBeVisible();
+  await expect(page.locator("main").getByText("sleep 2000", { exact: true })).toBeVisible();
+  await expect(page.locator("main").getByText("KEPT")).toBeVisible();
+
+  await page.getByRole("button", { name: "Redeploy" }).click();
+  await expect(page.getByText("· revision 3")).toBeVisible();
+  await expect(page.getByText("1/1 ready")).toBeVisible({ timeout: 15_000 });
+  expect(await page.content()).not.toContain("env-value-never-shown");
+  page.once("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "Remove" }).click();
+  await expect(page).toHaveURL(/\/services\/?$/);
+});
+
 test("a tenant adds an SSH key and issues an access token shown once", async ({ page, request }) => {
   const { base, token } = gatewayStudio("gw-tenant");
   const sb = await (

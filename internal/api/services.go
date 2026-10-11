@@ -21,6 +21,22 @@ func (c *Client) UpdateService(ctx context.Context, spec ServiceSpec) (Service, 
 	return out, c.json(ctx, http.MethodPut, svc(spec.Name), spec, &out)
 }
 
+// UpdateServiceKeepingEnv is UpdateService for a spec read back from the
+// API, which holds env names only: the service's env values are kept, and
+// spec.Env must be empty (PUT /v1/services/{name}?keep_env=1).
+func (c *Client) UpdateServiceKeepingEnv(ctx context.Context, spec ServiceSpec) (Service, error) {
+	var out Service
+	return out, c.json(ctx, http.MethodPut, svc(spec.Name)+"?keep_env=1", spec, &out)
+}
+
+// RedeployService rolls a service's replicas over to a new revision of the
+// spec it has (POST /v1/services/{name}/redeploy), for what changed outside
+// the spec: a secret set again, an image tag moved.
+func (c *Client) RedeployService(ctx context.Context, name string) (Service, error) {
+	var out Service
+	return out, c.json(ctx, http.MethodPost, svc(name)+"/redeploy", nil, &out)
+}
+
 // Services lists the caller's services.
 func (c *Client) Services(ctx context.Context) ([]Service, error) {
 	var out ServiceList

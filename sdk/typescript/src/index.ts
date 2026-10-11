@@ -770,6 +770,11 @@ export class Client {
     return this.json("POST", this.svc(name) + "/scale", { replicas });
   }
 
+  /** Replace every replica, one at a time, with the spec as it is: for a secret set again or an image tag moved. */
+  redeployService(name: string): Promise<Service> {
+    return this.json("POST", this.svc(name) + "/redeploy");
+  }
+
   /** Delete a service and terminate its replicas. */
   async deleteService(name: string): Promise<void> {
     await this.json("DELETE", this.svc(name));

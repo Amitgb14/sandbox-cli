@@ -103,6 +103,7 @@ Global flags:
 | [`sandbox-cli service deploy`](#sandbox-cli-service-deploy) | Create a service, or update it (a rolling update) if it exists |
 | [`sandbox-cli service get`](#sandbox-cli-service-get) | Show a service: its spec, its rollout, and each replica's health |
 | [`sandbox-cli service ls`](#sandbox-cli-service-ls) | List services |
+| [`sandbox-cli service redeploy`](#sandbox-cli-service-redeploy) | Replace a service's replicas, one at a time, with its spec as it is |
 | [`sandbox-cli service rm`](#sandbox-cli-service-rm) | Delete services and terminate their replicas |
 | [`sandbox-cli service scale`](#sandbox-cli-service-scale) | Set how many replicas a service keeps |
 | [`sandbox-cli shell`](#sandbox-cli-shell) | Open an interactive shell in a running sandbox |
@@ -1401,7 +1402,7 @@ time, and routes HTTP to the healthy ones when the service is public.
 Services need a gateway; a single sandboxd has none. See docs/services.md.
 ```
 
-Subcommands: [`deploy`](#sandbox-cli-service-deploy), [`get`](#sandbox-cli-service-get), [`ls`](#sandbox-cli-service-ls), [`rm`](#sandbox-cli-service-rm), [`scale`](#sandbox-cli-service-scale).
+Subcommands: [`deploy`](#sandbox-cli-service-deploy), [`get`](#sandbox-cli-service-get), [`ls`](#sandbox-cli-service-ls), [`redeploy`](#sandbox-cli-service-redeploy), [`rm`](#sandbox-cli-service-rm), [`scale`](#sandbox-cli-service-scale).
 
 Flags:
 
@@ -1437,6 +1438,20 @@ List services.
 
 ```text
 sandbox-cli service ls
+```
+
+### sandbox-cli service redeploy
+
+Replace a service's replicas, one at a time, with its spec as it is.
+
+```text
+sandbox-cli service redeploy NAME
+```
+
+```text
+A new revision of the spec the service has, rolled out one replica at a time as an
+update is. For what changed outside the spec, which only a new sandbox picks up:
+a secret set again, an image tag that now names another image.
 ```
 
 ### sandbox-cli service rm

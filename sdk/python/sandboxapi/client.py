@@ -473,6 +473,11 @@ class Client:
     def scale_service(self, name: str, replicas: int) -> Dict[str, Any]:
         return self._json("POST", self._svc(name) + "/scale", {"replicas": replicas})
 
+    def redeploy_service(self, name: str) -> Dict[str, Any]:
+        """Replace every replica, one at a time, with the spec as it is: for
+        a secret set again or an image tag moved."""
+        return self._json("POST", self._svc(name) + "/redeploy")
+
     def delete_service(self, name: str) -> None:
         """Delete a service and terminate its replicas."""
         self._json("DELETE", self._svc(name))

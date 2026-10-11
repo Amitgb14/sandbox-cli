@@ -133,6 +133,27 @@ func newServiceCmd() *cobra.Command {
 		},
 	}
 
+	redeploy := &cobra.Command{
+		Use:   "redeploy NAME",
+		Short: "Replace a service's replicas, one at a time, with its spec as it is",
+		Long: "A new revision of the spec the service has, rolled out one replica at a time as an\n" +
+			"update is. For what changed outside the spec, which only a new sandbox picks up:\n" +
+			"a secret set again, an image tag that now names another image.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, _, err := newClient(ctxFlag)
+			if err != nil {
+				return err
+			}
+			s, err := c.RedeployService(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s: rolling out revision %d\n", termsafe.Clean(s.Spec.Name), s.Revision)
+			return nil
+		},
+	}
+
 	rm := &cobra.Command{
 		Use:   "rm NAME...",
 		Short: "Delete services and terminate their replicas",
@@ -150,7 +171,7 @@ func newServiceCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.AddCommand(deploy, ls, get, scale, rm)
+	cmd.AddCommand(deploy, ls, get, scale, redeploy, rm)
 	return cmd
 }
 

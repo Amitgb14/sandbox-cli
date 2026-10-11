@@ -125,6 +125,7 @@ func (g *Gateway) Handler() http.Handler {
 	route("GET /v1/services/{name}", false, g.getService)
 	route("PUT /v1/services/{name}", false, g.updateService)
 	route("POST /v1/services/{name}/scale", false, g.scaleService)
+	route("POST /v1/services/{name}/redeploy", false, g.redeployService)
 	route("DELETE /v1/services/{name}", false, g.deleteService)
 
 	route("GET /v1/ssh", false, g.sshEndpoint)

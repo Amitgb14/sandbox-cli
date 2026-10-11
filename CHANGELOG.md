@@ -219,6 +219,15 @@ in `_old/` as reference, to be ported where this design still wants it.
   names may now hold `.` and `-`. The variable is checked when the spec is
   sent, as an `env` name is: valid, not reserved, not set twice and not also
   in `env`, else `400`. Studio's Secrets and Jobs screens say so.
+- **A service can be redeployed, and edited in Studio without losing its
+  env.** `sandbox-cli service redeploy NAME` (`POST
+  /v1/services/{name}/redeploy`, `redeploy_service`/`redeployService` in the
+  SDKs) rolls a new revision of the spec the service has, one replica at a
+  time, so replicas pick up a secret set again or an image tag that moved;
+  a spec sent again unchanged makes no revision. `PUT
+  /v1/services/{name}?keep_env=1` keeps the service's env, for a spec read
+  back from a `GET`, which holds env names only. Studio's service page has
+  **Redeploy** and **Edit spec**, which uses it.
 
 **Added:**
 
