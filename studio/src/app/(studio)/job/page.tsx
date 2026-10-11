@@ -133,18 +133,48 @@ function Spec({ job }: { job: Job }) {
   );
 }
 
+/**
+ * Why a run failed, where it cannot be missed, with what to do about the
+ * commonest cause: a command line that needs a shell sent as plain words,
+ * so its first word is taken for a program.
+ */
+function WhyFailed({ error, command }: { error: string; command?: string[] }) {
+  const noCommand = /no such command|executable file not found|not found in \$PATH/i.test(error);
+  const first = command?.[0];
+  return (
+    <div role="alert" className="flex flex-col gap-1.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">
+      <p className="font-medium text-destructive">Why it failed</p>
+      <p className="font-mono text-[13px]">{error}</p>
+      {noCommand && first ? (
+        <p className="text-muted-foreground">
+          <span className="font-mono">{first}</span> is not a program in the image. A shell command — a loop, <span className="font-mono">;</span>,{" "}
+          <span className="font-mono">&amp;&amp;</span>, a pipe, <span className="font-mono">$VAR</span> — needs a shell to run it: Studio now sends such a
+          line as <span className="font-mono">sh -c &apos;…&apos;</span>; from the CLI, write{" "}
+          <span className="font-mono">sandbox-cli job run -- sh -c &apos;…&apos;</span>.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** What was kept of one run once it ended: stdout, stderr and files. */
 function RunKept({ job, run }: { job: Job; run: JobRun }) {
   const ended = !["queued", "running"].includes(run.state);
-  const { data, error } = useJobOutput(job.id, run.n, ended && job.spec.keep?.output !== false);
+  // A run that ended without its command starting has nothing kept: asking
+  // for its output only says "no output yet", which reads as if some were
+  // coming.
+  const neverStarted = ended && !run.started_at;
+  const { data, error } = useJobOutput(job.id, run.n, ended && !neverStarted && job.spec.keep?.output !== false);
   const stdout = decodeB64(data?.stdout);
   const stderr = decodeB64(data?.stderr);
   return (
     <section className="flex flex-col gap-3">
       <SectionHeader
         title={`Run #${run.n}`}
-        description={run.error ? run.error : ended ? `ended ${formatRelative(run.finished_at)}` : "Output is kept when the run ends."}
+        description={ended ? `ended ${formatRelative(run.finished_at)}` : "Output is kept when the run ends."}
       />
+      {run.error ? <WhyFailed error={run.error} command={job.spec.command} /> : null}
+      {neverStarted ? <p className="text-sm text-muted-foreground">The command never started, so there is no output.</p> : null}
       {ended && (
         <>
           {error ? <p className="text-sm text-muted-foreground">{error.message}</p> : null}

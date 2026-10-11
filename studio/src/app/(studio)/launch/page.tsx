@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -23,7 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAgents, useEgress, useInfo, useLaunch, useNode, useSandboxes, useSnapshots, useTemplates, useFleetImages } from "@/lib/api/queries";
 import { useCaller } from "@/lib/caller";
 import { cliAgent, snippets } from "@/lib/codegen";
-import { formatMiB, formatRelative, splitArgs } from "@/lib/format";
+import { formatMiB, formatRelative, commandArgv } from "@/lib/format";
 import { overLimits } from "@/lib/templates";
 import { cn } from "@/lib/utils";
 import type { LaunchRequest, NetworkMode } from "@/lib/types";
@@ -97,7 +97,11 @@ function LaunchForm() {
   const [snapshot, setSnapshot] = useState("");
   const canSnapshot = !!(info?.capabilities?.capabilities?.memory_snapshot || info?.capabilities?.capabilities?.disk_snapshot);
   const { data: snapshots } = useSnapshots(canSnapshot);
-  const callerKind = useCaller().kind;
+  const caller = useCaller();
+  const callerKind = caller.kind;
+  // The operator's policy for this user: what every sandbox of theirs is
+  // held to, said here rather than discovered when it ends.
+  const policy = caller.kind === "gateway" ? caller.who.policy : undefined;
   const { data: node } = useNode(callerKind === "sandboxd");
   // Through a gateway the node's own list is not offered; the gateway lists
   // what its nodes have built, so a new user sees choices before their first
@@ -166,7 +170,7 @@ function LaunchForm() {
   };
   const code =
     kind === "command"
-      ? snippets({ ...sandboxOpts, command: splitArgs(command), defaultAllow:
+      ? snippets({ ...sandboxOpts, command: commandArgv(command), defaultAllow:
             info?.capabilities?.network.default.mode === "allowlist"
               ? (info.capabilities.network.default.allow ?? undefined)
               : info?.baseline_egress })
@@ -175,7 +179,7 @@ function LaunchForm() {
   function submit(e: React.FormEvent) {
     e.preventDefault();
     const req: LaunchRequest = { name: name || undefined };
-    if (kind === "command") req.command = splitArgs(command);
+    if (kind === "command") req.command = commandArgv(command);
     else {
       req.agent = agent;
       req.prompt = prompt || undefined;
@@ -322,6 +326,12 @@ function LaunchForm() {
               </p>
             </div>
           )}
+          {policy?.max_lifetime_secs ? (
+            <p className="text-xs text-caution" data-testid="policy-lifetime">
+              Under your policy, <span className="font-mono">{policy.name}</span>, a sandbox ends {formatLifetime(policy.max_lifetime_secs)} after it starts,
+              busy or not.
+            </p>
+          ) : null}
           <div className="flex flex-col gap-2 border-t pt-3">
             <Label className={cn("flex items-center gap-2 font-normal", !canSnapshot && "text-muted-foreground")}>
               <Checkbox checked={scheduled && canSnapshot} disabled={!canSnapshot} onCheckedChange={(v) => setScheduled(!!v)} aria-label="Snapshot on a schedule" />
@@ -586,7 +596,7 @@ function LaunchForm() {
               )}
             </dl>
             <Button type="submit" disabled={launch.isPending} className="w-full shadow-sm shadow-primary/20">
-              {launch.isPending ? "Starting…" : "Launch"}
+              {launch.isPending ? <Waiting /> : "Launch"}
             </Button>
             <p className="text-xs text-muted-foreground">Your config, profile and the server&apos;s policy apply. A control that cannot be delivered refuses the run.</p>
           </CardContent>
@@ -607,6 +617,34 @@ function LaunchForm() {
       </div>
     </form>
   );
+}
+
+/**
+ * "Starting… 12s": how long the launch has waited, so a slow one does not look
+ * frozen. Past ten seconds it says what it is waiting for — the sandbox is
+ * listed once its node has made it, not before.
+ */
+function Waiting() {
+  const [since] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const secs = Math.floor((now - since) / 1000);
+  return (
+    <span className="flex flex-col items-center leading-tight">
+      <span>Starting… {secs > 0 ? `${secs}s` : ""}</span>
+      {secs >= 10 ? <span className="text-[11px] font-normal opacity-80">Still creating the sandbox; it is listed once it exists.</span> : null}
+    </span>
+  );
+}
+
+/** A lifetime for a sentence: "30 minutes", "2 hours", "90 seconds". */
+function formatLifetime(secs: number): string {
+  if (secs % 3600 === 0) return `${secs / 3600} hour${secs === 3600 ? "" : "s"}`;
+  if (secs % 60 === 0) return `${secs / 60} minute${secs === 60 ? "" : "s"}`;
+  return `${secs} seconds`;
 }
 
 export default function LaunchPage() {
