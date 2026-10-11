@@ -59,6 +59,7 @@ A job spec is YAML or JSON (`-f -` reads it from stdin):
 | `retries` | how many more attempts a run that failed or timed out gets. |
 | `timeout_secs` | bounds each attempt from the moment its command starts (default 3600). |
 | `name`, `image` | a name for people (jobs are found by id); the image, else the node's default. |
+| `labels: {key: value}` | your own metadata, bounded as a sandbox's are: up to 32 keys of lowercase letters, digits and `. _ / -`, values up to 256 printable bytes. Returned with the job; Studio's **Jobs** filters by them. |
 | `env: {NAME: value}` | set in each run; a reserved name is refused. A `GET` shows names, not values. |
 | `secrets: [NAME]` | the tenant's secrets, each set in the run's environment under its own name. |
 | `network`, `resources`, `from_snapshot` | as for a sandbox: the egress policy, `{cpus, memory_mb, disk_mb}`, a snapshot to start from. |
@@ -142,6 +143,6 @@ The Python and TypeScript SDKs have `create_job`/`createJob`,
 `job_output`/`jobOutput`, `job_file`/`jobFile`, `set_secret`/`setSecret`,
 `secrets` and `delete_secret`/`deleteSecret`
 ([sdk/README.md](../sdk/README.md)). In Studio, **Jobs** submits and cancels
-jobs and shows each run's kept output and files, and **Secrets** lists names
+jobs, filters them by state and label, and shows each run's kept output and files, and **Secrets** lists names
 and sets values in a password field that is never shown again
 ([studio.md](studio.md)).

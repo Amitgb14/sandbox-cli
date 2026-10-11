@@ -249,6 +249,12 @@ func (g *Gateway) checkJobSpec(ctx context.Context, p Principal, s *api.JobSpec)
 	if s.Name != "" && !spec.ValidName(s.Name) {
 		return badSpec("name %q: lowercase letters, digits and dashes, starting with a letter or digit, at most 63", s.Name)
 	}
+	// Labels are printed by job ls and in Studio: bounded and printable, as a
+	// sandbox's are, so a label is no way to put an escape sequence in front
+	// of the person reading the list.
+	if err := spec.ValidateLabels(s.Labels); err != nil {
+		return badSpec("%v", err)
+	}
 	switch {
 	case len(s.Command) > 0 && s.Agent != "":
 		return badSpec("a job runs a command or an agent, not both")

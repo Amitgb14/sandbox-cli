@@ -10,6 +10,14 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Jobs and Services are searchable, filterable and paged.** Jobs has a
+  search (name, id, command, label), a State filter and a Labels filter;
+  Services a search (name, owner, image, URL), a Health filter and a Reach
+  (public or private) filter. Both sort by name and time and page 20 rows
+  at a time, and the page stays put as the list refreshes.
+- **A job is submitted with labels**, `key=value` or a bare `key` as a tag,
+  checked as they are typed; the job's page shows them. The API side is in
+  the main [CHANGELOG.md](../CHANGELOG.md).
 - **A command line using the shell runs in one.** The Jobs form and the
   Playground split a command into words, so a loop, `;`, `&&`, a pipe or
   `$VAR` ran its first word as a program and failed with "no such command".
