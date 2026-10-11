@@ -218,7 +218,9 @@ test("a secret named for its purpose is set in a job as the variable the job say
   await page.goto(`${base}/jobs/`);
   await page.getByRole("button", { name: "Submit job" }).click();
   await page.getByLabel("Name").fill("e2e-mapped");
-  await page.getByLabel("Command").fill("printenv OPENAI_API_KEY");
+  // A command that prints nothing: one that printed the variable would show
+  // its value in the run's own output, as it should.
+  await page.getByLabel("Command").fill("true");
   await page.getByLabel("Secrets").fill("OPENAI_API_KEY=e2e-openai-prod");
   await page.getByRole("button", { name: "Submit", exact: true }).click();
   await expect(page).toHaveURL(/\/job\/?\?id=job_/);
