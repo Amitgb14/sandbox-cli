@@ -225,7 +225,7 @@ jobs:
 
       - name: Web — typecheck, lint, build
         working-directory: web
-        run: npm ci --no-audit --no-fund && npx tsc --noEmit && npm run lint && npm run build
+        run: npm ci --no-audit --no-fund && npx tsc --noEmit && npm run lint && npm run test:waitlist && npm run build
 
   # The SDKs. Python at both ends of what it supports: 3.9 is what macOS still
   # ships as /usr/bin/python3, the interpreter somebody's agent script finds
