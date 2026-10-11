@@ -88,7 +88,13 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 	// mid-launch is still ended.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
 	defer cancel()
+	start := time.Now()
 	res, err := s.Launch(ctx, s.clientFor(r), req)
+	// A launch that seems stuck to its user: how long it took, end to end,
+	// against the gateway's own account of the create (sandboxes.go).
+	if d := time.Since(start); d > 2*time.Second {
+		s.logf("launch: slow, %s (sandbox %q, err %v)", d.Round(time.Millisecond), res.Sandbox, err)
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

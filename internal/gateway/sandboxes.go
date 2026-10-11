@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
@@ -92,6 +93,8 @@ func (g *Gateway) create(ctx context.Context, p Principal, req api.CreateSandbox
 // (a node name and how many of the caller's replicas it already holds), as a
 // service's replicas are.
 func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateSandboxRequest, extra map[string]string, spread map[string]int) (api.Sandbox, *createFail) {
+	// Where a slow create spends its time, for the log (slowCreate).
+	t := createTimer{start: time.Now()}
 	if req.Name != "" && !spec.ValidName(req.Name) {
 		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, "name "+req.Name+": lowercase letters, digits and dashes, starting with a letter or digit, at most 63")
 	}
@@ -202,7 +205,9 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	}
 
 	res := api.NodeResources{CPUs: want.CPUs, MemoryMB: want.MemoryMB, DiskMB: want.DiskMB}
+	t.mark("checks")
 	hold, err := g.reserveQuota(ctx, p.Tenant, res)
+	t.mark("quota")
 	if err != nil {
 		g.metrics.refused.Inc(refusedQuota)
 		return api.Sandbox{}, transientFail(http.StatusForbidden, api.CodeRefused, err.Error())
@@ -234,6 +239,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	var conflict []byte // the last node's refusal of the name
 	for {
 		n, pl, err := g.place(want, tried, res)
+		t.mark("placing")
 		if err != nil && conflict != nil {
 			return api.Sandbox{}, &createFail{status: http.StatusConflict, body: conflict}
 		}
@@ -246,6 +252,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 			return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, msg)
 		}
 		resp, err := n.do(ctx, http.MethodPost, "/v1/sandboxes", nil, bytes.NewReader(body), "application/json")
+		t.mark("node " + n.cfg.Name)
 		if err != nil {
 			n.finishIf(pl, false)
 			g.logf("create on %s: %v", n.cfg.Name, err)
@@ -298,6 +305,10 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 			return api.Sandbox{}, failWith(http.StatusInternalServerError, api.CodeInternal, "the sandbox's owner could not be recorded; it was terminated")
 		}
 		n.created(pl, sb.ID)
+		t.mark("recording")
+		if d := time.Since(t.start); d > slowCreate {
+			g.logf("create %s for %s: slow, %s (%s)", sb.ID, p.User, d.Round(time.Millisecond), t)
+		}
 		noteSandbox(ctx, sb.ID, n.cfg.Name)
 		return sb, &createFail{status: http.StatusCreated, body: data}
 	}
@@ -600,3 +611,26 @@ func (g *Gateway) roomBack(ctx context.Context, node, id string) {
 		n.released(id, res)
 	}
 }
+
+// slowCreate is how long a create may take before the gateway logs where its
+// time went: a create that seems stuck to its user can then be told apart —
+// the gateway's own checks, the quota, placing it, the node, recording it.
+const slowCreate = 2 * time.Second
+
+// createTimer adds up a create's time by step.
+type createTimer struct {
+	start, last time.Time
+	steps       []string
+}
+
+func (c *createTimer) mark(step string) {
+	now := time.Now()
+	from := c.last
+	if from.IsZero() {
+		from = c.start
+	}
+	c.steps = append(c.steps, fmt.Sprintf("%s %s", step, now.Sub(from).Round(time.Millisecond)))
+	c.last = now
+}
+
+func (c *createTimer) String() string { return strings.Join(c.steps, ", ") }
