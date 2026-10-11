@@ -20,12 +20,11 @@ const admin = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off";
 
 // NEXT_PUBLIC_STUDIO_HOSTED=on builds the Studio `sandbox-cli studio host`
 // serves to many users: sign-in by invite link and a session cookie, no
-// Studio token, nothing of the host. Its users are never operators, so it
-// never carries the admin screens (`npm run build:hosted`, checked by
-// scripts/check-hosted.mjs).
-if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" && admin) {
-  throw new Error("a hosted build (NEXT_PUBLIC_STUDIO_HOSTED=on) needs NEXT_PUBLIC_STUDIO_ADMIN=off");
-}
+// Studio token, nothing of the host (`npm run build:hosted`, checked by
+// scripts/check-hosted.mjs). It carries the admin screens, shown only to a
+// session whose key is an admin's — which the server lets sign in only with
+// --allow-admin — and refused by the gateway to any other. An operator who
+// wants none of their code served adds NEXT_PUBLIC_STUDIO_ADMIN=off.
 
 const nextConfig: NextConfig = {
   // Always defined, so the minifier sees a literal on both sides of every

@@ -106,6 +106,9 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	if _, ok := g.combinedCapabilities(); !ok {
 		return api.Sandbox{}, transientFail(http.StatusServiceUnavailable, api.CodeUnavailable, "no node is answering")
 	}
+	if err := g.applyPolicyLifetime(p, &req); err != nil {
+		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
+	}
 
 	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, Spread: spread}
 	if want.CPUs == 0 {

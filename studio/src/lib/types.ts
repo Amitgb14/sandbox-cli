@@ -308,6 +308,17 @@ export interface Whoami {
   scopes: string[];
   /** The organisation the request acted in, after X-Sandbox-Org; "default" for the default tenant. */
   org?: string;
+  /** The operator's policy for this user, if any (docs/fleet.md#user-policies). */
+  policy?: UserPolicy;
+  /** Set for an account's sign-in: its address, and that it has a password. */
+  email?: string;
+}
+
+/** A gateway's user policy: limits on top of the nodes' own. */
+export interface UserPolicy {
+  name: string;
+  /** How long each of the user's sandboxes may exist; 0 is no bound of its own. */
+  max_lifetime_secs: number;
 }
 
 /** GET /v1/orgs: one organisation the caller may act in. */

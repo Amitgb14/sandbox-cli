@@ -95,6 +95,29 @@ type Key struct {
 	Hash    string    `json:"hash"` // hex SHA-256 of the secret
 	Created time.Time `json:"created"`
 	Revoked bool      `json:"revoked,omitempty"`
+	// Expires, when set, is when the key stops working, as if revoked then:
+	// a demo user's key that lasts a week. A key without it never expires.
+	Expires *time.Time `json:"expires,omitempty"`
+	// Email and Password make the key an account (accounts.go): a person
+	// who signs in with a password rather than holding the key. The key's
+	// own secret was never shown to anyone; it stands for what the account
+	// may do, and is what keeps the user's work running while they are
+	// signed out. Password is a PBKDF2 hash, never the password.
+	Email     string     `json:"email,omitempty"`
+	Password  string     `json:"password,omitempty"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
+	// Parent, when set, makes this a sign-in's key: minted for one sign-in
+	// to the account key it names, with that key's user and scopes, and
+	// never outliving it.
+	Parent string `json:"parent,omitempty"`
+}
+
+// Active reports whether k still works at now: not revoked, not expired.
+// Every check of a key goes through it, so an expired key is refused
+// wherever a revoked one is — a request, an open stream, an SSH login, a
+// job's run.
+func (k Key) Active(now time.Time) bool {
+	return !k.Revoked && (k.Expires == nil || now.Before(*k.Expires))
 }
 
 // SSHKey is a public key a user may log in with.

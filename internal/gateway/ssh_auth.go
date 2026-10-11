@@ -131,7 +131,7 @@ func usernameForLog(u string) string {
 // member stops their work in the organisation as revoking their keys would.
 func userActive(st Store, user, tenant string) bool {
 	for _, k := range st.Keys() {
-		if k.User == user && !k.Revoked && keyActsIn(st, k, tenant) {
+		if k.User == user && k.Active(time.Now()) && keyActsIn(st, k, tenant) {
 			return true
 		}
 	}
@@ -162,7 +162,7 @@ func keyActsIn(st Store, k Key, tenant string) bool {
 // granting it does.
 func userMaySSH(st Store, user, tenant string) bool {
 	for _, k := range st.Keys() {
-		if k.User == user && !k.Revoked && (Principal{Scopes: k.Scopes}).Can(ScopeSSH) && keyActsIn(st, k, tenant) {
+		if k.User == user && k.Active(time.Now()) && (Principal{Scopes: k.Scopes}).Can(ScopeSSH) && keyActsIn(st, k, tenant) {
 			return true
 		}
 	}

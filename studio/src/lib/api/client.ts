@@ -78,6 +78,34 @@ export function takeInviteKey(): string | null {
   return m ? m[1] : "";
 }
 
+/**
+ * The invite token a sign-up link carries (`#invite=sgi_…`), taken out of
+ * the address bar as takeInviteKey does: null with none, "" for one that is
+ * not a token's shape. Hosted builds only.
+ */
+export function takeInviteToken(): string | null {
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on" || typeof window === "undefined") return null;
+  if (!/(?:^#|&)invite=/.test(window.location.hash)) return null;
+  const m = window.location.hash.match(/(?:^#|&)invite=(sgi_[a-z0-9]+)/);
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return m ? m[1] : "";
+}
+
+/** What an invite is for: the address it was sent to. Hosted builds only. */
+export async function inviteInfo(invite: string): Promise<{ email: string; user: string; reset?: boolean }> {
+  return apiFetch("/invite", { method: "POST", json: { invite }, noOrg: true });
+}
+
+/** Sets the password an invite asks for, and signs in. Hosted builds only. */
+export async function register(invite: string, password: string): Promise<{ user: string }> {
+  return apiFetch("/register", { method: "POST", json: { invite, password }, noOrg: true });
+}
+
+/** Signs in with an email and password. Hosted builds only. */
+export async function logIn(email: string, password: string): Promise<{ user: string }> {
+  return apiFetch("/login", { method: "POST", json: { email, password }, noOrg: true });
+}
+
 /** The window event apiFetch sends when a hosted session has ended. */
 export const SESSION_ENDED = "studio:session-ended";
 
@@ -117,6 +145,9 @@ export function authHeaders(noOrg = false): Record<string, string> {
   return h;
 }
 
+/** Hosted routes whose 401 is a refused sign-in, not an ended session. */
+const SIGN_IN_PATHS = ["/session", "/login", "/register", "/invite"];
+
 export async function apiFetch<T>(path: string, opts: RequestInit & { json?: unknown; noOrg?: boolean } = {}): Promise<T> {
   const { noOrg, ...init } = opts;
   const headers = new Headers(init.headers);
@@ -130,7 +161,7 @@ export async function apiFetch<T>(path: string, opts: RequestInit & { json?: unk
   // Hosted, a 401 from anything but sign-in means the session is over —
   // signed out elsewhere, expired, or its key revoked — and every screen
   // should say so now, not at the next poll of /api/info.
-  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" && resp.status === 401 && path !== "/session") {
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" && resp.status === 401 && !SIGN_IN_PATHS.includes(path)) {
     window.dispatchEvent(new Event(SESSION_ENDED));
   }
   if (!resp.ok) {

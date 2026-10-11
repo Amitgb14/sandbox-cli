@@ -243,3 +243,46 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
   await page.goto(`${base}/admin/audit/`);
   await expect(page.getByRole("cell", { name: "GET /v1/whoami" }).first()).toBeVisible();
 });
+
+test("an admin gives a user a policy, and moves a sandbox's end both ways", async ({ page }) => {
+  const { gatewayURL } = e2eState();
+  const base = await open(page, "gw-admin", "ops");
+  await page.goto(`${base}/admin/keys/`);
+  await page.getByLabel("Policy name").fill("demo");
+  await page.getByLabel("Max lifetime in minutes").fill("30");
+  await page.getByRole("button", { name: "Save policy" }).click();
+  await expect(page.getByRole("cell", { name: "30 min" })).toBeVisible();
+
+  await page.getByLabel("User", { exact: true }).fill("pia");
+  await page.getByLabel("Tenant", { exact: true }).fill("pia");
+  await page.getByRole("combobox", { name: "Policy", exact: true }).click();
+  await page.getByRole("option", { name: "demo" }).click();
+  await page.getByRole("button", { name: "Issue key" }).click();
+  const key = (await page.getByTestId("new-key-secret").textContent())!;
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "pia" }).getByRole("combobox")).toHaveText("demo");
+
+  // pia's sandbox gets the policy's lifetime, and she may not push it out.
+  const as = (method: string, path: string, body?: object) =>
+    fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  const sb = (await (await as("POST", "/v1/sandboxes", { name: "pia-box" })).json()) as { id: string; lifetime_secs: number };
+  expect(sb.lifetime_secs).toBe(1800);
+  expect((await as("PATCH", `/v1/sandboxes/${sb.id}`, { lifetime_secs: 3600 })).status).toBe(403);
+
+  // The admin's list says whose it is and when it ends.
+  await page.goto(`${base}/sandboxes/`);
+  const row = page.getByRole("row").filter({ hasText: "pia-box" });
+  await expect(row.getByRole("cell", { name: "pia", exact: true })).toBeVisible();
+  await expect(row.getByText(/^in (29|30)m/)).toBeVisible();
+
+  // The admin may move it, from the sandbox's page.
+  await page.goto(`${base}/sandbox/?id=${sb.id}`);
+  await expect(page.getByText("Ends")).toBeVisible();
+  await expect(page.getByText("Owner", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Extend lifetime by 15 minutes" }).click();
+  await expect.poll(async () => ((await (await as("GET", `/v1/sandboxes/${sb.id}`)).json()) as { lifetime_secs: number }).lifetime_secs).toBe(2700);
+  await page.getByRole("button", { name: "Shorten lifetime by 15 minutes" }).click();
+  await expect.poll(async () => ((await (await as("GET", `/v1/sandboxes/${sb.id}`)).json()) as { lifetime_secs: number }).lifetime_secs).toBe(1800);
+  // The one node is shared with every other test: give its room back.
+  await as("DELETE", `/v1/sandboxes/${sb.id}`);
+});

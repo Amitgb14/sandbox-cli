@@ -100,8 +100,8 @@ func TestKeysCreateInviteURL(t *testing.T) {
 			t.Errorf("--invite-url %q was accepted", bad)
 		}
 	}
-	if _, err := run(t, "--state", state, "keys", "create", "--user", "ops", "--scope", "admin", "--invite-url", "https://studio.example.com"); err == nil {
-		t.Error("an invite for an admin key was made")
+	if _, err := run(t, "--state", state, "keys", "create", "--user", "ops", "--scope", "sandbox:read", "--expires", "30s"); err == nil {
+		t.Error("a key expiring in under a minute was made")
 	}
 	if out, _ := run(t, "--state", state, "keys", "list"); strings.Contains(out, "key_") {
 		t.Fatalf("a refused create minted a key: %q", out)
@@ -113,6 +113,15 @@ func TestKeysCreateInviteURL(t *testing.T) {
 	secret := regexp.MustCompile(`secret: (sgk_\S+)`).FindStringSubmatch(out)
 	if secret == nil || !strings.Contains(out, "invite: https://studio.example.com/#key="+secret[1]+"\n") {
 		t.Fatalf("output %q", out)
+	}
+	// An admin may have one too, for a Studio run with --allow-admin, and a
+	// key may be made to expire.
+	out, err = run(t, "--state", state, "keys", "create", "--user", "ops", "--scope", "admin", "--expires", "7d", "--invite-url", "https://studio.example.com")
+	if err != nil || !strings.Contains(out, "invite: https://studio.example.com/#key=") || !strings.Contains(out, "expires: ") {
+		t.Fatalf("an admin's invite: %q %v", out, err)
+	}
+	if out, _ := run(t, "--state", state, "keys", "list"); !regexp.MustCompile(`ops\s.*\d{4}-\d\d-\d\dT\S+\s+active`).MatchString(out) {
+		t.Errorf("keys list shows no expiry: %q", out)
 	}
 }
 
@@ -299,5 +308,32 @@ func TestRouterFlags(t *testing.T) {
 	}, t.Logf, func(string) { served = true; cancel() })
 	if served || err == nil || !strings.Contains(err.Error(), "router") {
 		t.Fatalf("served %v, err %v; the gateway must not start without the router it was asked for", served, err)
+	}
+}
+
+// The relay's password is read from a file only its owner can read, and the
+// mail flags make sense only together.
+func TestMailConfigFromFlags(t *testing.T) {
+	if c, err := mailConfig(serveOptions{}); c != nil || err != nil {
+		t.Errorf("no relay: %v, %v", c, err)
+	}
+	if _, err := mailConfig(serveOptions{studioURL: "https://studio.example.com"}); err == nil {
+		t.Error("--studio-url without --smtp-host")
+	}
+	pw := filepath.Join(t.TempDir(), "smtp.key")
+	if err := os.WriteFile(pw, []byte("relay-secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := serveOptions{smtpHost: "smtp.example.com", smtpPort: 465, smtpUser: "relay", smtpPasswordFile: pw,
+		mailFrom: "Studio <invites@example.com>", studioURL: "https://studio.example.com"}
+	if _, err := mailConfig(o); err == nil || !strings.Contains(err.Error(), "readable by others") {
+		t.Errorf("a password file others can read: %v", err)
+	}
+	if err := os.Chmod(pw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := mailConfig(o)
+	if err != nil || c.Password != "relay-secret" || c.Port != 465 {
+		t.Errorf("a good relay: %+v, %v", c, err)
 	}
 }

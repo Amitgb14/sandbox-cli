@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
@@ -150,6 +151,8 @@ func liveLostAccess(st Store, lr *liveReq, keys map[string]Key) string {
 		return "its API key is no longer in the store"
 	case k.Revoked:
 		return "its API key was revoked"
+	case !k.Active(time.Now()):
+		return "its API key expired"
 	case k.User != lr.p.User || k.Tenant != lr.p.KeyTenant:
 		return "its API key no longer names the same user"
 	case lr.scope != "" && !(Principal{Scopes: k.Scopes}).Can(lr.scope):

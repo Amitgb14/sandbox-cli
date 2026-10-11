@@ -91,6 +91,8 @@ func TestLiveLostAccess(t *testing.T) {
 	}{
 		{"unchanged", ScopeCreate, nil, false},
 		{"revoked", ScopeRead, func(k *Key) { k.Revoked = true }, true},
+		{"expired", ScopeRead, func(k *Key) { past := time.Now().Add(-time.Second); k.Expires = &past }, true},
+		{"expiring later", ScopeRead, func(k *Key) { later := time.Now().Add(time.Hour); k.Expires = &later }, false},
 		{"gone", ScopeRead, func(k *Key) { k.ID = "k2" }, true},
 		{"other user", ScopeRead, func(k *Key) { k.User = "bob" }, true},
 		{"other tenant", ScopeRead, func(k *Key) { k.Tenant = "" }, true},

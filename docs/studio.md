@@ -30,7 +30,7 @@ Studio keeps.
 | Screen | What it does |
 |---|---|
 | **Sandboxes** (home) | Every sandbox on the endpoint — started from Studio, the CLI or an SDK — each with what its agent is doing (working, waiting for you, idle) where it runs one, under a strip of how many are running and the vCPU, memory and disk given to them, against the machine's capacity where the endpoint reports it (a plain sandboxd does; a gateway gives totals). Searched, filtered by state, sorted, paged; each row shows what the sandbox was given — a click there opens its CPU and memory over the last hour, where the endpoint measures them —, a terminal button and a menu (open, open as a page, copy the id, suspend, terminate); select several to terminate them at once. Terminating, from the list or a sandbox's panel, opens a dialog listing what goes and asks for the sandbox's name (or `terminate N` for several) to be typed first. With none yet, a first-run panel with the code to start one. |
-| **A sandbox** | A click on a row opens it in a panel beside the list: its up and down buttons step through the list, and it widens to two panes or opens as a page of its own (`/sandbox?id=`). Its overview — id, image, network, resources, lifecycle, labels, environment names, volumes, processes —; a real terminal (Terminal goes back to the shell open there, or starts one as `sandbox-cli shell` does; the tab lists every process with a terminal, an agent's console included, to attach to, and New shell starts another); a Desktop tab, where the sandbox's image has one ([desktop.md](desktop.md)): its screen, with a terminal and a browser, to see and use; its processes' logs from the first byte; its files; and its audit events. Wide, the overview stays beside the other tabs. A live sandbox is edited from its overview: name, labels and idle auto-stop in one dialog; its network (none, an allowlist from the groups and hosts, or open) where the endpoint can change a running sandbox's; and Resize, which replaces it with a copy at a template's size — its files, name, labels and network come across, its processes, memory and environment do not — where the endpoint takes disk snapshots (macOS; a Firecracker sandbox's size is fixed while it runs). |
+| **A sandbox** | A click on a row opens it in a panel beside the list: its up and down buttons step through the list, and it widens to two panes or opens as a page of its own (`/sandbox?id=`). Its overview — id, image, network, resources, lifecycle, labels, environment names, volumes, processes —; a real terminal (Terminal goes back to the shell open there, or starts one as `sandbox-cli shell` does; the tab lists every process with a terminal, an agent's console included, to attach to, and New shell starts another); a Desktop tab, where the sandbox's image has one ([desktop.md](desktop.md)): its screen, with a terminal and a browser, to see and use; its processes' logs from the first byte; its files; and its audit events. Wide, the overview stays beside the other tabs. A live sandbox is edited from its overview: name, labels and idle auto-stop in one dialog; a sandbox with a lifetime counts down to its end, with −15m to bring it nearer and, for an admin key or a plain sandboxd's token, +15m to push it out; its network (none, an allowlist from the groups and hosts, or open) where the endpoint can change a running sandbox's; and Resize, which replaces it with a copy at a template's size — its files, name, labels and network come across, its processes, memory and environment do not — where the endpoint takes disk snapshots (macOS; a Firecracker sandbox's size is fixed while it runs). |
 | **Playground** | A command, an agent run unattended, or an agent's interactive console, in a fresh sandbox that starts in its own home directory, from the server's image, one you name (suggested: those the machine has built, those its sandboxes run, the desktop image) or a snapshot where the backend takes them, with a snapshot schedule if asked for, at a size from Templates — with the same config, profile, network policy, labels, volumes and agent login a `sandbox-cli run` would get. Beside the form, the same run written as CLI, curl, Python and TypeScript, to repeat it from a script. |
 | **Snapshots** | Sandboxes captured to start new ones from — whole (memory, processes and disk) where the backend can, their files only where it cannot capture more (macOS) — with their kind and size; delete one. A running sandbox's panel takes one with Snapshot, and its overview's Snapshots section sets a schedule — every so often, the newest few kept, within the server's limits — and lists that sandbox's snapshots, scheduled or manual. |
 | **Agents** | The agents Studio runs, each with a verified headless mode, one row each: whose login is saved, which API keys are set or saved, and the API it reaches. Open a row to add, change or remove an API key for any variable the agent reads. A key is write-only: it is kept in `~/.config/sandbox/agent-keys.json` (yours only, 0600), never shown again, and used by an agent run — Studio's or the CLI's — when the environment does not set that variable; the environment's value wins. |
@@ -62,7 +62,7 @@ the browser never sees the key. It is the same Studio either way.
 | `sandbox:delete` | terminating sandboxes, deleting volumes and snapshots; with `sandbox:create`, removing a service |
 | `sandbox:ssh` | adding and removing your SSH keys, issuing a short-lived access token for a sandbox (shown once) |
 | `secrets:write` | setting and removing secrets. A value goes in a password field and is never shown: no call returns it |
-| `admin` | everything above, plus **Nodes** (health, allocated capacity, cordon, uncordon, drain, add, remove), **Lost sandboxes**, **Users & keys** (issue and revoke API keys, any user's SSH keys), **Organizations** (every organisation, with its members and owners) and **Audit** |
+| `admin` | everything above, plus **Nodes** (health, allocated capacity, cordon, uncordon, drain, add, remove), **Lost sandboxes**, **Users & keys** (invite people by email, reset their passwords, issue and revoke API keys, any user's SSH keys, and [user policies](fleet.md#user-policies): create one, give it when issuing a key, change a user's), **Organizations** (every organisation, with its members and owners) and **Audit** |
 
 An action the key's scopes do not allow is not offered, rather than offered
 and refused. A screen the key may not have — an admin screen for a tenant's
@@ -120,17 +120,19 @@ screens are not shipped.
 
 `sandbox-cli studio host` serves Studio on a public address to a gateway's
 users. Nobody installs anything: each user opens an invite link, and from then
-on acts as themselves, seeing only what their key may see.
+on acts as themselves, seeing only what their key may see. A person invited
+by email chooses a password with the link and signs in with it afterwards.
 
 ```sh
-# the UI for it: invite-link sign-in, no Studio token, no admin screens
+# the UI for it: invite-link sign-in, no Studio token
 make studio-hosted                      # writes studio/out-hosted
 
 sandbox-cli studio host \
   --gateway http://127.0.0.1:8443 \
   --public-url https://studio.example.com \
   --listen 127.0.0.1:7080 \
-  --ui-dir studio/out-hosted
+  --ui-dir studio/out-hosted \
+  --allow-admin                         # optional: the admin manages users here too
 ```
 
 Put a TLS proxy in front of the loopback port (a reverse proxy, or a tunnel
@@ -151,6 +153,45 @@ sudo -u sandbox-gateway sandbox-gateway --state … keys create --user alice --t
 Give each user their **own tenant**: users without one share one quota and
 one set of secrets. The link is the key — send it as you would a password.
 
+**Inviting a person by email** is better for anyone who is not a program: the
+link is a one-time invite rather than the key, so the email is worthless once
+used or after two days. They open it, choose a password, and sign in with
+their address and password from then on, on the form the page shows to anyone
+without a session. In Users & keys, type the address in **Add a user**
+(the user name follows it) and press **Create invite**. A gateway with a mail
+relay ([fleet.md](fleet.md#accounts-invite-by-email-sign-in-with-a-password))
+emails it itself; otherwise **Email invite** opens your mail program with the
+message written, and **Copy invite link** copies it. **Reset password…** on an account makes a new link for a forgotten one.
+From the command line it is `sandbox-cli gateway invites create --email …`
+([fleet.md](fleet.md#accounts-invite-by-email-sign-in-with-a-password), which
+also says how accounts, sign-ins and guessing are handled). A signed-in
+account changes its own password on the Account page.
+
+**The admin in hosted Studio.** With `--allow-admin`, an admin key signs in
+the same way (`https://studio.example.com/#key=<admin key>`) and gets the
+admin screens: Users & keys, Nodes, Lost sandboxes, Audit, All organizations.
+From Users & keys the admin adds users while the gateway serves:
+
+- **Demo user** or **Member** fills the form: a demo user gets the sandbox
+  scopes, a [policy](fleet.md#user-policies) (`demo` where there is one) and a
+  key that expires in 7 days; a member, someone using the service for good,
+  gets SSH too, no policy and a key that never expires. Every field stays
+  editable.
+- **Create invite**, with an email, makes a sign-up link instead of a key
+  (above); **Issue key** shows the key's secret and its **invite link** once,
+  each with a copy button. Pending invites are listed, and can be withdrawn.
+- **Renew** on a key sets it to expire 7 or 30 days from now, never, or now;
+  expiring it now ends the user's session and what they have open, as
+  revoking does, but the key can be renewed again.
+
+An admin's session ends after an hour unused or twelve hours in all, whatever
+`--session-idle` and `--session-max-age` say: whoever holds its cookie holds
+every user's sandboxes. Without `--allow-admin` an admin key is refused, and
+the operator uses `sandbox-cli studio` on their own machine. The hosted build
+carries the admin screens' code either way, shown only to an admin's session;
+to serve none of it, build with `NEXT_PUBLIC_STUDIO_ADMIN=off npm run
+build:hosted`.
+
 **How a user signs in.** The key rides in the link's fragment, which a browser
 never sends to a server. The page posts it once to `POST /api/session`;
 Studio asks the gateway who the key is (`GET /v1/whoami`), keeps the key in
@@ -158,23 +199,29 @@ memory and answers with an HttpOnly, `SameSite=Strict` session cookie
 (`__Host-sbx_studio` over https). The key is then gone from the address bar
 and from the page. Opening the link again, in any browser, signs in again.
 
+With a password, the page posts the email and password to `POST /api/login`
+(an invite's, with the token, to `POST /api/register`); Studio passes them to
+the gateway, which answers with a key minted for this sign-in alone, lasting
+as long as a session may. From there it is the same: the key stays in
+Studio's memory and the browser gets the cookie. Signing out also ends that
+key at the gateway. Studio keeps no password and no account of its own.
+
 | | |
 |---|---|
 | Every call | made with the signed-in user's key, so the gateway's ownership, tenants, quotas and scopes apply exactly as to their own CLI. Studio adds no isolation of its own and needs none. |
 | What it holds | no credential of its own: no context, no key file. It reads nothing of the machine it runs on: no agent logins, no environment, no config. |
 | Agents | an interactive agent logs in inside its sandbox; an unattended one runs as a [job](jobs.md), with its API key stored under Secrets. The Playground offers commands and interactive agents. |
 | Studio's settings | the host user's own — saved agent keys, saved templates, egress rules and allowlist groups — are not shown, not applied to hosted launches and cannot be changed: their routes do not exist when hosted. Users get the built-in sizes (micro to xlarge), name hosts to allow themselves, and keep agent keys under Secrets. |
-| Admin keys | refused. An operator uses `sandbox-cli studio` on their own machine. |
-| Sessions | end after `--session-idle` unused (12h) or `--session-max-age` (7 days), on Sign out, and at the next call after the key is revoked at the gateway. They are kept in memory: a restart signs everyone out. |
-| Refused | any `Host` but `--public-url`'s (and `--allowed-host`, for a proxy that rewrites it); any request that changes something, and every WebSocket, from another `Origin`; every `/api` call without a session — local Studio's token and a gateway key presented directly included; more than 5 failed sign-ins a minute. |
+| Admin keys | refused, unless `--allow-admin` (above), whether by link or by password. |
+| Sessions | end after `--session-idle` unused (12h) or `--session-max-age` (7 days) — an admin's after 1h and 12h —, on Sign out, and at the next call after the key is revoked or expires at the gateway. They are kept in memory: a restart signs everyone out. |
+| Refused | any `Host` but `--public-url`'s (and `--allowed-host`, for a proxy that rewrites it); any request that changes something, and every WebSocket, from another `Origin`; every `/api` call without a session — local Studio's token and a gateway key presented directly included; more than 5 failed sign-ins a minute, and, at the gateway, an address after five wrong passwords in a row, for 15 minutes. |
 
 `sandbox-cli studio host` refuses plain `http://` for the gateway or the public
 URL anywhere but loopback, and a non-loopback `--listen` without a
 certificate. `npm run check:hosted` in `studio/` fails if the hosted build
-carries the admin screens or local Studio's token handling.
+carries local Studio's token handling or the editors of the host's settings.
 
-**Not yet:** a sign-in form or single sign-on (the invite link is the
-sign-in), sessions that survive a restart, an agent's login kept between
+**Not yet:** single sign-on, sessions that survive a restart, an agent's login kept between
 console runs, and counting failed sign-ins per client (behind a proxy every
 request comes from the proxy, so there is one count for everyone).
 

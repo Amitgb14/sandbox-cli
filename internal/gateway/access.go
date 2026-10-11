@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,7 +17,14 @@ import (
 // keys and nodes.
 
 func (g *Gateway) whoami(w http.ResponseWriter, r *http.Request, p Principal) {
-	writeJSON(w, http.StatusOK, api.Whoami{User: p.User, Tenant: p.KeyTenant, KeyID: p.KeyID, Scopes: p.Scopes, Org: wireOrg(p.Tenant)})
+	who := api.Whoami{User: p.User, Tenant: p.KeyTenant, KeyID: p.KeyID, Scopes: p.Scopes, Org: wireOrg(p.Tenant)}
+	if pol, ok := g.policyFor(p); ok {
+		who.Policy = &pol
+	}
+	if acct, ok := g.store.accountOf(p.KeyID); ok {
+		who.Email = acct.Email
+	}
+	writeJSON(w, http.StatusOK, who)
 }
 
 // --- SSH ----------------------------------------------------------------------
@@ -143,8 +151,13 @@ func (g *Gateway) sshAccess(w http.ResponseWriter, r *http.Request, p Principal)
 
 // --- admin: keys --------------------------------------------------------------
 
-func keyInfo(k Key) api.KeyInfo {
-	return api.KeyInfo{ID: k.ID, User: k.User, Tenant: k.Tenant, Scopes: k.Scopes, Created: k.Created, Revoked: k.Revoked}
+func (g *Gateway) keyInfo(k Key) api.KeyInfo {
+	ki := api.KeyInfo{ID: k.ID, User: k.User, Tenant: k.Tenant, Scopes: k.Scopes, Created: k.Created, Revoked: k.Revoked,
+		Expires: k.Expires, Email: k.Email, LastLogin: k.LastLogin}
+	if pol, ok := g.store.PolicyOf(k.User, k.Tenant); ok {
+		ki.Policy = pol.Name
+	}
+	return ki
 }
 
 func (g *Gateway) adminCreateKey(w http.ResponseWriter, r *http.Request, p Principal) {
@@ -155,13 +168,37 @@ func (g *Gateway) adminCreateKey(w http.ResponseWriter, r *http.Request, p Princ
 	if !decode(w, r, &req) {
 		return
 	}
-	secret, k, err := g.store.CreateKey(req.User, req.Tenant, req.Scopes)
+	// The policy is checked before the key exists, so a mistake in it mints
+	// nothing; and assigned before the key is handed back, so no request
+	// with the key can come before its policy holds.
+	if req.Policy != "" && !slices.ContainsFunc(g.store.Policies(), func(p api.UserPolicy) bool { return p.Name == req.Policy }) {
+		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "policy "+req.Policy+": no such policy")
+		return
+	}
+	var expires *time.Time
+	switch {
+	case req.ExpiresInSecs < 0:
+		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "expires_in_secs must not be negative")
+		return
+	case req.ExpiresInSecs > 0:
+		at := time.Now().Add(time.Duration(req.ExpiresInSecs) * time.Second)
+		expires = &at
+	}
+	secret, k, err := g.store.CreateKeyExpiring(req.User, req.Tenant, req.Scopes, expires)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 		return
 	}
+	if req.Policy != "" {
+		if err := g.store.AssignPolicy(k.User, k.Tenant, req.Policy); err != nil {
+			// The key would act without its limits: take it back.
+			_ = g.store.RevokeKey(k.ID)
+			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "policy "+req.Policy+": "+err.Error())
+			return
+		}
+	}
 	g.logf("key %s issued for %s by %s", k.ID, k.User, p.KeyID)
-	writeJSON(w, http.StatusCreated, api.CreatedKey{KeyInfo: keyInfo(k), Secret: secret})
+	writeJSON(w, http.StatusCreated, api.CreatedKey{KeyInfo: g.keyInfo(k), Secret: secret})
 }
 
 func (g *Gateway) adminListKeys(w http.ResponseWriter, r *http.Request, p Principal) {
@@ -170,9 +207,54 @@ func (g *Gateway) adminListKeys(w http.ResponseWriter, r *http.Request, p Princi
 	}
 	out := api.KeyList{Keys: []api.KeyInfo{}}
 	for _, k := range g.store.Keys() {
-		out.Keys = append(out.Keys, keyInfo(k))
+		// A sign-in's key is the account's, for a while: the account is
+		// what is listed, renewed and revoked.
+		if k.Parent != "" {
+			continue
+		}
+		out.Keys = append(out.Keys, g.keyInfo(k))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// adminKeyExpiry renews or shortens a key. Shortened into the past, the key
+// stops at once, and what it has open is ended as for a revocation.
+func (g *Gateway) adminKeyExpiry(w http.ResponseWriter, r *http.Request, p Principal) {
+	if !need(w, p, ScopeAdmin) {
+		return
+	}
+	var req api.KeyExpiryRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	var at *time.Time
+	switch {
+	case req.ExpiresInSecs < 0:
+		// Negative is "expire now".
+		t := time.Now()
+		at = &t
+	case req.ExpiresInSecs > 0:
+		t := time.Now().Add(time.Duration(req.ExpiresInSecs) * time.Second)
+		at = &t
+	}
+	id := r.PathValue("id")
+	k, err := g.store.SetKeyExpiry(id, at)
+	switch {
+	case errors.Is(err, ErrNoSuchKey):
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such key")
+		return
+	case errors.Is(err, ErrKeyRevoked):
+		writeErr(w, http.StatusConflict, api.CodeConflict, "the key is revoked; issue a new one")
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "changing the key's expiry failed")
+		return
+	}
+	g.logf("key %s expiry set to %v by %s", id, at, p.KeyID)
+	if at != nil && !at.After(time.Now()) {
+		g.accessChanged()
+	}
+	writeJSON(w, http.StatusOK, g.keyInfo(k))
 }
 
 func (g *Gateway) adminRevokeKey(w http.ResponseWriter, r *http.Request, p Principal) {

@@ -87,6 +87,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
 		{"ABusySandboxEndsAtItsLifetime", testLifetime},
 		{"LifetimeAboveTheLimitIsInvalid", testLifetimeLimit},
+		{"AShortenedLifetimeEndsTheSandbox", testLifetimeUpdate},
 		{"AttachStreamsInputAndOutput", testAttach},
 		{"SuspendKeepsTheSandbox", testSuspend},
 		{"ASnapshotForksTheSandbox", testSnapshot},
@@ -832,6 +833,33 @@ func testLifetimeLimit(t *testing.T, e *env) {
 	if sb.LifetimeSecs != max || sb.ExpiresAt == nil {
 		t.Errorf("a sandbox asking for none: lifetime_secs %d, expires_at %v; want the limit, %d", sb.LifetimeSecs, sb.ExpiresAt, max)
 	}
+}
+
+// A lifetime brought nearer is kept to: counted from creation, so a change
+// to 2 seconds on a sandbox older than that ends it at once. Shortening is
+// what any caller may do; lengthening may be an operator's alone (a gateway
+// keeps it to admins), so it is not asked for here.
+func testLifetimeUpdate(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{LifetimeSecs: 300})
+	two := 2
+	got, err := e.c.UpdateSandbox(ctxT(t), sb.ID, api.UpdateSandboxRequest{LifetimeSecs: &two})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LifetimeSecs != 2 || got.ExpiresAt == nil || got.ExpiresAt.Sub(got.CreatedAt) != 2*time.Second {
+		t.Fatalf("after the change: lifetime_secs %d, expires_at %v; want 2s after %v", got.LifetimeSecs, got.ExpiresAt, got.CreatedAt)
+	}
+	zero := 0
+	_, err = e.c.UpdateSandbox(ctxT(t), sb.ID, api.UpdateSandboxRequest{LifetimeSecs: &zero})
+	wantCode(t, err, api.CodeInvalidRequest)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, err := e.c.Sandbox(ctxT(t), sb.ID); err != nil || got.State == api.StateTerminated {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("a sandbox outlived its shortened lifetime")
 }
 
 func testIdleTimeoutLimit(t *testing.T, e *env) {

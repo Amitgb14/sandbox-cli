@@ -292,6 +292,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 		// starts in their key's own tenant.
 		c = sess.client
 		out["context"], out["hosted"], out["user"], out["tenant"] = "hosted", true, sess.who.User, sess.who.Tenant
+		out["admin_sign_in"] = s.hosted.cfg.AllowAdmin
 	}
 	out["org"] = c.Org()
 	if caps, err := c.Capabilities(ctx); err == nil {

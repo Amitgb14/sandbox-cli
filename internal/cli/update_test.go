@@ -60,13 +60,53 @@ func TestUpdateChangesOnlyWhatIsNamed(t *testing.T) {
 	}
 
 	for name, args := range map[string][]string{
-		"no flag":                 {"api"},
-		"--allow without network": {"api", "--allow", "x.example.com"},
-		"a bad label":             {"api", "--label", "nokey"},
-		"a fractional idle":       {"api", "--idle", "1.5s"},
+		"no flag":                      {"api"},
+		"--allow without network":      {"api", "--allow", "x.example.com"},
+		"a bad label":                  {"api", "--label", "nokey"},
+		"a fractional idle":            {"api", "--idle", "1.5s"},
+		"a lifetime to move from none": {"api", "--lifetime", "+15m"},
+		"a lifetime that is not one":   {"api", "--lifetime", "soon"},
 	} {
 		if err := run(args...); err == nil {
 			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+// --lifetime sets a lifetime, or moves the one a sandbox has.
+func TestUpdateLifetime(t *testing.T) {
+	be := fake.New(api.CapEgressAllowlist)
+	srv := httptest.NewServer((&server.Server{Backend: be, Policy: spec.DefaultPolicyFor(be.Capabilities())}).Handler())
+	defer srv.Close()
+	c, _ := api.NewClient(srv.URL, "")
+	ctx := context.Background()
+	sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Name: "web", LifetimeSecs: 1800})
+	if err != nil {
+		t.Fatal(err)
+	}
+	useEndpoint(t, srv.URL)
+	run := func(args ...string) error {
+		root := NewRootCmd()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs(append([]string{"update", "web"}, args...))
+		return root.Execute()
+	}
+	for _, step := range []struct {
+		arg  string
+		want int
+	}{{"+15m", 2700}, {"-10m", 2100}, {"1h", 3600}} {
+		if err := run("--lifetime", step.arg); err != nil {
+			t.Fatalf("--lifetime %s: %v", step.arg, err)
+		}
+		if got, _ := c.Sandbox(ctx, sb.ID); got.LifetimeSecs != step.want {
+			t.Errorf("--lifetime %s: %d, want %d", step.arg, got.LifetimeSecs, step.want)
+		}
+	}
+	for _, bad := range []string{"-1h", "0s", "1.5s"} {
+		if err := run("--lifetime", bad); err == nil {
+			t.Errorf("--lifetime %s was accepted", bad)
 		}
 	}
 }

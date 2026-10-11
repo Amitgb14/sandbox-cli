@@ -24,6 +24,7 @@ import { ColumnHeader } from "@/components/data-table/column-header";
 import { FacetedFilter } from "@/components/data-table/faceted-filter";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { ViewOptions } from "@/components/data-table/view-options";
+import { Countdown, ownerOf } from "@/components/sandbox/countdown";
 import { SandboxDetails } from "@/components/sandbox/details";
 import { MetricsDialog, ResourcesWithMetrics } from "@/components/sandbox/metrics";
 import { capturePercent, snapshotStep, STEP_NAMES } from "@/components/sandbox/snapshot-progress";
@@ -252,6 +253,31 @@ export default function SandboxesPage() {
         meta: { label: "Labels" },
       },
       {
+        // Whose it is: the gateway's owner label. Shown to an admin, who
+        // sees every user's; a user's list holds only their own.
+        id: "owner",
+        accessorFn: (s) => ownerOf(s) ?? "",
+        header: ({ column }) => <ColumnHeader column={column} title="Owner" />,
+        cell: ({ row }) => {
+          const o = ownerOf(row.original);
+          return o ? <span className="font-mono text-xs whitespace-nowrap">{o}</span> : <span className="text-xs text-muted-foreground">—</span>;
+        },
+        meta: { label: "Owner" },
+      },
+      {
+        // When its lifetime ends it, ticking; "never" without one.
+        id: "ends",
+        accessorFn: (s) => (s.expires_at && s.state !== "terminated" ? new Date(s.expires_at).getTime() : Number.MAX_SAFE_INTEGER),
+        header: ({ column }) => <ColumnHeader column={column} title="Ends" />,
+        cell: ({ row: { original: s } }) =>
+          s.expires_at && s.state !== "terminated" ? (
+            <Countdown at={s.expires_at} className="text-xs whitespace-nowrap" />
+          ) : (
+            <span className="text-xs text-muted-foreground">{s.state === "terminated" ? "—" : "never"}</span>
+          ),
+        meta: { label: "Ends" },
+      },
+      {
         id: "created",
         accessorKey: "created_at",
         header: ({ column }) => <ColumnHeader column={column} title="Created" />,
@@ -327,7 +353,13 @@ export default function SandboxesPage() {
     data: all,
     columns,
     // The Snapshots column only where the endpoint takes snapshots.
-    state: { sorting, rowSelection: selection, columnVisibility: { snapshots: takesSnapshots, ...visibility }, globalFilter: query },
+    state: {
+      sorting,
+      rowSelection: selection,
+      // Owner only for a gateway's admin, who sees every user's sandboxes.
+      columnVisibility: { snapshots: takesSnapshots, owner: can("admin") && all.some((s) => ownerOf(s)), ...visibility },
+      globalFilter: query,
+    },
     getRowId: (s) => s.id,
     onSortingChange: setSorting,
     onRowSelectionChange: setSelection,

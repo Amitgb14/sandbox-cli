@@ -214,6 +214,11 @@ type UpdateSandboxRequest struct {
 	// counted from its last activity. Between 1 and limits.max_idle_timeout_secs;
 	// 0, never, only where that limit is 0.
 	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
+	// LifetimeSecs is a new lifetime, counted from creation as at create:
+	// longer extends it, shorter brings its end nearer, and one already
+	// past ends it at once. At least 1, and at most limits.max_lifetime_secs
+	// where that is set. Through a gateway only an admin may lengthen it.
+	LifetimeSecs *int `json:"lifetime_secs,omitempty"`
 }
 
 // Sandbox is a sandbox as the API reports it. Environment values are never
@@ -300,6 +305,8 @@ type Event struct {
 	Volumes  []VolumeMount  `json:"volumes,omitempty"`
 	// IdleTimeoutSecs is the idle timeout after an update that changed it.
 	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
+	// LifetimeSecs is the lifetime after an update that changed it.
+	LifetimeSecs *int `json:"lifetime_secs,omitempty"`
 
 	PID int `json:"pid,omitempty"`
 	// A process is recorded by its program, its argument count and a hash
@@ -560,6 +567,12 @@ type Whoami struct {
 	// key's own tenant when the header is absent, and DefaultOrg for the
 	// default tenant.
 	Org string `json:"org,omitempty"`
+	// Policy is the operator's policy for this user, if any: what their
+	// sandboxes are held to on top of the nodes' own limits.
+	Policy *UserPolicy `json:"policy,omitempty"`
+	// Email is set when the key is an account's, or one of its sign-ins':
+	// its user signs in with that address and a password.
+	Email string `json:"email,omitempty"`
 }
 
 // OrgHeader selects the organisation a gateway request acts in. Absent, a
@@ -696,6 +709,19 @@ type CreateKeyRequest struct {
 	User   string   `json:"user"`
 	Tenant string   `json:"tenant,omitempty"`
 	Scopes []string `json:"scopes"`
+	// Policy, when set, is assigned to the key's user as the key is issued
+	// (UserPolicyRequest); it must exist.
+	Policy string `json:"policy,omitempty"`
+	// ExpiresInSecs, when set, makes the key stop working that long after
+	// it is issued, as if revoked then; 0 is never.
+	ExpiresInSecs int `json:"expires_in_secs,omitempty"`
+}
+
+// KeyExpiryRequest is PATCH /v1/admin/keys/{id}: the key stops working
+// ExpiresInSecs from now, never when 0, and at once when negative — what
+// it has open is ended as for a revocation.
+type KeyExpiryRequest struct {
+	ExpiresInSecs int `json:"expires_in_secs"`
 }
 
 // KeyInfo is an API key without its secret.
@@ -706,6 +732,14 @@ type KeyInfo struct {
 	Scopes  []string  `json:"scopes"`
 	Created time.Time `json:"created"`
 	Revoked bool      `json:"revoked,omitempty"`
+	// Policy names the policy the key's user holds; "" is none.
+	Policy string `json:"policy,omitempty"`
+	// Expires is when the key stops working; absent is never.
+	Expires *time.Time `json:"expires,omitempty"`
+	// Email, when set, makes the key an account: its user signs in with
+	// that address and a password, and the key's secret is never shown.
+	Email     string     `json:"email,omitempty"`
+	LastLogin *time.Time `json:"last_login,omitempty"`
 }
 
 // CreatedKey is returned once, when a key is issued: Secret is never shown
@@ -718,6 +752,30 @@ type CreatedKey struct {
 // KeyList is GET /v1/admin/keys.
 type KeyList struct {
 	Keys []KeyInfo `json:"keys"`
+}
+
+// UserPolicy is a gateway's named limits for the users it is assigned to
+// (admin). It is held on top of every node's own limits, and the strictest
+// wins: it can only narrow what a node allows.
+type UserPolicy struct {
+	Name string `json:"name"`
+	// MaxLifetimeSecs is how long each of the user's sandboxes may exist:
+	// one that asks for no lifetime gets this one, and one that asks for
+	// more is refused. 0 is no bound of the policy's own.
+	MaxLifetimeSecs int `json:"max_lifetime_secs"`
+}
+
+// UserPolicyList is GET /v1/admin/policies.
+type UserPolicyList struct {
+	Policies []UserPolicy `json:"policies"`
+}
+
+// AssignPolicyRequest is PUT /v1/admin/user-policy: assigns Policy to User,
+// named with the tenant of their keys, or clears it when Policy is "".
+type AssignPolicyRequest struct {
+	User   string `json:"user"`
+	Tenant string `json:"tenant,omitempty"`
+	Policy string `json:"policy"`
 }
 
 // NodeSpec adds a node to a gateway (admin).
@@ -819,4 +877,105 @@ type RemovedImage struct {
 type MetricsList struct {
 	IntervalSecs int            `json:"interval_secs"`
 	Samples      []MetricSample `json:"samples"`
+}
+
+// CreateInviteRequest is POST /v1/admin/invites: a sign-up link for Email.
+// Whoever opens it sets a password and becomes an account with these
+// user, tenant, scopes and policy, as a key issued with them would.
+type CreateInviteRequest struct {
+	Email  string   `json:"email"`
+	User   string   `json:"user"`
+	Tenant string   `json:"tenant,omitempty"`
+	Scopes []string `json:"scopes"`
+	Policy string   `json:"policy,omitempty"`
+	// ExpiresInSecs is how long the account lasts once made; 0 is for good.
+	ExpiresInSecs int `json:"expires_in_secs,omitempty"`
+	// ValidSecs is how long the link may be used; 0 is two days, and at
+	// most seven.
+	ValidSecs int `json:"valid_secs,omitempty"`
+	// SendEmail has the gateway email the link to Email, where it was
+	// started with a mail relay (InviteList.CanEmail).
+	SendEmail bool `json:"send_email,omitempty"`
+}
+
+// ResetPasswordRequest is POST /v1/admin/keys/{id}/reset, and POST
+// /v1/admin/invites/{id}/resend; the body is optional.
+type ResetPasswordRequest struct {
+	SendEmail bool `json:"send_email,omitempty"`
+}
+
+// InviteInfo is an invite without its token.
+type InviteInfo struct {
+	ID            string   `json:"id"`
+	Email         string   `json:"email"`
+	User          string   `json:"user"`
+	Tenant        string   `json:"tenant"`
+	Scopes        []string `json:"scopes"`
+	Policy        string   `json:"policy,omitempty"`
+	ExpiresInSecs int      `json:"expires_in_secs,omitempty"`
+	// Reset is set on an invite that sets a new password for an account
+	// that exists, rather than making one.
+	Reset   bool      `json:"reset,omitempty"`
+	Created time.Time `json:"created"`
+	Expires time.Time `json:"expires"`
+}
+
+// CreatedInvite is returned once, when an invite is made: Token is never
+// shown again. The link is Studio's address with #invite=Token.
+type CreatedInvite struct {
+	InviteInfo
+	Token string `json:"token"`
+	// Emailed says the gateway sent the link to the address; EmailError
+	// why it could not, when it was asked to. The invite stands either way.
+	Emailed    bool   `json:"emailed,omitempty"`
+	EmailError string `json:"email_error,omitempty"`
+}
+
+// InviteList is GET /v1/admin/invites: those not used and not expired.
+type InviteList struct {
+	Invites []InviteInfo `json:"invites"`
+	// CanEmail says the gateway can send an invite's link itself.
+	CanEmail bool `json:"can_email,omitempty"`
+}
+
+// InviteTokenRequest is POST /v1/auth/invite: what an invite is for, so
+// the page that opens it can say so before a password is set.
+type InviteTokenRequest struct {
+	Token string `json:"token"`
+}
+
+// RegisterRequest is POST /v1/auth/register: the invite's token and the
+// password chosen. TTLSecs is how long the sign-in it starts lasts, as for
+// LoginRequest.
+type RegisterRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+	TTLSecs  int    `json:"ttl_secs,omitempty"`
+}
+
+// LoginRequest is POST /v1/auth/login. TTLSecs is how long the key it
+// returns lasts: 0 is twelve hours, at most seven days, and never past the
+// account's own end.
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	TTLSecs  int    `json:"ttl_secs,omitempty"`
+}
+
+// Login is a sign-in: an API key for it alone, ended by POST
+// /v1/auth/logout, by its expiry, or with its account.
+type Login struct {
+	Secret  string    `json:"secret"`
+	User    string    `json:"user"`
+	Tenant  string    `json:"tenant"`
+	Email   string    `json:"email"`
+	Scopes  []string  `json:"scopes"`
+	Expires time.Time `json:"expires"`
+}
+
+// PasswordRequest is POST /v1/auth/password: an account's own change of
+// password. Every other sign-in of the account ends.
+type PasswordRequest struct {
+	Current string `json:"current"`
+	New     string `json:"new"`
 }

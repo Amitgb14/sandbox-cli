@@ -98,7 +98,7 @@ export default async function globalSetup() {
   }
 
   if (hosted) {
-    const h = spawn(bin("sandbox-cli"), ["studio", "host", "--gateway", `http://${api}`, "--public-url", hostedBase, "--listen", `127.0.0.1:${HOSTED_PORT}`, "--ui-dir", hostedUI], { env, stdio: "ignore" });
+    const h = spawn(bin("sandbox-cli"), ["studio", "host", "--gateway", `http://${api}`, "--public-url", hostedBase, "--listen", `127.0.0.1:${HOSTED_PORT}`, "--ui-dir", hostedUI, "--allow-admin"], { env, stdio: "ignore" });
     pids.push(h.pid!);
     await waitFor(async () => (await fetch(`${hostedBase}/`)).ok, "the hosted Studio");
   }

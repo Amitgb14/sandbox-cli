@@ -14,7 +14,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
-import type { Capabilities, SSHKey } from "@/lib/types";
+import type { Capabilities, SSHKey, UserPolicy } from "@/lib/types";
 
 const enc = encodeURIComponent;
 
@@ -88,6 +88,36 @@ export interface KeyInfo {
   scopes: string[];
   created: string;
   revoked?: boolean;
+  /** The policy the key's user holds; absent is none. */
+  policy?: string;
+  /** When the key stops working; absent is never. */
+  expires?: string;
+  /** Set on an account: its user signs in with this address and a password. */
+  email?: string;
+  last_login?: string;
+}
+
+/** A sign-up link not yet used (docs/fleet.md#accounts); its token is shown once. */
+export interface InviteInfo {
+  id: string;
+  email: string;
+  user: string;
+  tenant: string;
+  scopes: string[];
+  policy?: string;
+  expires_in_secs?: number;
+  /** A password reset for an account that exists. */
+  reset?: boolean;
+  created: string;
+  /** When the link stops working. */
+  expires: string;
+}
+
+export interface CreatedInvite extends InviteInfo {
+  token: string;
+  /** The gateway sent the link to the address; or why it could not. */
+  emailed?: boolean;
+  email_error?: string;
 }
 
 /** POST /v1/admin/keys: the one answer with the secret in it. */
@@ -116,6 +146,8 @@ export const akeys = {
   nodes: ["admin", "nodes"] as const,
   lost: ["admin", "lost"] as const,
   keys: ["admin", "keys"] as const,
+  policies: ["admin", "policies"] as const,
+  invites: ["admin", "invites"] as const,
   sshKeys: (user: string) => ["admin", "ssh-keys", user] as const,
   audit: (since: string) => ["admin", "audit", since] as const,
 };
@@ -219,10 +251,18 @@ export function useDrain() {
 export function useCreateKey() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (req: { user: string; tenant?: string; scopes: string[] }) => apiFetch<CreatedKey>("/v1/admin/keys", { method: "POST", json: req }),
+    mutationFn: (req: { user: string; tenant?: string; scopes: string[]; policy?: string; expires_in_secs?: number }) => apiFetch<CreatedKey>("/v1/admin/keys", { method: "POST", json: req }),
     onSuccess: () => qc.invalidateQueries({ queryKey: akeys.keys }),
     gcTime: 0,
   });
+}
+
+/** Renews or shortens a key: secs from now, 0 never, negative now. */
+export function useSetKeyExpiry() {
+  return useAdminMutation(
+    ({ id, secs }: { id: string; secs: number }) => apiFetch<KeyInfo>(`/v1/admin/keys/${enc(id)}`, { method: "PATCH", json: { expires_in_secs: secs } }),
+    akeys.keys,
+  );
 }
 
 export function useRevokeKey() {
@@ -231,4 +271,78 @@ export function useRevokeKey() {
 
 export function useRemoveUserSSHKey() {
   return useAdminMutation((id: string) => apiFetch<void>(`/v1/admin/ssh-keys/${enc(id)}`, { method: "DELETE" }), ["admin", "ssh-keys"]);
+}
+
+export function usePolicies() {
+  return useQuery({
+    queryKey: akeys.policies,
+    queryFn: async () => (await apiFetch<{ policies: UserPolicy[] }>("/v1/admin/policies")).policies ?? [],
+  });
+}
+
+export function usePutPolicy() {
+  return useAdminMutation(
+    (p: UserPolicy) => apiFetch<UserPolicy>(`/v1/admin/policies/${enc(p.name)}`, { method: "PUT", json: p }),
+    akeys.policies,
+  );
+}
+
+export function useDeletePolicy() {
+  return useAdminMutation((name: string) => apiFetch<void>(`/v1/admin/policies/${enc(name)}`, { method: "DELETE" }), akeys.policies);
+}
+
+/** Gives a user a policy, or none with policy "". */
+export function useAssignPolicy() {
+  return useAdminMutation(
+    (req: { user: string; tenant?: string; policy: string }) => apiFetch<void>("/v1/admin/user-policy", { method: "PUT", json: req }),
+    akeys.keys,
+  );
+}
+
+/** Invites not yet used, and whether the gateway can email one (a mail relay). */
+export function useInvites() {
+  return useQuery({
+    queryKey: akeys.invites,
+    queryFn: async () => {
+      const r = await apiFetch<{ invites?: InviteInfo[]; can_email?: boolean }>("/v1/admin/invites");
+      return { invites: r.invites ?? [], canEmail: !!r.can_email };
+    },
+  });
+}
+
+/** gcTime 0, as useCreateKey: the answer carries the invite's token. */
+export function useCreateInvite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: { email: string; user: string; tenant?: string; scopes: string[]; policy?: string; expires_in_secs?: number; send_email?: boolean }) =>
+      apiFetch<CreatedInvite>("/v1/admin/invites", { method: "POST", json: req }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: akeys.invites }),
+    gcTime: 0,
+  });
+}
+
+/** A new password for an account, by an invite for its address. gcTime 0. */
+export function useResetPassword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, send }: { id: string; send: boolean }) =>
+      apiFetch<CreatedInvite>(`/v1/admin/keys/${enc(id)}/reset`, { method: "POST", json: { send_email: send || undefined } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: akeys.invites }),
+    gcTime: 0,
+  });
+}
+
+/** A pending invite's link again (the old one stops working), emailed when send. gcTime 0. */
+export function useResendInvite() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, send }: { id: string; send: boolean }) =>
+      apiFetch<CreatedInvite>(`/v1/admin/invites/${enc(id)}/resend`, { method: "POST", json: { send_email: send || undefined } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: akeys.invites }),
+    gcTime: 0,
+  });
+}
+
+export function useRevokeInvite() {
+  return useAdminMutation((id: string) => apiFetch<void>(`/v1/admin/invites/${enc(id)}`, { method: "DELETE" }), akeys.invites);
 }

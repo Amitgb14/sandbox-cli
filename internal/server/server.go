@@ -554,7 +554,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.Network == nil && req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil {
+	if req.Network == nil && req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.LifetimeSecs == nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "nothing to update")
 		return
 	}
@@ -591,6 +591,14 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var life int
+	if req.LifetimeSecs != nil {
+		var err error
+		if life, err = spec.ResolveLifetimeUpdate(*req.LifetimeSecs, s.Policy); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+	}
 	id := rec.snapshot().ID
 	if req.Name != nil && s.nameTaken(*req.Name, id) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+*req.Name+" already exists")
@@ -621,7 +629,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
 	}
 
-	if req.Name != nil || req.Labels != nil || req.IdleTimeoutSecs != nil {
+	if req.Name != nil || req.Labels != nil || req.IdleTimeoutSecs != nil || req.LifetimeSecs != nil {
 		// The name is checked again and set under the lock create registers
 		// names under, so two renames, or a rename and a create, cannot both
 		// take one name.
@@ -641,6 +649,13 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		if req.IdleTimeoutSecs != nil {
 			rec.sbx.IdleTimeoutSecs = idle
 		}
+		if req.LifetimeSecs != nil {
+			// From creation, as at create, so a change says when it ends and
+			// not how long from whenever the request happened to land. The
+			// reaper reads ExpiresAt; a past one ends it on its next look.
+			at := rec.sbx.CreatedAt.Add(time.Duration(life) * time.Second)
+			rec.sbx.LifetimeSecs, rec.sbx.ExpiresAt = life, &at
+		}
 		after := rec.sbx
 		rec.mu.Unlock()
 		s.mu.Unlock()
@@ -654,6 +669,9 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.IdleTimeoutSecs != nil {
 			ev.IdleTimeoutSecs = &after.IdleTimeoutSecs
+		}
+		if req.LifetimeSecs != nil {
+			ev.LifetimeSecs = &after.LifetimeSecs
 		}
 		s.event(ev)
 	}

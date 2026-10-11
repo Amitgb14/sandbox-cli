@@ -481,6 +481,22 @@ func ResolveIdleUpdate(idle int, pol Policy) (int, error) {
 	return idle, nil
 }
 
+// ResolveLifetimeUpdate checks a live sandbox's new lifetime, counted from
+// its creation as at create. 0 is refused rather than read as "the
+// maximum" or "none": a change that took a sandbox's end away should be
+// asked for by number. A lifetime already past ends the sandbox at the
+// reaper's next look, which is what shortening to now means.
+func ResolveLifetimeUpdate(life int, pol Policy) (int, error) {
+	max := pol.Limits.MaxLifetimeSecs
+	switch {
+	case life <= 0:
+		return 0, invalid("lifetime_secs must be at least 1")
+	case max > 0 && life > max:
+		return 0, invalid("lifetime_secs %d: at most %d", life, max)
+	}
+	return life, nil
+}
+
 // ResolveNetworkUpdate validates a policy change on a running sandbox. It is the
 // same rule as create: an update is a request like any other, and the ceiling
 // does not move because the sandbox already exists.
