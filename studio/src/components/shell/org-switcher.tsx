@@ -21,7 +21,7 @@ import { ApiError, apiFetch } from "@/lib/api/client";
 import { useInfo } from "@/lib/api/queries";
 import { useCreateOrg, useOrgs } from "@/lib/api/orgs";
 import { can, useCaller } from "@/lib/caller";
-import { ORG_NAME_HINT, TEAMS, orgName, orgNameProblem, useOrgStore } from "@/lib/org";
+import { MEMBERS, ORG_NAME_HINT, orgName, orgNameProblem, useOrgStore } from "@/lib/org";
 import type { Whoami } from "@/lib/types";
 
 /**
@@ -101,10 +101,10 @@ export function OrgSwitcher() {
   const [creating, setCreating] = useState(false);
   if (caller.kind !== "gateway" || !current) return null;
   const own = orgName(caller.who.tenant);
-  const mayCreate = TEAMS && can(caller, "org:create");
+  const mayCreate = can(caller, "org:create");
 
   // One organisation and nothing to offer: its name, not a menu.
-  if ((orgs?.length ?? 1) <= 1 && !TEAMS) {
+  if ((orgs?.length ?? 1) <= 1 && !mayCreate) {
     return (
       <div
         role="group"
@@ -139,25 +139,23 @@ export function OrgSwitcher() {
             <DropdownMenuItem key={o.name} onSelect={() => o.name !== current && switchOrg(o.name === own ? null : o.name)}>
               <Check className={o.name === current ? "size-4" : "size-4 opacity-0"} />
               <span className="min-w-0 flex-1 truncate">{o.name}</span>
-              <span className="text-xs text-muted-foreground">{o.name === own ? "your key's" : o.role}</span>
+              <span className="text-xs text-muted-foreground">{o.name === own ? "your first" : o.role}</span>
             </DropdownMenuItem>
           ))}
-          {TEAMS && (
-            <>
-              <DropdownMenuSeparator />
-              {mayCreate && (
-                <DropdownMenuItem onSelect={() => setCreating(true)}>
-                  <Plus className="size-4" />
-                  Create organization
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem asChild>
-                <Link href="/members">
-                  <Users className="size-4" />
-                  Members
-                </Link>
-              </DropdownMenuItem>
-            </>
+          {(mayCreate || MEMBERS) && <DropdownMenuSeparator />}
+          {mayCreate && (
+            <DropdownMenuItem onSelect={() => setCreating(true)}>
+              <Plus className="size-4" />
+              Create organization
+            </DropdownMenuItem>
+          )}
+          {MEMBERS && (
+            <DropdownMenuItem asChild>
+              <Link href="/members">
+                <Users className="size-4" />
+                Members
+              </Link>
+            </DropdownMenuItem>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
@@ -198,7 +196,7 @@ function CreateOrgDialog({ open, onOpenChange, onCreated }: { open: boolean; onO
           <DialogHeader>
             <DialogTitle>Create organization</DialogTitle>
             <DialogDescription>
-              An organization has its own sandboxes, secrets, jobs, services and quota, which nobody outside it can see. You become its owner and can add members.
+              An organization has its own sandboxes, secrets, jobs, services and quota, which nobody outside it can see. You become its owner. Switch between yours here.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-1.5">

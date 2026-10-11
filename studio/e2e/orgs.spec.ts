@@ -6,9 +6,9 @@ import { gatewayStudio, type GatewayStudio } from "./state";
  * starts. Whether a selection is allowed is the gateway's to decide — its
  * tests pin that — so these pin what Studio does with one: lists the key's,
  * sends the selection on every call, and shows nothing of one organisation
- * under another's name. Teams are hidden for now (lib/org.ts TEAMS): Studio
- * offers neither creating an organisation nor its members, so one is made
- * through the API here, and the members screen is reached by its address.
+ * under another's name. A user creates organisations from the switcher;
+ * members are hidden for now (lib/org.ts MEMBERS), so the members screen is
+ * reached by its address.
  */
 
 const ORG = "e2e-one";
@@ -39,12 +39,19 @@ async function choose(page: Page, org: string) {
   await expect(switcher(page)).toHaveAccessibleName(`Organization: ${org}`);
 }
 
-test("one organization is a name, not a menu, and offers no teams", async ({ page }) => {
+test("a user creates an organization from the switcher, and is offered no members", async ({ page }) => {
   await open(page, "gw-tenant", "alice@team-a");
   await expect(switcher(page)).toHaveAccessibleName("Organization: team-a");
   await switcher(page).click();
-  await expect(page.getByRole("menuitem")).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "Members" })).toHaveCount(0);
+  await page.getByRole("menuitem", { name: "Create organization" }).click();
+  await page.getByLabel("Organization name").fill("Bad--name");
+  await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
+  await page.getByLabel("Organization name").fill("e2e-mine");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(switcher(page)).toHaveAccessibleName("Organization: e2e-mine");
   await expect(page.locator("[data-sidebar=sidebar]").getByRole("link", { name: "Members" })).toHaveCount(0);
+  await choose(page, "team-a");
 });
 
 test("an organization made elsewhere is switched to, and shows only its own sandboxes", async ({ page, request }) => {
@@ -54,7 +61,7 @@ test("an organization made elsewhere is switched to, and shows only its own sand
   await open(page, "gw-tenant", "alice@team-a");
   await switcher(page).click();
   await expect(page.getByRole("menuitem", { name: /^team-a/ })).toBeVisible();
-  await expect(page.getByRole("menuitem", { name: "Create organization" })).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: /^e2e-mine/ })).toBeVisible();
   await page.getByRole("menuitem", { name: new RegExp(`^${ORG}\\b`) }).click();
   await expect(switcher(page)).toHaveAccessibleName(`Organization: ${ORG}`);
 

@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  useAdminOrgs,
   useAssignPolicy,
   useCreateInvite,
   useCreateKey,
@@ -62,6 +63,16 @@ const EXPIRIES: { label: string; secs: number }[] = [
 function expired(expires?: string): boolean {
   return !!expires && new Date(expires).getTime() <= Date.now();
 }
+/** Where a key stands, for the users filter. */
+const STATUSES = ["active", "suspended", "expired", "revoked"] as const;
+type Status = (typeof STATUSES)[number];
+function statusOf(k: KeyInfo): Status {
+  if (k.suspended) return "suspended";
+  if (k.revoked) return "revoked";
+  if (expired(k.expires)) return "expired";
+  return "active";
+}
+
 /** The Select's value for no policy: Radix takes no empty value. */
 const NO_POLICY = "-";
 
@@ -107,9 +118,27 @@ function Keys() {
   const canEmail = useInvites().data?.canEmail ?? false;
   const [created, setCreated] = useState<CreatedKey | null>(null);
   const [invited, setInvited] = useState<CreatedInvite | null>(null);
+  const { data: allOrgs } = useAdminOrgs();
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<Status | "all">("all");
+  const [role, setRole] = useState<"all" | "super" | "admin">("all");
+  // A user's organizations: the one their key is in, then each they own.
+  const orgsOf = (k: KeyInfo): string[] => {
+    const own = orgName(k.tenant);
+    const owned = (allOrgs ?? [])
+      .filter((o) => o.name.toLowerCase() !== own.toLowerCase() && o.owned_by?.some((m) => m.user === k.user && (m.tenant ?? "") === (k.tenant ?? "")))
+      .map((o) => o.name);
+    return [own, ...owned];
+  };
   // Live first, then suspended (still restorable), then revoked for good.
   const rank = (k: KeyInfo) => (k.suspended ? 1 : k.revoked ? 2 : 0);
-  const rows = [...(data ?? [])].sort((a, b) => rank(a) - rank(b) || b.created.localeCompare(a.created));
+  const q = query.trim().toLowerCase();
+  const all = data ?? [];
+  const rows = all
+    .filter((k) => status === "all" || statusOf(k) === status)
+    .filter((k) => role === "all" || (role === "super") === k.scopes.includes("admin"))
+    .filter((k) => !q || [k.user, k.email ?? "", k.id, ...orgsOf(k), ...k.scopes, k.policy ?? ""].some((s) => s.toLowerCase().includes(q)))
+    .sort((a, b) => rank(a) - rank(b) || b.created.localeCompare(a.created));
 
   return (
     <div className="flex flex-col gap-8">
@@ -126,11 +155,45 @@ function Keys() {
       <section className="flex flex-col gap-3">
         <SectionHeader title="Users and their keys" description="An account is a key whose user signs in with an email and password; its own secret is never shown. A suspended one is refused everywhere and can be restored until the time it shows." />
         {error ? <p className="text-sm text-destructive">{error.message}</p> : null}
+        <div className="flex flex-wrap items-center gap-2">
+          <Input aria-label="Filter users" placeholder="Filter by user, email, organization, scope or policy" value={query} onChange={(e) => setQuery(e.target.value)} className="h-8 w-80 text-sm" />
+          <Select value={role} onValueChange={(v) => setRole(v as typeof role)}>
+            <SelectTrigger aria-label="Role" className="h-8 w-36 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">every role</SelectItem>
+              <SelectItem value="super">super admin</SelectItem>
+              <SelectItem value="admin">admin</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
+            <SelectTrigger aria-label="Status" className="h-8 w-36 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">any status</SelectItem>
+              {STATUSES.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="text-xs text-muted-foreground" data-testid="users-count">
+            {rows.length === all.length ? `${all.length} keys` : `${rows.length} of ${all.length} keys`}
+          </span>
+          {(q || status !== "all" || role !== "all") && (
+            <Button size="sm" variant="ghost" onClick={() => { setQuery(""); setStatus("all"); setRole("all"); }}>
+              Reset
+            </Button>
+          )}
+        </div>
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>User</TableHead>
-              <TableHead>Organization</TableHead>
+              <TableHead>Organizations</TableHead>
               <TableHead>Scopes</TableHead>
               <TableHead>Policy</TableHead>
               <TableHead>Expires</TableHead>
@@ -150,7 +213,13 @@ function Keys() {
                     </div>
                   ) : null}
                 </TableCell>
-                <TableCell className="font-mono text-xs" data-testid={`org-${k.user}`}>{orgName(k.tenant)}</TableCell>
+                <TableCell className="font-mono text-xs" data-testid={`org-${k.user}`}>
+                  <div className="flex flex-col gap-0.5">
+                    {orgsOf(k).map((o, i) => (
+                      <span key={o} className={i ? "text-muted-foreground" : ""}>{o}</span>
+                    ))}
+                  </div>
+                </TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
                     {k.scopes.includes("admin") ? (
@@ -240,6 +309,11 @@ function Keys() {
                 </TableCell>
               </TableRow>
             ))}
+            {rows.length === 0 && all.length > 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">No key matches.</TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </section>

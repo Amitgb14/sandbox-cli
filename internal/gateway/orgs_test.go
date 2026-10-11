@@ -349,7 +349,8 @@ func TestOrgHeaderCannotReachAdminEndpoints(t *testing.T) {
 		t.Errorf("admin in aa: %+v %v", w, err)
 	}
 	all, err := tg.admin.AdminOrgs(ctxT(t))
-	if err != nil || len(all) != 1 || all[0].Name != "aa" || all[0].Members != 1 || all[0].Owners != 1 || all[0].CreatedBy != "alice" {
+	if err != nil || len(all) != 1 || all[0].Name != "aa" || all[0].Members != 1 || all[0].Owners != 1 || all[0].CreatedBy != "alice" ||
+		len(all[0].OwnedBy) != 1 || all[0].OwnedBy[0].User != "alice" || all[0].OwnedBy[0].Tenant != "" {
 		t.Errorf("admin orgs: %+v %v", all, err)
 	}
 	// Still a 404 for one that does not exist.
