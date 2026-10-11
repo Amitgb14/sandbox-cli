@@ -3,7 +3,11 @@
  * the waitlist inbox.
  *
  * The site is a static export, so this is a Vercel function beside it rather
- * than a Next route handler (a static export serves GET only). It runs on the
+ * than a Next route handler (a static export serves GET only). It compiles to
+ * a .js with `export`; api/package.json says "type": "module" so the platform
+ * loads it as one. Without it the nearest package.json was web's, which says
+ * nothing, so it was loaded as CommonJS and every request failed before the
+ * handler ran. (A .mts file is not picked up as a function at all.) It runs on the
  * host, where the email service's API key is: RESEND_API_KEY, set in the
  * project's environment and never sent to the browser. On a host without
  * functions (GitHub Pages, a bucket) the form gets a 404 and says so.
