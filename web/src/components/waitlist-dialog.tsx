@@ -31,7 +31,9 @@ export function WaitlistButton({ className }: { className?: string }) {
     const form = new FormData(e.currentTarget);
     setState({ kind: "sending" });
     try {
-      const res = await fetch("/api/waitlist", {
+      // With the slash: trailingSlash makes the host answer /api/waitlist with
+      // a redirect, an extra round trip before the function runs.
+      const res = await fetch("/api/waitlist/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
