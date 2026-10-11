@@ -903,3 +903,12 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
    switch with a base URL?
 4. **Names.** Product, binaries (`sandbox-cli`, `sandboxd`) and domains, before
    M7 makes them public.
+5. **Windows guests.** Does a sandbox ever run Windows, so that tests which only
+   mean something there can run? Firecracker and the macOS runtime boot Linux
+   only, so it would need a second Linux backend.
+   [`docs/roadmap/task-8-windows-guests.md`](../roadmap/task-8-windows-guests.md)
+   proposes Cloud Hypervisor, for Windows guests only, beside Firecracker. It
+   would run Windows Server Core images that the operator builds from our
+   recipe, and a Windows build of `sandbox-guestd`. Recommended: after M10, and
+   Phase 0 first (a measurement on a real KVM host). This is separate from the
+   platform-loss risk: Windows *hosts* still get no local mode.
