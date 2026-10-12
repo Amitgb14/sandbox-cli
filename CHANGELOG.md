@@ -258,6 +258,18 @@ in `_old/` as reference, to be ported where this design still wants it.
   `owned_by`) and filters by name, email, organization, scope or policy, by
   role (super admin or admin) and by status (active, suspended, expired,
   revoked).
+- **Organizations keep logins for their private images.** `PUT`, `GET` and
+  `DELETE /v1/registry-logins/{registry}` (and `sandbox-cli registry
+  login|ls|logout`, and a Registry logins section on Studio's Secrets page)
+  keep a user name and a sealed token per organization and registry. The
+  gateway adds the login to the organization's creates of an image on that
+  registry — sandboxes, job runs, service replicas — and to no one else's;
+  a client cannot send one of its own through it. On the node a create may
+  carry `registry_login` (capability `registry_login`, Firecracker only),
+  used for that pull alone: pull tokens and offline manifests are now kept
+  per login, so a create without the login is refused by the registry even
+  for an image the node already has. There is no node-wide login. An
+  anonymous pull a registry refuses says a login is needed.
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
   list the images on every node with where each is, download one to every

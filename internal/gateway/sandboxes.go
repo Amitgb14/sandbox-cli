@@ -128,6 +128,9 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	if want.DiskMB == 0 {
 		want.DiskMB = g.cfg.Defaults.DiskMB
 	}
+	if f := g.addRegistryLogin(ctx, p, &req, &want); f != nil {
+		return api.Sandbox{}, f
+	}
 	if req.Network != nil {
 		want.NetworkMode = req.Network.Mode
 		switch req.Network.Mode {

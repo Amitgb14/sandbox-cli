@@ -108,6 +108,29 @@ default and the profiles interact is in
 [self-hosting.md](self-hosting.md#the-network-default) and
 [security/README.md](security/README.md#security-profiles).
 
+## Private images
+
+A pull is anonymous unless the create asks for it with a login
+(`registry_login`, [api/v1.md](api/v1.md#also-on-create)). sandboxd keeps no
+login of its own: one it held would let every user of the node start from
+what it pulled. Behind a gateway, each organization keeps its logins there
+(`sandbox-cli registry login ghcr.io -u USER < token`, or Studio's Secrets
+page), and the gateway adds the right one to that organization's creates.
+
+- A login is used only for its registry, sent only in the token request the
+  registry's challenge points to, over https (or an `--insecure-registry`),
+  and never logged or put in an error.
+- The pull tokens and the manifests sandboxd keeps for an offline start are
+  kept per login, so a create without the login meets the registry's
+  refusal, even for an image already on the node: the manifest is fetched
+  for every create, and the cached layers are reached only through it.
+- An anonymous pull the registry refuses says so; one with a login says the
+  login was refused (on ghcr.io a token needs `read:packages` and access to
+  the package).
+- Firecracker only (capability `registry_login`). The macos backend pulls
+  through the container runtime and refuses a create carrying a login: log
+  the runtime in with `container registry login` instead.
+
 ## What sandboxd refuses at startup
 
 - **A network address without a token, or without TLS.**

@@ -9,7 +9,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, apiFetch, authHeaders } from "@/lib/api/client";
-import type { Job, JobOutput, JobSpec, SecretInfo, Service, ServiceSpec, SSHAccess, SSHInfo, SSHKey } from "@/lib/types";
+import type { Job, JobOutput, JobSpec, RegistryLoginInfo, SecretInfo, Service, ServiceSpec, SSHAccess, SSHInfo, SSHKey } from "@/lib/types";
 
 const enc = encodeURIComponent;
 
@@ -20,6 +20,7 @@ export const gkeys = {
   services: ["services"] as const,
   service: (name: string, tenant?: string) => ["service", name, tenant ?? ""] as const,
   secrets: ["secrets"] as const,
+  registryLogins: ["registry-logins"] as const,
   ssh: ["ssh"] as const,
   sshKeys: ["ssh-keys"] as const,
 };
@@ -193,6 +194,31 @@ export function useRemoveSecret() {
   return useInvalidating(
     (name: string) => apiFetch<void>(`/v1/secrets/${enc(name)}`, { method: "DELETE" }),
     () => [gkeys.secrets],
+  );
+}
+
+// --- registry logins: a token goes in and never comes back -----------------------------
+
+export function useRegistryLogins() {
+  return useQuery({
+    queryKey: gkeys.registryLogins,
+    queryFn: async () => (await apiFetch<{ logins: RegistryLoginInfo[] }>("/v1/registry-logins")).logins ?? [],
+    retry: false,
+  });
+}
+
+export function useSetRegistryLogin() {
+  return useInvalidating(
+    ({ registry, username, password }: { registry: string; username: string; password: string }) =>
+      apiFetch<void>(`/v1/registry-logins/${enc(registry)}`, { method: "PUT", json: { username, password } }),
+    () => [gkeys.registryLogins],
+  );
+}
+
+export function useRemoveRegistryLogin() {
+  return useInvalidating(
+    (registry: string) => apiFetch<void>(`/v1/registry-logins/${enc(registry)}`, { method: "DELETE" }),
+    () => [gkeys.registryLogins],
   );
 }
 

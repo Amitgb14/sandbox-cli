@@ -207,6 +207,24 @@ test("a tenant sets a secret it can never read back", async ({ page }) => {
   expect(await page.content()).not.toContain("value-that-stays-put");
 });
 
+test("a tenant saves a registry login whose token is never shown, and removes it", async ({ page }) => {
+  const base = await open(page, "gw-tenant", "alice@team-a");
+  await page.goto(`${base}/secrets/`);
+  await page.getByLabel("Registry", { exact: true }).fill("ghcr.io");
+  await page.getByLabel("Registry username").fill("e2e-user");
+  await page.getByLabel("Registry token").fill("ghp-token-that-stays-put");
+  await page.getByRole("button", { name: "Save login" }).click();
+  const row = page.getByTestId("registry-logins").getByRole("row").filter({ hasText: "ghcr.io" });
+  await expect(row).toContainText("e2e-user");
+  await expect(page.getByLabel("Registry token")).toHaveValue("");
+  await page.reload();
+  await expect(row).toContainText("e2e-user");
+  expect(await page.content()).not.toContain("ghp-token-that-stays-put");
+  page.once("dialog", (d) => d.accept());
+  await row.getByRole("button", { name: "Remove" }).click();
+  await expect(page.getByText("No registry logins")).toBeVisible();
+});
+
 test("a secret named for its purpose is set in a job as the variable the job says", async ({ page }) => {
   const base = await open(page, "gw-tenant", "alice@team-a");
   await page.goto(`${base}/secrets/`);

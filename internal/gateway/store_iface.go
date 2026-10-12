@@ -157,6 +157,13 @@ type Store interface {
 	SecretsOf(ctx context.Context, tenant string) ([]api.SecretInfo, error)
 	DeleteSecret(ctx context.Context, tenant, name string) error
 
+	// --- registry logins (registry_logins.go): the token arrives sealed and leaves sealed ---
+
+	PutRegistryLogin(ctx context.Context, tenant, registry, username string, sealed []byte) error
+	RegistryLogin(ctx context.Context, tenant, registry string) (username string, sealed []byte, ok bool, err error)
+	RegistryLoginsOf(ctx context.Context, tenant string) ([]api.RegistryLoginInfo, error)
+	DeleteRegistryLogin(ctx context.Context, tenant, registry string) error
+
 	// --- services (sql_services.go) ---
 
 	Services(ctx context.Context) ([]serviceRecord, error)
