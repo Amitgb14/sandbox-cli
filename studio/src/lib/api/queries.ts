@@ -316,6 +316,18 @@ export function useResize() {
   );
 }
 
+/**
+ * A new size for a running sandbox in place (capability resize): it
+ * restarts, keeping its id, files and volumes; its processes end.
+ */
+export function useResizeInPlace() {
+  return useInvalidating(
+    ({ id, ...req }: { id: string; cpus?: number; memory_mb?: number; disk_mb?: number }) =>
+      apiFetch<Sandbox>(`${sbx(id)}/resize`, { method: "POST", json: req }),
+    ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes]],
+  );
+}
+
 export function useUpdateNetwork() {
   return useInvalidating(
     ({ id, network }: { id: string; network: NetworkPolicy }) =>

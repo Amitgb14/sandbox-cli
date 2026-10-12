@@ -43,11 +43,21 @@ test("a running sandbox is renamed, relabelled, retimed and given a new network 
   got = await (await api(request, `/v1/sandboxes/${sb.id}`)).json();
   expect(got.network).toMatchObject({ mode: "allowlist", allow: ["proxy.golang.org"] });
 
-  // The fake takes no disk snapshots: Resize says why rather than trying.
-  const resize = page.getByRole("button", { name: "Resize" });
-  await expect(resize).toHaveAttribute("aria-disabled", "true");
-  await resize.hover();
-  await expect(page.getByRole("tooltip")).toContainText("a running VM's vCPUs and memory are fixed");
+  // The endpoint resizes in place (capability resize): the same sandbox,
+  // restarted at its new size; a smaller disk is not offered.
+  await page.getByRole("button", { name: "Resize" }).click();
+  const rz = page.getByRole("dialog", { name: /^Resize/ });
+  await rz.getByLabel("Disk (MiB)").fill(String(got.disk_mb - 1));
+  await expect(rz.getByText(/Disk: only grows/)).toBeVisible();
+  await expect(rz.getByRole("button", { name: "Resize and restart" })).toBeDisabled();
+  await rz.getByLabel("vCPUs").fill("2");
+  await rz.getByLabel("Memory (MiB)").fill("2048");
+  await rz.getByLabel("Disk (MiB)").fill(String(got.disk_mb + 1024));
+  await rz.getByRole("button", { name: "Resize and restart" }).click();
+  await expect(rz).toHaveCount(0);
+  const before = got.disk_mb;
+  got = await (await api(request, `/v1/sandboxes/${sb.id}`)).json();
+  expect([got.cpus, got.memory_mb, got.disk_mb]).toEqual([2, 2048, before + 1024]);
 
   await api(request, `/v1/sandboxes/${sb.id}`, "DELETE");
   await api(request, "/egress/groups/edit-go", "DELETE");

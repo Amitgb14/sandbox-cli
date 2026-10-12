@@ -109,6 +109,9 @@ func overlayRoot(dev string) error {
 	if err := syscall.Mount(dev, rw, "ext4", syscall.MS_NOSUID|syscall.MS_NODEV, ""); err != nil {
 		return fmt.Errorf("mount %s: %w", dev, err)
 	}
+	if err := growToDevice(rw, dev); err != nil {
+		fmt.Printf("sandbox-guestd: growing the scratch filesystem: %v\n", err)
+	}
 	for _, d := range []string{rw + "/upper", rw + "/work"} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
@@ -139,6 +142,47 @@ func overlayRoot(dev string) error {
 	// The scratch mount stays alive under the overlay; the old tree is detached.
 	_ = syscall.Unmount("/.old", syscall.MNT_DETACH)
 	_ = os.Remove("/.old")
+	return nil
+}
+
+// Linux ioctls: a block device's size in bytes, and an online resize of the
+// ext4 filesystem mounted where the descriptor is, to a count of blocks.
+const (
+	blkGetSize64    = 0x80081272 // BLKGETSIZE64
+	ext4IocResizeFS = 0x40086610 // EXT4_IOC_RESIZE_FS
+)
+
+// growToDevice grows the ext4 filesystem mounted at dir to fill dev. A
+// resize grows the scratch file on the host and nothing else: the host never
+// reads the filesystem the guest writes, so the guest's own kernel grows it
+// here, on every boot, which is nothing when it already fills the device.
+func growToDevice(dir, dev string) error {
+	d, err := os.Open(dev)
+	if err != nil {
+		return err
+	}
+	var size uint64
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, d.Fd(), blkGetSize64, uintptr(unsafe.Pointer(&size)))
+	d.Close()
+	if errno != 0 {
+		return fmt.Errorf("the size of %s: %w", dev, errno)
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return err
+	}
+	if st.Bsize <= 0 {
+		return fmt.Errorf("block size %d", st.Bsize)
+	}
+	blocks := size / uint64(st.Bsize)
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), ext4IocResizeFS, uintptr(unsafe.Pointer(&blocks))); errno != 0 {
+		return fmt.Errorf("resize to %d blocks: %w", blocks, errno)
+	}
 	return nil
 }
 

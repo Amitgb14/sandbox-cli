@@ -344,6 +344,14 @@ func (c *Client) Suspend(ctx context.Context, ref string) (Sandbox, error) {
 	return out, c.json(ctx, http.MethodPost, sbx(ref)+"/suspend", nil, &out)
 }
 
+// Resize gives a running sandbox new CPUs, memory or disk (capability
+// resize). It restarts the sandbox, keeping its files and ending its
+// processes; a field left 0 keeps what it has.
+func (c *Client) Resize(ctx context.Context, ref string, req ResizeSandboxRequest) (Sandbox, error) {
+	var out Sandbox
+	return out, c.json(ctx, http.MethodPost, sbx(ref)+"/resize", req, &out)
+}
+
 // Resume brings a suspended sandbox back.
 func (c *Client) Resume(ctx context.Context, ref string) (Sandbox, error) {
 	var out Sandbox

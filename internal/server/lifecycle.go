@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
+	"github.com/Amitgb14/sandbox-cli/internal/spec"
 )
 
 // Suspend, resume and snapshots: what makes a sandbox cheap to keep. Measured
@@ -118,6 +120,81 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 	rec.mu.Unlock()
 	s.persist(rec)
 	s.event(api.Event{Type: api.EventSandboxResumed, Sandbox: out.ID})
+	writeJSON(w, http.StatusOK, out)
+}
+
+// resize serves POST /v1/sandboxes/{ref}/resize. The backend restarts the
+// sandbox to take its new size, which ends its processes, so it is refused
+// while any run, as a suspend is: a resize must not take work with it.
+func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
+	rz, ok := s.Backend.(backend.SandboxResizer)
+	if !ok || !s.Backend.Capabilities()[api.CapResize] {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot resize a sandbox")
+		return
+	}
+	var req api.ResizeSandboxRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	rec, ok := s.live(w, r)
+	if !ok {
+		return
+	}
+	cur := rec.snapshot()
+	was := api.NodeResources{CPUs: cur.CPUs, MemoryMB: cur.MemoryMB, DiskMB: cur.DiskMB}
+	size, err := spec.ResolveResize(req, was, s.Policy)
+	if err != nil {
+		writeSpecErr(w, err)
+		return
+	}
+	if size == was {
+		writeJSON(w, http.StatusOK, cur)
+		return
+	}
+	if busy(rec) {
+		writeErr(w, http.StatusConflict, api.CodeConflict, "processes are running, and a resize restarts the sandbox; wait for them or signal them first")
+		return
+	}
+	s.mu.Lock()
+	if s.resizing[cur.ID] {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, api.CodeConflict, "the sandbox is being resized")
+		return
+	}
+	if s.resizing == nil {
+		s.resizing = map[string]bool{}
+	}
+	s.resizing[cur.ID] = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.resizing, cur.ID)
+		s.mu.Unlock()
+	}()
+
+	// The size the backend answers with may be part of what was asked, or
+	// the old one; the record follows the backend.
+	now, err := rz.ResizeSandbox(r.Context(), cur.ID, size)
+	if err != nil {
+		s.logf("sandbox %s: resize to %v CPUs, %d MB, disk %d MB: %v", cur.ID, size.CPUs, size.MemoryMB, size.DiskMB, err)
+	}
+	if now == (api.NodeResources{}) {
+		now = was
+	}
+	rec.mu.Lock()
+	rec.sbx.CPUs, rec.sbx.MemoryMB, rec.sbx.DiskMB = now.CPUs, now.MemoryMB, now.DiskMB
+	rec.lastActive = s.now()
+	out := rec.sbx
+	rec.mu.Unlock()
+	s.persist(rec)
+	if now != was {
+		s.event(api.Event{Type: api.EventSandboxResized, Sandbox: out.ID,
+			Reason: fmt.Sprintf("%v CPUs, %d MB, disk %d MB -> %v CPUs, %d MB, disk %d MB", was.CPUs, was.MemoryMB, was.DiskMB, now.CPUs, now.MemoryMB, now.DiskMB)})
+	}
+	if err != nil {
+		writeBackendErr(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 

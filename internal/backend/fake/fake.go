@@ -120,6 +120,32 @@ func (b *Backend) Network(id string) (api.NetworkPolicy, bool) {
 	return s.spec.Network, true
 }
 
+// ResizeSandbox is backend.SandboxResizer: the new size, nothing else.
+func (b *Backend) ResizeSandbox(_ context.Context, id string, size api.NodeResources) (api.NodeResources, error) {
+	s, err := b.get(id)
+	if err != nil {
+		return api.NodeResources{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if size.DiskMB < s.spec.DiskMB {
+		return api.NodeResources{CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}, fmt.Errorf("%w: a disk only grows", backend.ErrUnsupported)
+	}
+	s.spec.CPUs, s.spec.MemoryMB, s.spec.DiskMB = size.CPUs, size.MemoryMB, size.DiskMB
+	return size, nil
+}
+
+// Size is the resources the fake last gave id, for tests.
+func (b *Backend) Size(id string) (api.NodeResources, bool) {
+	s, err := b.get(id)
+	if err != nil {
+		return api.NodeResources{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return api.NodeResources{CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}, true
+}
+
 func (b *Backend) get(id string) (*sandbox, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

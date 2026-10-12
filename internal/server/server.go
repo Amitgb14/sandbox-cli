@@ -81,6 +81,7 @@ type Server struct {
 	mu            sync.Mutex
 	sandboxes     map[string]*record // id -> record
 	deleting      map[string]bool    // volumes being deleted, under mu
+	resizing      map[string]bool    // sandboxes being resized, under mu
 	pools         []*pool
 	poolsOnce     sync.Once
 	reaper        sync.Once
@@ -170,6 +171,7 @@ func (s *Server) Handler() http.Handler {
 	route("GET /v1/sandboxes/{ref}/processes/{pid}/attach", false, s.attach)
 	route("POST /v1/sandboxes/{ref}/suspend", false, s.suspend)
 	route("POST /v1/sandboxes/{ref}/resume", false, s.resume)
+	route("POST /v1/sandboxes/{ref}/resize", false, s.resize)
 	route("POST /v1/sandboxes/{ref}/snapshots", false, s.createSnapshot)
 	route("PUT /v1/sandboxes/{ref}/snapshot-schedule", false, s.setSnapshotSchedule)
 	route("GET /v1/snapshots", false, s.listSnapshots)

@@ -288,7 +288,7 @@ func defaultStateDir() string {
 func newBackend(name string, o backendOptions) (backend.Backend, error) {
 	switch name {
 	case "fake":
-		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapVolumes), nil
+		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapVolumes, api.CapResize), nil
 	case "firecracker":
 		return newFirecracker(o)
 	case "macos":

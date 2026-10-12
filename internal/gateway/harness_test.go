@@ -23,7 +23,7 @@ import (
 
 // allCaps is every capability the fake can pretend to have, as the
 // conformance suite's own default run uses.
-var allCaps = []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes}
+var allCaps = []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes, api.CapResize}
 
 // testNode is a sandboxd stand-in: the real server over the fake backend,
 // with GET /v1/node and POST /v1/node/cordon answered here. The real

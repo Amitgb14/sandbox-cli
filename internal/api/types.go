@@ -105,6 +105,10 @@ const (
 	// GET, POST and DELETE /v1/images — rather than each being pulled only
 	// when a sandbox first asks for it.
 	CapImages = "images"
+	// CapResize: a running sandbox's CPUs, memory and disk can be changed
+	// (POST /v1/sandboxes/{ref}/resize). The sandbox restarts to take the
+	// new size: its files are kept, its processes are not.
+	CapResize = "resize"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -177,6 +181,14 @@ type CreateSandboxRequest struct {
 	// Volumes mounts named volumes (capability volumes). A volume is attached
 	// to one live sandbox at a time.
 	Volumes []VolumeMount `json:"volumes,omitempty"`
+}
+
+// ResizeSandboxRequest is the body of POST /v1/sandboxes/{ref}/resize. A
+// field left 0 keeps what the sandbox has. The disk can only grow.
+type ResizeSandboxRequest struct {
+	CPUs     float64 `json:"cpus,omitempty"`
+	MemoryMB int     `json:"memory_mb,omitempty"`
+	DiskMB   int     `json:"disk_mb,omitempty"`
 }
 
 // VolumeMount attaches a volume at a path inside the sandbox.
@@ -284,6 +296,7 @@ const (
 	EventSandboxUpdated    = "sandbox.updated" // name, labels or idle timeout changed; the event carries them after
 	EventSandboxSuspended  = "sandbox.suspended"
 	EventSandboxResumed    = "sandbox.resumed"
+	EventSandboxResized    = "sandbox.resized" // Reason: the size before and after
 	EventSnapshotCreated   = "snapshot.created"
 	EventSnapshotDeleted   = "snapshot.deleted" // Reason: "request" or "retention"
 	EventProcessStarted    = "process.started"

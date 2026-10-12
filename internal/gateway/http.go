@@ -113,6 +113,9 @@ func (g *Gateway) Handler() http.Handler {
 		route(rt.pattern, rt.raw, g.forward(rt.scope, rt.after))
 	}
 	route("POST /v1/sandboxes/{ref}/ssh-access", false, g.sshAccess)
+	// Not forwarded: the growth is held to the quota and the node's room
+	// first (resize.go).
+	route("POST /v1/sandboxes/{ref}/resize", false, g.resizeHandler)
 
 	route("GET /v1/snapshots", false, g.listSnapshots)
 	route("DELETE /v1/snapshots/{id}", false, g.deleteSnapshot)
