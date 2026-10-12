@@ -155,6 +155,9 @@ type vm struct {
 	exited    chan struct{}
 	suspended bool
 	adopted   bool // taken back from an earlier sandboxd (keep.go)
+	// restart is held while the VMM is restarted (resize.go), so a
+	// terminate waits for the new VMM rather than racing its start.
+	restart sync.Mutex
 }
 
 // New checks the configuration and returns a backend. What an earlier
@@ -282,6 +285,7 @@ func (b *Backend) Capabilities() map[string]bool {
 		api.CapTunnel:              true,
 		api.CapVolumes:             true,
 		api.CapRegistryLogin:       true,
+		api.CapResize:              true,
 	}
 }
 
@@ -509,6 +513,8 @@ func (b *Backend) Terminate(_ context.Context, id string) error {
 	delete(b.vms, id)
 	b.mu.Unlock()
 	if ok {
+		v.restart.Lock()
+		defer v.restart.Unlock()
 		b.flushVolumes(v, true)
 		b.destroy(v)
 	}
@@ -702,11 +708,7 @@ func BuildConfig(s backend.Spec, p vmPaths, bootArgs string, t *tap) VMConfig {
 		ro := i < len(s.Volumes) && s.Volumes[i].ReadOnly
 		c.Drives = append(c.Drives, drive{DriveID: fmt.Sprintf("vol%d", i), PathOnHost: path, IsReadOnly: ro})
 	}
-	vcpus := int(math.Ceil(s.CPUs))
-	if vcpus < 1 {
-		vcpus = 1
-	}
-	c.MachineConfig = machineConfig{VCPUCount: vcpus, MemSizeMiB: s.MemoryMB}
+	c.MachineConfig = machineFor(s)
 	if t != nil {
 		c.NetIfaces = []netIface{{IfaceID: "eth0", GuestMAC: t.mac, HostDevName: t.name}}
 	}
@@ -714,6 +716,15 @@ func BuildConfig(s backend.Spec, p vmPaths, bootArgs string, t *tap) VMConfig {
 	// vhost-vsock, so the guest CID is local to the VM and every VM can use 3.
 	c.Vsock = vsockConfig{GuestCID: 3, UDSPath: p.VsockUDS}
 	return c
+}
+
+// machineFor is a spec's vCPUs and memory: whole vCPUs, at least one.
+func machineFor(s backend.Spec) machineConfig {
+	vcpus := int(math.Ceil(s.CPUs))
+	if vcpus < 1 {
+		vcpus = 1
+	}
+	return machineConfig{VCPUCount: vcpus, MemSizeMiB: s.MemoryMB}
 }
 
 // hostname is the guest's hostname: the sandbox id, which is already a valid

@@ -91,6 +91,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"AShortenedLifetimeEndsTheSandbox", testLifetimeUpdate},
 		{"AttachStreamsInputAndOutput", testAttach},
 		{"SuspendKeepsTheSandbox", testSuspend},
+		{"AResizeKeepsTheFilesAndChangesTheSize", testResize},
 		{"ASnapshotForksTheSandbox", testSnapshot},
 		{"MetricsSampleARunningSandbox", testMetrics},
 		{"AScheduleKeepsTheNewestSnapshots", testSnapshotSchedule},
@@ -936,6 +937,53 @@ func testAttach(t *testing.T, e *env) {
 // Suspend stops a sandbox and resume brings it back as it was. A suspended
 // sandbox does no work, and a sandbox with a running process is not suspended
 // out from under it.
+// testResize: a running sandbox takes a new size, keeping its files; a
+// smaller disk and a resize while a process runs are refused.
+func testResize(t *testing.T, e *env) {
+	sb := e.newSandbox(t, api.CreateSandboxRequest{CPUs: 1})
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapResize) {
+		_, err := e.c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{CPUs: 2})
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	if err := e.c.WriteFile(ctx, sb.ID, "/sandbox/home/kept.txt", []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"sleep", "30"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpus := 2.0
+	if e.caps.Limits.MaxCPUs < cpus {
+		cpus = e.caps.Limits.MaxCPUs
+	}
+	_, err = e.c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{CPUs: cpus})
+	wantCode(t, err, api.CodeConflict)
+	_ = e.c.Signal(ctx, sb.ID, p.PID, "KILL")
+	e.follow(t, sb.ID, p.PID)
+
+	disk := sb.DiskMB + 512
+	if disk > e.caps.Limits.MaxDiskMB {
+		disk = sb.DiskMB
+	}
+	got, err := e.c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{CPUs: cpus, DiskMB: disk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CPUs != cpus || got.DiskMB != disk || got.MemoryMB != sb.MemoryMB || got.State != api.StateRunning {
+		t.Fatalf("resized to %v CPUs, %d MB, disk %d, %s; want %v, %d (kept), %d, running", got.CPUs, got.MemoryMB, got.DiskMB, got.State, cpus, sb.MemoryMB, disk)
+	}
+	if data, err := e.c.ReadFile(ctx, sb.ID, "/sandbox/home/kept.txt"); err != nil || string(data) != "before" {
+		t.Fatalf("a file after the resize: %q, %v", data, err)
+	}
+	if r := e.run(t, sb.ID, api.RunRequest{Argv: []string{"true"}}); r.ExitCode != 0 {
+		t.Fatalf("a run after the resize: %+v", r)
+	}
+	_, err = e.c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{DiskMB: disk - 1})
+	wantCode(t, err, api.CodeInvalidRequest)
+}
+
 func testSuspend(t *testing.T, e *env) {
 	sb := e.newSandbox(t, api.CreateSandboxRequest{})
 	ctx := ctxT(t)

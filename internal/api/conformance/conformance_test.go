@@ -32,7 +32,7 @@ func serveFake(t *testing.T, pol spec.Policy, withAudit bool, caps ...string) *a
 // The suite against the fake, with the default policy and every capability the
 // fake can pretend to have.
 func TestFakeDefaultPolicy(t *testing.T) {
-	caps := []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes}
+	caps := []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes, api.CapResize}
 	Run(t, serveFake(t, spec.DefaultPolicyFor(capSet(caps...)), true, caps...))
 }
 

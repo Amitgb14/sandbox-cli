@@ -270,6 +270,17 @@ in `_old/` as reference, to be ported where this design still wants it.
   per login, so a create without the login is refused by the registry even
   for an image the node already has. There is no node-wide login. An
   anonymous pull a registry refuses says a login is needed.
+- **A running sandbox can be resized.** `POST /v1/sandboxes/{ref}/resize`
+  (capability `resize`, Firecracker) with `cpus`, `memory_mb` or `disk_mb`
+  restarts the sandbox at its new size in a second or two: it keeps its id,
+  network, files and volumes; its processes end, so it is refused while one
+  runs. A disk only grows. If the new size does not start the sandbox comes
+  back at its old one. The guest grows its own filesystem into a larger disk;
+  a sandbox started before this release keeps its disk space. Through a
+  gateway the growth counts against the
+  tenant's quota and must fit on the sandbox's node. `sandbox-cli resize
+  SANDBOX --cpus --memory --disk`; Studio's Resize resizes in place where the
+  endpoint can, and still copies the sandbox where it cannot (macOS).
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
   list the images on every node with where each is, download one to every

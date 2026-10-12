@@ -103,6 +103,7 @@ Global flags:
 | [`sandbox-cli registry login`](#sandbox-cli-registry-login) | Set the login for a registry, its token read from stdin |
 | [`sandbox-cli registry logout`](#sandbox-cli-registry-logout) | Remove the login for a registry |
 | [`sandbox-cli registry ls`](#sandbox-cli-registry-ls) | List your organization's registry logins |
+| [`sandbox-cli resize`](#sandbox-cli-resize) | Give a running sandbox more or fewer CPUs and memory, or a larger disk |
 | [`sandbox-cli resume`](#sandbox-cli-resume) | Bring a suspended sandbox back as it was |
 | [`sandbox-cli run`](#sandbox-cli-run) | Run a command in a new sandbox |
 | [`sandbox-cli secret`](#sandbox-cli-secret) | Keep values on a gateway for jobs to name: an agent's API key, a registry token |
@@ -1398,6 +1399,37 @@ Flags:
 | Flag | Default | |
 |---|---|---|
 | `--context string` |  | which endpoint to use |
+
+## sandbox-cli resize
+
+Give a running sandbox more or fewer CPUs and memory, or a larger disk.
+
+```text
+sandbox-cli resize SANDBOX [flags]
+```
+
+```text
+The sandbox restarts at its new size, in a few seconds: it keeps its id, its
+network, its files and its volumes; its processes end, so it is refused while
+any run. A size left out is kept. A disk only grows. Through a gateway what it
+adds counts against your quota, and the sandbox's node must have the room.
+```
+
+Examples:
+
+```sh
+sandbox-cli resize my-box --cpus 4 --memory 8192
+sandbox-cli resize my-box --disk 20480
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which sandboxd to use |
+| `--cpus float64` |  | vCPUs |
+| `--disk int` |  | writable disk in MiB (only grows) |
+| `--memory int` |  | memory in MiB |
 
 ## sandbox-cli resume
 

@@ -475,6 +475,7 @@ type quotaHold struct {
 	g      *Gateway
 	tenant string
 	r      api.NodeResources
+	n      int // sandboxes: 1 for a create, 0 for a resize's growth
 	done   bool
 }
 
@@ -482,6 +483,16 @@ type quotaHold struct {
 // share. Usage is what the store records plus what is in flight, so a burst
 // of creates cannot each pass the check and together exceed it.
 func (g *Gateway) reserveQuota(ctx context.Context, tenant string, r api.NodeResources) (*quotaHold, error) {
+	return g.reserve(ctx, tenant, r, 1)
+}
+
+// reserveGrowth checks what a resize adds to a sandbox (resize.go) against
+// its tenant's quota, as a create's share is, without counting a sandbox.
+func (g *Gateway) reserveGrowth(ctx context.Context, tenant string, r api.NodeResources) (*quotaHold, error) {
+	return g.reserve(ctx, tenant, r, 0)
+}
+
+func (g *Gateway) reserve(ctx context.Context, tenant string, r api.NodeResources, n int) (*quotaHold, error) {
 	q := g.cfg.Quota
 	g.quotaMu.Lock()
 	defer g.quotaMu.Unlock()
@@ -496,7 +507,7 @@ func (g *Gateway) reserveQuota(ctx context.Context, tenant string, r api.NodeRes
 			who = "the default tenant"
 		}
 		switch {
-		case q.Sandboxes > 0 && u.Sandboxes+in.Sandboxes+1 > q.Sandboxes:
+		case n > 0 && q.Sandboxes > 0 && u.Sandboxes+in.Sandboxes+n > q.Sandboxes:
 			return nil, &errQuota{fmt.Sprintf("%s holds its quota of %d sandboxes", who, q.Sandboxes)}
 		case q.CPUs > 0 && u.CPUs+in.CPUs+r.CPUs > q.CPUs+1e-9:
 			return nil, &errQuota{fmt.Sprintf("%s would exceed its quota of %v CPUs", who, q.CPUs)}
@@ -504,11 +515,11 @@ func (g *Gateway) reserveQuota(ctx context.Context, tenant string, r api.NodeRes
 			return nil, &errQuota{fmt.Sprintf("%s would exceed its quota of %d MB of memory", who, q.MemoryMB)}
 		}
 	}
-	in.Sandboxes++
+	in.Sandboxes += n
 	in.CPUs += r.CPUs
 	in.MemoryMB += r.MemoryMB
 	g.inflight[tenant] = in
-	return &quotaHold{g: g, tenant: tenant, r: r}, nil
+	return &quotaHold{g: g, tenant: tenant, r: r, n: n}, nil
 }
 
 // drop removes the hold from the in-flight count; under quotaMu.
@@ -518,10 +529,10 @@ func (h *quotaHold) drop() {
 	}
 	h.done = true
 	in := h.g.inflight[h.tenant]
-	in.Sandboxes--
+	in.Sandboxes -= h.n
 	in.CPUs -= h.r.CPUs
 	in.MemoryMB -= h.r.MemoryMB
-	if in.Sandboxes <= 0 {
+	if in.Sandboxes <= 0 && in.CPUs < 1e-9 && in.MemoryMB <= 0 {
 		delete(h.g.inflight, h.tenant)
 	} else {
 		h.g.inflight[h.tenant] = in

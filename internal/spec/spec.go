@@ -497,6 +497,38 @@ func ResolveLifetimeUpdate(life int, pol Policy) (int, error) {
 	return life, nil
 }
 
+// ResolveResize is a running sandbox's new size: what req asks for, the
+// current size where it asks for none (0), held to the limits a create is
+// held to. A disk only grows: shrinking a filesystem the sandbox has
+// written to could lose its files.
+func ResolveResize(req api.ResizeSandboxRequest, cur api.NodeResources, pol Policy) (api.NodeResources, error) {
+	out := cur
+	if req.CPUs != 0 {
+		out.CPUs = req.CPUs
+	}
+	if req.MemoryMB != 0 {
+		out.MemoryMB = req.MemoryMB
+	}
+	if req.DiskMB != 0 {
+		out.DiskMB = req.DiskMB
+	}
+	switch {
+	case out.CPUs <= 0 || out.CPUs > pol.Limits.MaxCPUs:
+		return cur, invalid("cpus %v: must be more than 0 and at most %v", out.CPUs, pol.Limits.MaxCPUs)
+	case out.MemoryMB < minMemoryMB || out.MemoryMB > pol.Limits.MaxMemoryMB:
+		return cur, invalid("memory_mb %d: must be between %d and %d", out.MemoryMB, minMemoryMB, pol.Limits.MaxMemoryMB)
+	case out.DiskMB > pol.Limits.MaxDiskMB:
+		return cur, invalid("disk_mb %d: at most %d", out.DiskMB, pol.Limits.MaxDiskMB)
+	case out.DiskMB < cur.DiskMB:
+		return cur, invalid("disk_mb %d: a disk can only grow (it has %d)", out.DiskMB, cur.DiskMB)
+	}
+	return out, nil
+}
+
+// minMemoryMB is the least memory a resize may leave a sandbox: below it
+// the guest does not boot again, and the sandbox would be lost.
+const minMemoryMB = 128
+
 // ResolveNetworkUpdate validates a policy change on a running sandbox. It is the
 // same rule as create: an update is a request like any other, and the ceiling
 // does not move because the sandbox already exists.
