@@ -46,7 +46,6 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/macos"
-	"github.com/Amitgb14/sandbox-cli/internal/image"
 	"github.com/Amitgb14/sandbox-cli/internal/metrics"
 	"github.com/Amitgb14/sandbox-cli/internal/server"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
@@ -87,7 +86,6 @@ func run(args []string) error {
 	var allowedHosts, insecureRegistries listFlag
 	fl.Var(&allowedHosts, "allowed-host", "a Host name to answer besides loopback (repeatable)")
 	fl.Var(&insecureRegistries, "insecure-registry", "a registry (host:port) to pull from over plain HTTP — a local one; repeatable")
-	registryAuth := fl.String("registry-auth-file", "", "firecracker: registry logins for private images (mode 0600), each for the repositories it names; every user of this node may start from what they pull (docs/sandboxd.md)")
 	auditLog := fl.String("audit-log", "", `every sandbox's events, as JSONL (default: <state-dir>/audit/events.jsonl; "none" keeps no log)`)
 	var node nodeOptions
 	var nodeLabels listFlag
@@ -135,19 +133,10 @@ func run(args []string) error {
 		pol.DefaultImage = *defaultImage
 	}
 
-	var logins []image.Login
-	if *registryAuth != "" {
-		if logins, err = image.LoadLogins(*registryAuth); err != nil {
-			return fmt.Errorf("--registry-auth-file: %w", err)
-		}
-		for _, l := range logins {
-			logf("pulls from %s/%s use the login of %s", l.Registry, strings.TrimSuffix(l.Prefix, "/"), l.Username)
-		}
-	}
 	be, err := newBackend(*backendName, backendOptions{
 		stateDir: *stateDir, kernel: *kernel, firecracker: *firecracker, jailer: *jailer,
 		agent: *agent, network: *network, proxyPort: *proxyPort, dnsPort: *dnsPort, keep: *keep,
-		logf: logf, insecureRegistries: insecureRegistries, logins: logins,
+		logf: logf, insecureRegistries: insecureRegistries,
 		container: *containerBin,
 	})
 	if err != nil {
@@ -282,7 +271,6 @@ type backendOptions struct {
 	keep                                         bool
 	logf                                         func(string, ...any)
 	insecureRegistries                           []string
-	logins                                       []image.Login
 	container                                    string
 }
 
@@ -300,15 +288,11 @@ func defaultStateDir() string {
 func newBackend(name string, o backendOptions) (backend.Backend, error) {
 	switch name {
 	case "fake":
-		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapVolumes), nil
+		// It pulls nothing, so it takes a registry login and has no use for it.
+		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapVolumes, api.CapRegistryLogin), nil
 	case "firecracker":
 		return newFirecracker(o)
 	case "macos":
-		if len(o.logins) > 0 {
-			// The container runtime pulls for itself; a login it would not
-			// use is refused rather than taken and ignored.
-			return nil, errors.New("--registry-auth-file: the macos backend pulls through the container runtime; log it in with `container registry login` instead")
-		}
 		agent := o.agent
 		if agent == "" {
 			self, _ := os.Executable()

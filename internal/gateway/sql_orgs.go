@@ -93,6 +93,7 @@ const orgUsed = `(EXISTS (SELECT 1 FROM users x WHERE x.org_id = o.id)
 	OR EXISTS (SELECT 1 FROM volumes x WHERE x.org_id = o.id)
 	OR EXISTS (SELECT 1 FROM snapshots x WHERE x.org_id = o.id)
 	OR EXISTS (SELECT 1 FROM secrets x WHERE x.org_id = o.id)
+	OR EXISTS (SELECT 1 FROM registry_logins x WHERE x.org_id = o.id)
 	OR EXISTS (SELECT 1 FROM jobs x WHERE x.org_id = o.id)
 	OR EXISTS (SELECT 1 FROM services x WHERE x.org_id = o.id)
 	OR EXISTS (SELECT 1 FROM ssh_tokens x WHERE x.org_id = o.id))`

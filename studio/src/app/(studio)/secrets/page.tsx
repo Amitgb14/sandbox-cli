@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { LockKeyhole } from "lucide-react";
+import { KeyRound, LockKeyhole } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/empty-state";
 import { PageHeader } from "@/components/common/page-header";
@@ -9,7 +9,7 @@ import { Gate } from "@/components/shell/gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useRemoveSecret, useSecrets, useSetSecret } from "@/lib/api/gateway";
+import { useRegistryLogins, useRemoveRegistryLogin, useRemoveSecret, useSecrets, useSetRegistryLogin, useSetSecret } from "@/lib/api/gateway";
 import { useCan } from "@/lib/caller";
 import { formatRelative } from "@/lib/format";
 
@@ -98,10 +98,106 @@ function Secrets() {
   );
 }
 
+/**
+ * The organization's registry logins: a user name and a token per registry,
+ * with which the gateway pulls the organization's private images, and no one
+ * else's. The token is write-only, as a secret's value is.
+ */
+function RegistryLogins() {
+  const can = useCan();
+  const writable = can("secrets:write");
+  const { data, isLoading, error } = useRegistryLogins();
+  const set = useSetRegistryLogin();
+  const remove = useRemoveRegistryLogin();
+  const [registry, setRegistry] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div>
+        <h2 className="text-sm font-semibold">Registry logins</h2>
+        <p className="text-sm text-muted-foreground">
+          For private images: every sandbox, job and service of this organization whose image is on the registry is pulled with its login, and no other
+          organization&apos;s is. A token is write-only; on ghcr.io it needs read:packages.
+        </p>
+      </div>
+      {writable && (
+        <form
+          className="flex flex-wrap items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            set.mutate(
+              { registry: registry.trim(), username: username.trim(), password },
+              {
+                onSuccess: () => {
+                  toast.success(`Images on ${registry.trim()} are pulled as ${username.trim()}`);
+                  setRegistry("");
+                  setUsername("");
+                  setPassword("");
+                },
+                onError: (err) => toast.error(err.message),
+              },
+            );
+          }}
+        >
+          <Input aria-label="Registry" placeholder="registry (ghcr.io)" value={registry} onChange={(e) => setRegistry(e.target.value)} className="w-48 font-mono" required />
+          <Input aria-label="Registry username" placeholder="username" autoComplete="off" value={username} onChange={(e) => setUsername(e.target.value)} className="w-44 font-mono" required />
+          <Input aria-label="Registry token" type="password" autoComplete="off" placeholder="token" value={password} onChange={(e) => setPassword(e.target.value)} className="w-64 font-mono" required />
+          <Button type="submit" disabled={set.isPending}>Save login</Button>
+        </form>
+      )}
+      {error ? (
+        <p className="text-sm text-destructive">{error.message}</p>
+      ) : !isLoading && (data ?? []).length === 0 ? (
+        <EmptyState icon={KeyRound} title="No registry logins" description={writable ? "Images are pulled anonymously: public ones only." : "This key cannot set them (secrets:write)."} />
+      ) : (
+        <Table data-testid="registry-logins">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Registry</TableHead>
+              <TableHead>Username</TableHead>
+              <TableHead>Updated</TableHead>
+              <TableHead className="text-right" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(data ?? []).map((l) => (
+              <TableRow key={l.registry}>
+                <TableCell className="font-mono text-sm">{l.registry}</TableCell>
+                <TableCell className="font-mono text-sm">{l.username}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">{formatRelative(l.updated_at)}</TableCell>
+                <TableCell className="text-right">
+                  {writable && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={remove.isPending}
+                      onClick={() =>
+                        confirm(`Remove the login for ${l.registry}? Its private images can no longer be pulled.`) &&
+                        remove.mutate(l.registry, { onError: (e) => toast.error(e.message), onSuccess: () => toast.success("Removed") })
+                      }
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </section>
+  );
+}
+
 export default function SecretsPage() {
   return (
     <Gate need="gateway">
-      <Secrets />
+      <div className="flex flex-col gap-10">
+        <Secrets />
+        <RegistryLogins />
+      </div>
     </Gate>
   );
 }

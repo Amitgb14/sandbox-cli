@@ -258,14 +258,18 @@ in `_old/` as reference, to be ported where this design still wants it.
   `owned_by`) and filters by name, email, organization, scope or policy, by
   role (super admin or admin) and by status (active, suspended, expired,
   revoked).
-- **sandboxd pulls private images with its operator's logins.**
-  `--registry-auth-file` (mode 0600) lists registry logins, each for the
-  repositories it names (`ghcr.io`, `amitgb14/`, a user and a token); a pull
-  of one of those repositories asks for its token with the login, and every
-  other pull stays anonymous. What a login pulls is cached on the node, so
-  every user of the node may start from it. An anonymous pull a registry
-  refuses now names the flag; one with a login says the login was refused.
-  The macos backend refuses the flag (`container registry login` instead).
+- **Organizations keep logins for their private images.** `PUT`, `GET` and
+  `DELETE /v1/registry-logins/{registry}` (and `sandbox-cli registry
+  login|ls|logout`, and a Registry logins section on Studio's Secrets page)
+  keep a user name and a sealed token per organization and registry. The
+  gateway adds the login to the organization's creates of an image on that
+  registry — sandboxes, job runs, service replicas — and to no one else's;
+  a client cannot send one of its own through it. On the node a create may
+  carry `registry_login` (capability `registry_login`, Firecracker only),
+  used for that pull alone: pull tokens and offline manifests are now kept
+  per login, so a create without the login is refused by the registry even
+  for an image the node already has. There is no node-wide login. An
+  anonymous pull a registry refuses says a login is needed.
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
   list the images on every node with where each is, download one to every

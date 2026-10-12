@@ -374,6 +374,13 @@ export interface SecretInfo {
   updated_at: string;
 }
 
+/** A registry login without its token, which is never returned. */
+export interface RegistryLoginInfo {
+  registry: string;
+  username: string;
+  updated_at: string;
+}
+
 export type JobState = "running" | "succeeded" | "failed" | "cancelled";
 export type RunState = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "cancelled";
 

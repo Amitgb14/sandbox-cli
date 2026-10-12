@@ -27,6 +27,9 @@ func TestRowLevelSecurityHoldsATenantToItsRows(t *testing.T) {
 	if err := st.PutSecret("globex", "TOKEN", []byte("sealed")); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.Store.PutRegistryLogin(ctx, "globex", "ghcr.io", "bob", []byte("sealed")); err != nil {
+		t.Fatal(err)
+	}
 
 	acme := st.Store.ForTenant("acme")
 	// AllTenant leaves out the tenant filter, as a mistaken query would.
@@ -47,6 +50,12 @@ func TestRowLevelSecurityHoldsATenantToItsRows(t *testing.T) {
 	}
 	if _, ok, err := acme.SealedSecret(ctx, "globex", "TOKEN"); err != nil || ok {
 		t.Errorf("acme read globex's secret by naming its tenant: %v %v", ok, err)
+	}
+	if _, _, ok, err := acme.RegistryLogin(ctx, "globex", "ghcr.io"); err != nil || ok {
+		t.Errorf("acme read globex's registry login by naming its tenant: %v %v", ok, err)
+	}
+	if l, err := acme.RegistryLoginsOf(ctx, "globex"); err != nil || len(l) != 0 {
+		t.Errorf("acme listed globex's registry logins: %+v %v", l, err)
 	}
 	if u, err := acme.UsageOf(ctx, "globex"); err != nil || u.Sandboxes != 0 {
 		t.Errorf("acme counted globex's usage: %+v %v", u, err)

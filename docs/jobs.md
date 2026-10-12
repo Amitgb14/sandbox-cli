@@ -128,6 +128,23 @@ service names them the same way (`secrets: [NAME, VAR=NAME]`, [services.md](serv
 What a secret in a sandbox's environment is protected from, and what it is
 not, is in [security/secrets.md](security/secrets.md).
 
+### Private images
+
+A job, a service or a sandbox whose image is private is pulled with the
+organization's login for its registry, kept beside its secrets:
+
+```sh
+sandbox-cli registry login ghcr.io -u alice < token.txt   # read:packages on ghcr.io
+sandbox-cli registry ls
+sandbox-cli registry logout ghcr.io
+```
+
+The token is sealed and never shown again, and is not a variable in any
+sandbox: it reaches only the node's pull. Another organization's create of
+the same image gets no login and is refused by the registry, even once the
+image is on the node. Studio sets them on its Secrets page; the routes are in
+[api/v1.md](api/v1.md#registry-logins).
+
 ## Notify webhooks
 
 A job's `notify` URL is POSTed `{"event": "run.finished" | "job.finished",

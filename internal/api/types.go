@@ -105,6 +105,11 @@ const (
 	// GET, POST and DELETE /v1/images — rather than each being pulled only
 	// when a sandbox first asks for it.
 	CapImages = "images"
+	// CapRegistryLogin: a create may carry a registry login
+	// (CreateSandboxRequest.RegistryLogin), which the pull of its image uses.
+	// A backend that pulls through something else (the macOS container
+	// runtime) cannot, and a create carrying one is refused there.
+	CapRegistryLogin = "registry_login"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -177,6 +182,19 @@ type CreateSandboxRequest struct {
 	// Volumes mounts named volumes (capability volumes). A volume is attached
 	// to one live sandbox at a time.
 	Volumes []VolumeMount `json:"volumes,omitempty"`
+	// RegistryLogin is a login for the registry the image is pulled from
+	// (capability registry_login), for a private image. It is used for that
+	// registry only, and only for this create's pull; it is never returned,
+	// stored or recorded. Through a gateway it is the gateway's to set, from
+	// the organization's registry logins, and a client's is refused.
+	RegistryLogin *RegistryLogin `json:"registry_login,omitempty"`
+}
+
+// RegistryLogin is a user name and a token for one registry.
+type RegistryLogin struct {
+	Registry string `json:"registry"` // host[:port]: ghcr.io
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // VolumeMount attaches a volume at a path inside the sandbox.
