@@ -284,6 +284,7 @@ func (b *Backend) Capabilities() map[string]bool {
 		api.CapMemorySnapshot:      true,
 		api.CapTunnel:              true,
 		api.CapVolumes:             true,
+		api.CapRegistryLogin:       true,
 		api.CapResize:              true,
 	}
 }
@@ -309,6 +310,9 @@ func (b *Backend) get(id string) (*vm, error) {
 // Create builds (or reuses) the image's root disk, makes the scratch disk,
 // starts the VMM and waits for the guest agent.
 func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
+	if l, ok := backend.RegistryLoginFrom(ctx); ok {
+		ctx = image.WithLogin(ctx, image.Login{Registry: l.Registry, Username: l.Username, Password: l.Password})
+	}
 	if s.FromSnapshot != "" {
 		return b.createFromSnapshot(ctx, s)
 	}

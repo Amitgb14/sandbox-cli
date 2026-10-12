@@ -141,9 +141,8 @@ type Puller struct {
 	OS, Arch  string // platform; default linux/runtime.GOARCH
 	MaxBlob   int64  // per blob; default 8 GiB
 	Logf      func(format string, a ...any)
-
-	mu     sync.Mutex
-	tokens map[string]string // repo -> bearer token
+	mu        sync.Mutex
+	tokens    map[string]string // tokenKey -> bearer token
 }
 
 func (p *Puller) client() *http.Client {
@@ -268,7 +267,7 @@ func (p *Puller) fetchManifest(ctx context.Context, r Ref, reference string) (bo
 		// manifest a mutable tag points at, and the log says so.
 		var ne net.Error
 		if errors.As(err, &ne) || isDialError(err) {
-			if b, mt, ok := p.cachedManifest(r, reference); ok {
+			if b, mt, ok := p.cachedManifest(ctx, r, reference); ok {
 				if p.Logf != nil {
 					p.Logf("registry %s unreachable; using the manifest cached for %s:%s", r.Registry, r.Repo, reference)
 				}
@@ -289,17 +288,23 @@ func (p *Puller) fetchManifest(ctx context.Context, r Ref, reference string) (bo
 	sum := sha256.Sum256(body)
 	mt, _, _ := strings.Cut(resp.Header.Get("Content-Type"), ";")
 	mt = strings.TrimSpace(mt)
-	p.cacheManifest(r, reference, body, mt)
+	p.cacheManifest(ctx, r, reference, body, mt)
 	return body, mt, "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func (p *Puller) manifestPath(r Ref, reference string) string {
-	k := sha256.Sum256([]byte(r.Registry + "/" + r.Repo + "@" + reference))
+// manifestPath is where the manifest fetched for reference is kept, per
+// login: one fetched with a login is no answer for a pull without it.
+func (p *Puller) manifestPath(ctx context.Context, r Ref, reference string) string {
+	name := r.Registry + "/" + r.Repo + "@" + reference
+	if l, ok := loginFor(ctx, r); ok {
+		name += "\x00" + l.key()
+	}
+	k := sha256.Sum256([]byte(name))
 	return filepath.Join(p.Cache, "manifests", hex.EncodeToString(k[:]))
 }
 
-func (p *Puller) cacheManifest(r Ref, reference string, body []byte, mt string) {
-	path := p.manifestPath(r, reference)
+func (p *Puller) cacheManifest(ctx context.Context, r Ref, reference string, body []byte, mt string) {
+	path := p.manifestPath(ctx, r, reference)
 	if os.MkdirAll(filepath.Dir(path), 0o700) != nil {
 		return
 	}
@@ -313,8 +318,8 @@ func (p *Puller) cacheManifest(r Ref, reference string, body []byte, mt string) 
 	}
 }
 
-func (p *Puller) cachedManifest(r Ref, reference string) ([]byte, string, bool) {
-	b, err := os.ReadFile(p.manifestPath(r, reference))
+func (p *Puller) cachedManifest(ctx context.Context, r Ref, reference string) ([]byte, string, bool) {
+	b, err := os.ReadFile(p.manifestPath(ctx, r, reference))
 	if err != nil {
 		return nil, "", false
 	}
@@ -396,7 +401,7 @@ func (p *Puller) get(ctx context.Context, r Ref, u, accept string) (*http.Respon
 			req.Header.Set("Accept", accept)
 		}
 		p.mu.Lock()
-		tok := p.tokens[r.Registry+"/"+r.Repo]
+		tok := p.tokens[tokenKey(ctx, r)]
 		p.mu.Unlock()
 		if tok != "" {
 			req.Header.Set("Authorization", "Bearer "+tok)
@@ -422,10 +427,20 @@ func (p *Puller) get(ctx context.Context, r Ref, u, accept string) (*http.Respon
 
 var challengeRE = regexp.MustCompile(`(\w+)="([^"]*)"`)
 
-// authenticate fetches an anonymous pull token for the repository.
+// tokenKey is what a pull token is kept under: the repository and the
+// login it was fetched with, so a token one login earned is never sent for a
+// pull without it.
+func tokenKey(ctx context.Context, r Ref) string {
+	l, _ := loginFor(ctx, r)
+	return r.Registry + "/" + r.Repo + "\x00" + l.key()
+}
+
+// authenticate fetches a pull token for the repository: with the login ctx
+// carries for its registry, else anonymously.
 func (p *Puller) authenticate(ctx context.Context, r Ref, challenge string) error {
+	login, hasLogin := loginFor(ctx, r)
 	if !strings.HasPrefix(strings.ToLower(challenge), "bearer ") {
-		return fmt.Errorf("registry %s wants %q, which anonymous pulls cannot answer", r.Registry, challenge)
+		return fmt.Errorf("registry %s wants %q, which sandboxd's pulls cannot answer (a bearer token is all it asks for)", r.Registry, strings.SplitN(challenge, " ", 2)[0])
 	}
 	params := map[string]string{}
 	for _, m := range challengeRE.FindAllStringSubmatch(challenge, -1) {
@@ -445,6 +460,11 @@ func (p *Puller) authenticate(ctx context.Context, r Ref, challenge string) erro
 	if err != nil {
 		return err
 	}
+	if hasLogin {
+		// Only to a realm the registry named, over https (checked above);
+		// Go's client drops it on a redirect to another host.
+		req.SetBasicAuth(login.Username, login.Password)
+	}
 	resp, err := p.client().Do(req)
 	if err != nil {
 		return err
@@ -453,12 +473,15 @@ func (p *Puller) authenticate(ctx context.Context, r Ref, challenge string) erro
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		// Pulls are anonymous, so a registry that will not hand out a pull
+		if hasLogin {
+			return fmt.Errorf("%s/%s: the registry refused the login of %s for %s (token request: %s): no such image, or the login's token cannot read it (on ghcr.io: read:packages, and access to the package); check the name and the token", r.Registry, r.Repo, login.Username, login.Registry, resp.Status)
+		}
+		// Without a login a pull is anonymous, so a registry that will not hand out a pull
 		// token is saying the repository is not public. ghcr.io answers 403
 		// both for a private one and for a name that does not exist, a typo
 		// included, before any tag is looked at; "token request: 403" alone
 		// sent people looking at credentials sandboxd never uses.
-		return fmt.Errorf("%s/%s: the registry refused an anonymous pull (token request: %s): no such image, or it is private; check the name, or make it public (sandboxd pulls without credentials)", r.Registry, r.Repo, resp.Status)
+		return fmt.Errorf("%s/%s: the registry refused an anonymous pull (token request: %s): no such image, or it is private; check the name, or make it public, or add a registry login for %s (through a gateway: your organization's registry logins)", r.Registry, r.Repo, resp.Status, r.Registry)
 	default:
 		return fmt.Errorf("token request: %s", resp.Status)
 	}
@@ -480,7 +503,7 @@ func (p *Puller) authenticate(ctx context.Context, r Ref, challenge string) erro
 	if p.tokens == nil {
 		p.tokens = map[string]string{}
 	}
-	p.tokens[r.Registry+"/"+r.Repo] = t
+	p.tokens[tokenKey(ctx, r)] = t
 	p.mu.Unlock()
 	return nil
 }

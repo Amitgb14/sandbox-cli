@@ -38,6 +38,8 @@ type Backend struct {
 	images    map[string]bool // every image a sandbox was created from, or installed
 	// installedAt is when an image was installed; created-from ones have none.
 	installedAt map[string]time.Time
+	// logins is the registry login each create carried, for tests.
+	logins map[string]backend.RegistryLogin
 }
 
 // fakeVolume holds a volume's files by path relative to its mount point. A
@@ -73,7 +75,8 @@ type sandbox struct {
 // New returns an empty fake with the capabilities given (api.Cap* names).
 func New(caps ...string) *Backend {
 	b := &Backend{sandboxes: map[string]*sandbox{}, caps: map[string]bool{}, snapshots: map[string]fakeSnapshot{},
-		volumes: map[string]*fakeVolume{}, images: map[string]bool{}, installedAt: map[string]time.Time{}}
+		volumes: map[string]*fakeVolume{}, images: map[string]bool{}, installedAt: map[string]time.Time{},
+		logins: map[string]backend.RegistryLogin{}}
 	for _, c := range caps {
 		b.caps[c] = true
 	}
@@ -120,6 +123,14 @@ func (b *Backend) Network(id string) (api.NetworkPolicy, bool) {
 	return s.spec.Network, true
 }
 
+// RegistryLogin is the registry login the create of id carried, for tests.
+func (b *Backend) RegistryLogin(id string) (backend.RegistryLogin, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	l, ok := b.logins[id]
+	return l, ok
+}
+
 // ResizeSandbox is backend.SandboxResizer: the new size, nothing else.
 func (b *Backend) ResizeSandbox(_ context.Context, id string, size api.NodeResources) (api.NodeResources, error) {
 	s, err := b.get(id)
@@ -156,11 +167,14 @@ func (b *Backend) get(id string) (*sandbox, error) {
 	return s, nil
 }
 
-func (b *Backend) Create(_ context.Context, spec backend.Spec) error {
+func (b *Backend) Create(ctx context.Context, spec backend.Spec) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if _, dup := b.sandboxes[spec.ID]; dup {
 		return fmt.Errorf("fake: sandbox %s already exists", spec.ID)
+	}
+	if l, ok := backend.RegistryLoginFrom(ctx); ok {
+		b.logins[spec.ID] = l
 	}
 	files := map[string]*node{"/": {dir: true}, "/tmp": {dir: true}, "/sandbox": {dir: true}, "/sandbox/home": {dir: true}}
 	if spec.FromSnapshot != "" {

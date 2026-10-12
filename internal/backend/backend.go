@@ -323,3 +323,22 @@ type Usage struct {
 type UsageReader interface {
 	Usage(ctx context.Context) (map[string]Usage, error)
 }
+
+// RegistryLogin is a login for the registry of the image a create pulls
+// (api.CapRegistryLogin). It travels in the create's context, not in Spec:
+// a Spec is rendered, kept and compared, and a password must be none of
+// those.
+type RegistryLogin struct{ Registry, Username, Password string }
+
+type registryLoginKey struct{}
+
+// WithRegistryLogin is ctx carrying l for the create made under it.
+func WithRegistryLogin(ctx context.Context, l RegistryLogin) context.Context {
+	return context.WithValue(ctx, registryLoginKey{}, l)
+}
+
+// RegistryLoginFrom is the login ctx carries, if any.
+func RegistryLoginFrom(ctx context.Context) (RegistryLogin, bool) {
+	l, ok := ctx.Value(registryLoginKey{}).(RegistryLogin)
+	return l, ok
+}

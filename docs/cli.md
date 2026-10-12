@@ -99,6 +99,10 @@ Global flags:
 | [`sandbox-cli org members add`](#sandbox-cli-org-members-add) | Add a member to the current organization, or change one's role (owners only) |
 | [`sandbox-cli org members rm`](#sandbox-cli-org-members-rm) | Remove a member from the current organization (owners only); what they had open there ends at once |
 | [`sandbox-cli org use`](#sandbox-cli-org-use) | Make NAME the organization this context acts in |
+| [`sandbox-cli registry`](#sandbox-cli-registry) | Keep your organization's logins for private image registries on a gateway |
+| [`sandbox-cli registry login`](#sandbox-cli-registry-login) | Set the login for a registry, its token read from stdin |
+| [`sandbox-cli registry logout`](#sandbox-cli-registry-logout) | Remove the login for a registry |
+| [`sandbox-cli registry ls`](#sandbox-cli-registry-ls) | List your organization's registry logins |
 | [`sandbox-cli resize`](#sandbox-cli-resize) | Give a running sandbox more or fewer CPUs and memory, or a larger disk |
 | [`sandbox-cli resume`](#sandbox-cli-resume) | Bring a suspended sandbox back as it was |
 | [`sandbox-cli run`](#sandbox-cli-run) | Run a command in a new sandbox |
@@ -1321,6 +1325,73 @@ Make NAME the organization this context acts in.
 
 ```text
 sandbox-cli org use NAME [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which endpoint to use |
+
+## sandbox-cli registry
+
+Keep your organization's logins for private image registries on a gateway.
+
+```text
+sandbox-cli registry [command]
+```
+
+```text
+A registry login is a user name and token your organization keeps on the
+gateway, sealed at rest. Every sandbox, job and service of the organization
+whose image is on that registry is pulled with it; no other organization's
+is. The token is never returned once it is set. Gateway only.
+```
+
+Subcommands: [`login`](#sandbox-cli-registry-login), [`logout`](#sandbox-cli-registry-logout), [`ls`](#sandbox-cli-registry-ls).
+
+### sandbox-cli registry login
+
+Set the login for a registry, its token read from stdin.
+
+```text
+sandbox-cli registry login REGISTRY [flags]
+```
+
+Examples:
+
+```sh
+sandbox-cli registry login ghcr.io --username alice < token.txt
+printf %s "$GHCR_TOKEN" | sandbox-cli registry login ghcr.io -u alice
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which endpoint to use |
+| `-u, --username string` |  | the registry user name |
+
+### sandbox-cli registry logout
+
+Remove the login for a registry.
+
+```text
+sandbox-cli registry logout REGISTRY [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which endpoint to use |
+
+### sandbox-cli registry ls
+
+List your organization's registry logins.
+
+```text
+sandbox-cli registry ls [flags]
 ```
 
 Flags:

@@ -262,6 +262,21 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	// A registry login goes to the backend in the context and nowhere else:
+	// not in the spec, the record or the audit event.
+	ctx := r.Context()
+	if l := req.RegistryLogin; l != nil {
+		req.RegistryLogin = nil
+		if !s.Backend.Capabilities()[api.CapRegistryLogin] {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot pull with a registry login")
+			return
+		}
+		if msg := checkRegistryLogin(*l); msg != "" {
+			writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, msg)
+			return
+		}
+		ctx = backend.WithRegistryLogin(ctx, backend.RegistryLogin{Registry: l.Registry, Username: l.Username, Password: l.Password})
+	}
 	if req.SnapshotID != "" {
 		if !canSnapshot(s.Backend.Capabilities()) {
 			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot start from a snapshot")
@@ -376,7 +391,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		s.sandboxes[id] = rec
 		s.mu.Unlock()
 		from = "pool"
-	} else if err := s.Backend.Create(r.Context(), bs); err != nil {
+	} else if err := s.Backend.Create(ctx, bs); err != nil {
 		s.mu.Lock()
 		delete(s.sandboxes, id)
 		s.mu.Unlock()
@@ -393,6 +408,20 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		Reason: from}
 	s.event(ev)
 	writeJSON(w, http.StatusCreated, out)
+}
+
+// checkRegistryLogin is what is wrong with l, or "". Its message never
+// holds the password.
+func checkRegistryLogin(l api.RegistryLogin) string {
+	switch {
+	case l.Registry == "" || len(l.Registry) > 255 || strings.ContainsAny(l.Registry, "/ \t\r\n\x00"):
+		return "registry_login.registry is a registry's host[:port], e.g. ghcr.io"
+	case l.Username == "" || len(l.Username) > 256 || strings.ContainsAny(l.Username, ":\r\n\x00"):
+		return "registry_login.username: 1 to 256 bytes, without a colon or a line break"
+	case l.Password == "" || len(l.Password) > 8<<10 || strings.ContainsAny(l.Password, "\r\n\x00"):
+		return "registry_login.password: 1 to 8192 bytes, without a line break"
+	}
+	return ""
 }
 
 // event records one audit event, if the server keeps a log.
