@@ -914,3 +914,81 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
    switch with a base URL?
 4. **Names.** Product, binaries (`sandbox-cli`, `sandboxd`) and domains, before
    M7 makes them public.
+5. **A host GPU in a sandbox.** *Drafted 2026-10-11, for the maintainer to
+   decide.* An agent that trains, fine-tunes or runs a model wants a GPU, and
+   today no backend offers one: there is no capability, no request field and
+   no limit. Recommended: a whole device passed through to one sandbox, on
+   Linux only, offered as a capability and refused everywhere it is not.
+   - **The API.** A create gains `gpus` (a count, default 0). An endpoint that
+     can deliver it reports capability `gpu` and `limits.max_gpus`; a node
+     reports its GPUs in `NodeResources`, total and free. A request names a
+     count and never a device: which device it gets is the server's choice,
+     made from the operator's list, the way a sandbox reference is matched
+     against our own listing (rule 9).
+   - **Fail closed, under every profile.** `gpus > 0` on an endpoint without
+     `gpu`, or above its limit, or with no device free, is refused with
+     `unsupported`, `refused` or `unavailable` respectively. It is not a
+     degradation the dev profile may warn through: a workload that asked for
+     a GPU does not run without one.
+   - **Which devices.** The operator policy lists them by PCI address
+     (`gpu.devices`). It is a privileged key, refused from a project config
+     (`policy/trust.go`, pinned in `TestProjectConfigRefusesPrivilegedKeys`).
+     At start, sandboxd refuses a listed device whose IOMMU group holds
+     anything else not also listed and not bound to `vfio-pci`: passing part
+     of a group through hands the guest DMA to its neighbours. sandboxd does
+     not bind drivers itself; the operator does that once, and
+     `docs/self-hosting.md` says how.
+   - **Firecracker.** Passthrough is VFIO, which Firecracker has not offered
+     for most of its life; whether a current release does well enough, or
+     whether GPU nodes need a second VMM (Cloud Hypervisor has VFIO), is the
+     first thing to measure, as M3 measured boot. A second VMM would be a
+     second Linux backend with its own renderer and golden test, not a mode of
+     the first. Either way `BuildConfig` renders the device, and its golden
+     file gains a case with one.
+   - **What a GPU sandbox gives up.** Passthrough pins all guest memory, so
+     there is no overcommit, and the device's state cannot be captured: such a
+     sandbox has no `suspend` and no `memory_snapshot`, even on a node that
+     offers them to others. A disk snapshot still works. Capabilities become
+     per sandbox here as well as per endpoint, and a request combining a GPU
+     with suspend is refused, not quietly downgraded.
+   - **Between sandboxes.** A device keeps state across users: its memory,
+     and firmware it may have loaded. Before a device goes to the next
+     sandbox it is reset (function-level reset, or the bus reset its group
+     allows), and a device whose reset fails is withdrawn from the pool and
+     reported, never handed on. In the cloud a GPU node is single-tenant per
+     device until scrubbing device memory is shown, not assumed; that is the
+     control plane's to enforce and a line in its threat model.
+   - **The guest.** The driver runs in the guest, built for our guest kernel,
+     in a GPU variant of the base image built in CI. The host loads no vendor
+     driver for a device it passes through. guestd gains nothing: the device
+     is an ordinary PCI device to the guest.
+   - **Local Mac: no.** The macOS virtualization layer offers a Linux guest a
+     display device, not compute, and the `container` runtime exposes nothing
+     more. The macOS backend never reports `gpu`.
+   - **How the gateway learns which nodes have GPUs.** The node does not push;
+     the gateway asks, as it does for every other resource. `GET /v1/node`
+     reports the `gpu` capability and the node's GPUs, total and free, in
+     `NodeResources`. They are counted from the operator's list (the devices
+     that passed the IOMMU check, less those held by sandboxes), never by
+     probing for hardware, so a device the host uses for something else is
+     never offered. A gateway replica that just started knows where the GPUs
+     are after its first poll, and a node never dials the gateway.
+   - **How a GPU sandbox finds its node.** `Want` gains a GPU count; `canRun`
+     requires `gpu`, `hasRoom` counts free devices, and `Reserved` holds GPUs
+     placed since the last poll, so a burst of creates between two polls does
+     not all pick the same last device. The gateway's view is still up to a
+     poll old, and two gateways can choose the same device: the node is the
+     authority, refuses the second with `unavailable`, and the gateway tries
+     the next node (`Exclude`), as it already does for CPU and memory.
+     Quotas count GPUs per user and organisation alongside vCPUs and memory.
+     A request without a GPU prefers a node without one, so CPU work does not
+     fill the machines GPU work needs.
+   - **Not in the first cut:** sharing one device between sandboxes (MIG,
+     vGPU, time slicing), choosing a model by name, and the macOS backend.
+     Each would be a later addition to v1, decided on its own.
+   - **Proved by:** a conformance test that `gpus > 0` is refused without the
+     capability (it runs against every endpoint, the fake included); the
+     renderer's golden case; the IOMMU-group refusal as a unit test over a
+     fake sysfs; and a row in `docs/testing/end-to-end.md` for the maintainer's
+     GPU host: a sandbox sees the device, runs a kernel on it, and a second
+     sandbox after it finds its memory cleared.
