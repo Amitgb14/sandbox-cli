@@ -82,7 +82,7 @@ func (s *Server) suspend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := sus.Suspend(r.Context(), rec.snapshot().ID); err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	rec.mu.Lock()
@@ -110,7 +110,7 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := sus.Resume(r.Context(), rec.snapshot().ID); err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	rec.mu.Lock()
@@ -192,7 +192,7 @@ func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
 			Reason: fmt.Sprintf("%v CPUs, %d MB, disk %d MB -> %v CPUs, %d MB, disk %d MB", was.CPUs, was.MemoryMB, was.DiskMB, now.CPUs, now.MemoryMB, now.DiskMB)})
 	}
 	if err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -219,7 +219,7 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		// The caller gets a generic message for most backend errors; the
 		// operator gets the cause, or a failed snapshot has none anywhere.
 		s.logf("sandbox %s: snapshot: %v", rec.snapshot().ID, err)
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, out)
@@ -395,7 +395,7 @@ func (s *Server) tunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	guest, err := d.DialGuest(r.Context(), rec.snapshot().ID, port)
 	if err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	s.event(api.Event{Type: api.EventTunnelOpened, Sandbox: rec.snapshot().ID, Port: port})
