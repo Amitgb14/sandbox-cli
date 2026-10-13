@@ -149,11 +149,13 @@ func (b *Backend) ownerFor(id string) int {
 }
 
 // cleanupProcess removes what a previous run of the jailer created in the
-// chroot — device nodes and sockets — so it can start the same jail again on
-// resume. The sandbox's files (disks, snapshots) stay.
+// chroot — device nodes, sockets and its pid file — so it can start the same
+// jail again on resume or after a resize. The jailer refuses to start while
+// its pid file (named for the exec file, firecracker as in root) exists.
+// The sandbox's files (disks, snapshots) stay.
 func (j *Jailer) cleanupProcess(id string) {
 	root := j.root(id)
-	for _, p := range []string{"dev", "run", "api.sock", "v.sock"} {
+	for _, p := range []string{"dev", "run", "api.sock", "v.sock", "firecracker.pid"} {
 		_ = os.RemoveAll(filepath.Join(root, p))
 	}
 }
