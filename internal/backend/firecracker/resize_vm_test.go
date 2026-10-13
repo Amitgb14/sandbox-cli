@@ -92,4 +92,33 @@ func TestVMResize(t *testing.T) {
 	if blocks < 900<<10 {
 		t.Errorf("the disk is %d kB; want about 1 GiB", blocks)
 	}
+	if !got.Restarted {
+		t.Error("new CPUs and memory did not restart the sandbox")
+	}
+
+	// The disk alone grows live: a process running before is running after,
+	// and the guest's filesystem fills the larger device.
+	p, err := c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"sleep", "60"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 = time.Now()
+	got, err = c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{DiskMB: 2048})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("grew the disk live in %v", time.Since(t0))
+	if got.Restarted || got.DiskMB != 2048 {
+		t.Fatalf("a live disk grow: %d MB, restarted %v", got.DiskMB, got.Restarted)
+	}
+	if pr, err := c.Process(ctx, sb.ID, p.PID); err != nil || pr.State != api.ProcessRunning {
+		t.Fatalf("the process after a live grow: %+v, %v; want running", pr, err)
+	}
+	blocks, _ = strconv.Atoi(run("df -k \"$HOME\" | awk 'NR==2 {print $2}'"))
+	if blocks < 1900<<10 {
+		t.Errorf("after a live grow the disk is %d kB; want about 2 GiB", blocks)
+	}
+	if v := run("cat \"$HOME/kept\""); v != "kept" {
+		t.Errorf("the file written before, after a live grow: %q", v)
+	}
 }

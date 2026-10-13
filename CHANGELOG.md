@@ -280,7 +280,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   gateway the growth counts against the
   tenant's quota and must fit on the sandbox's node. `sandbox-cli resize
   SANDBOX --cpus --memory --disk` shows each size before and after, says when
-  nothing changed, and after a partial failure says what the sandbox is now;
+  nothing changed, and after a partial failure says what the sandbox is now.
+  A disk that only grows is grown live, in milliseconds, its processes
+  running on (the answer's `restarted` says which happened; a sandbox whose
+  guest agent predates this is restarted instead, and refused while a
+  process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and

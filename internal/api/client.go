@@ -345,10 +345,11 @@ func (c *Client) Suspend(ctx context.Context, ref string) (Sandbox, error) {
 }
 
 // Resize gives a running sandbox new CPUs, memory or disk (capability
-// resize). It restarts the sandbox, keeping its files and ending its
-// processes; a field left 0 keeps what it has.
-func (c *Client) Resize(ctx context.Context, ref string, req ResizeSandboxRequest) (Sandbox, error) {
-	var out Sandbox
+// resize); a field left 0 keeps what it has. A disk that only grows is grown
+// live where the endpoint can; anything else restarts the sandbox, keeping
+// its files and ending its processes. The result says which.
+func (c *Client) Resize(ctx context.Context, ref string, req ResizeSandboxRequest) (ResizeResult, error) {
+	var out ResizeResult
 	return out, c.json(ctx, http.MethodPost, sbx(ref)+"/resize", req, &out)
 }
 

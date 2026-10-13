@@ -135,14 +135,18 @@ type Suspender interface {
 	Resume(ctx context.Context, id string) error
 }
 
-// SandboxResizer can give a running sandbox new resources (api.CapResize). It
-// restarts the sandbox to do it, keeping its disks — the files it wrote,
-// its volumes — and ending its processes; the caller makes sure none are
-// running. A disk is only grown. If the new size cannot be started the
-// sandbox is brought back at its old CPUs and memory, and the error says so.
-// The size it returns is the one the sandbox has after, error or not.
+// SandboxResizer can give a running sandbox new resources (api.CapResize).
+// A disk that only grows may be grown live, the sandbox and its processes
+// running on; anything else restarts the sandbox, keeping its disks — the
+// files it wrote, its volumes — and ending its processes. A restart is made
+// only when mayRestart says the caller found no process running; otherwise
+// a resize that needs one is refused with ErrBusy and nothing changes. A
+// disk is only grown. If the new size cannot be started the sandbox is
+// brought back at its old CPUs and memory, and the error says so. The size
+// it returns is the one the sandbox has after, error or not, and restarted
+// whether it was restarted.
 type SandboxResizer interface {
-	ResizeSandbox(ctx context.Context, id string, size api.NodeResources) (api.NodeResources, error)
+	ResizeSandbox(ctx context.Context, id string, size api.NodeResources, mayRestart bool) (now api.NodeResources, restarted bool, err error)
 }
 
 // Snapshotter can capture a running sandbox without stopping it, and start

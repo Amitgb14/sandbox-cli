@@ -323,7 +323,7 @@ export function useResize() {
 export function useResizeInPlace() {
   return useInvalidating(
     ({ id, ...req }: { id: string; cpus?: number; memory_mb?: number; disk_mb?: number }) =>
-      apiFetch<Sandbox>(`${sbx(id)}/resize`, { method: "POST", json: req }),
+      apiFetch<Sandbox & { restarted: boolean }>(`${sbx(id)}/resize`, { method: "POST", json: req }),
     ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes]],
   );
 }

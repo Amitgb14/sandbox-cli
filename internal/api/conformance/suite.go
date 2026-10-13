@@ -938,7 +938,8 @@ func testAttach(t *testing.T, e *env) {
 // sandbox does no work, and a sandbox with a running process is not suspended
 // out from under it.
 // testResize: a running sandbox takes a new size, keeping its files; a
-// smaller disk and a resize while a process runs are refused.
+// smaller disk and new CPUs while a process runs are refused, and a disk
+// grown while one runs is grown live or refused, never restarted.
 func testResize(t *testing.T, e *env) {
 	sb := e.newSandbox(t, api.CreateSandboxRequest{CPUs: 1})
 	ctx := ctxT(t)
@@ -960,12 +961,35 @@ func testResize(t *testing.T, e *env) {
 	}
 	_, err = e.c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{CPUs: cpus})
 	wantCode(t, err, api.CodeConflict)
+
+	// A disk that only grows, a process running: grown live, the process
+	// running on, or refused — never a restart that ends the process.
+	base := sb.DiskMB
+	if live := sb.DiskMB + 256; live <= e.caps.Limits.MaxDiskMB {
+		got, err := e.c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{DiskMB: live})
+		switch {
+		case err == nil:
+			if got.Restarted || got.DiskMB != live {
+				t.Fatalf("a live disk grow: %d MB, restarted %v; want %d, not restarted", got.DiskMB, got.Restarted, live)
+			}
+			if now, err := e.c.Sandbox(ctx, sb.ID); err != nil || now.DiskMB != live {
+				t.Fatalf("the sandbox after a live grow: %d MB, %v", now.DiskMB, err)
+			}
+			if pr, err := e.c.Process(ctx, sb.ID, p.PID); err != nil || pr.State != api.ProcessRunning {
+				t.Fatalf("the process after a live disk grow: %+v, %v; want running", pr, err)
+			}
+			base = live
+		case api.IsCode(err, api.CodeConflict):
+		default:
+			t.Fatalf("a disk grow with a process running: %v; want ok or conflict", err)
+		}
+	}
 	_ = e.c.Signal(ctx, sb.ID, p.PID, "KILL")
 	e.follow(t, sb.ID, p.PID)
 
-	disk := sb.DiskMB + 512
+	disk := base + 512
 	if disk > e.caps.Limits.MaxDiskMB {
-		disk = sb.DiskMB
+		disk = base
 	}
 	got, err := e.c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{CPUs: cpus, DiskMB: disk})
 	if err != nil {

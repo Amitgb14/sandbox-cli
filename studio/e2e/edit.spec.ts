@@ -59,6 +59,16 @@ test("a running sandbox is renamed, relabelled, retimed and given a new network 
   got = await (await api(request, `/v1/sandboxes/${sb.id}`)).json();
   expect([got.cpus, got.memory_mb, got.disk_mb]).toEqual([2, 2048, before + 1024]);
 
+  // A larger disk alone is grown live: no restart, so the button says so.
+  await page.getByRole("button", { name: "Resize" }).click();
+  const grow = page.getByRole("dialog", { name: /^Resize/ });
+  await grow.getByLabel("Disk (MiB)").fill(String(got.disk_mb + 1024));
+  await grow.getByRole("button", { name: "Grow disk" }).click();
+  await expect(grow).toHaveCount(0);
+  await expect(page.getByText(/grown live/)).toBeVisible();
+  const grown = await (await api(request, `/v1/sandboxes/${sb.id}`)).json();
+  expect([grown.cpus, grown.memory_mb, grown.disk_mb]).toEqual([2, 2048, got.disk_mb + 1024]);
+
   await api(request, `/v1/sandboxes/${sb.id}`, "DELETE");
   await api(request, "/egress/groups/edit-go", "DELETE");
 });

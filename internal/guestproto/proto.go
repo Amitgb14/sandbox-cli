@@ -36,7 +36,7 @@ import (
 
 // Version is sent in a ping reply, so the host can tell an out-of-date guest
 // agent from a broken one.
-const Version = "2"
+const Version = "3"
 
 // Ops.
 const (
@@ -58,7 +58,16 @@ const (
 	OpAttach = "attach"
 	// OpSessions lists the kept processes the guest holds.
 	OpSessions = "sessions"
+	// OpGrowScratch grows the guest's scratch filesystem, mounted, to fill
+	// its device, once the device is at least Request.Size bytes: the host
+	// lengthens the file under a running VM, and the guest's kernel learns
+	// the new size a moment later. Since protocol 3.
+	OpGrowScratch = "grow_scratch"
 )
+
+// GrowScratchSince is the first protocol Version that has OpGrowScratch;
+// an older guest is grown by a restart instead.
+const GrowScratchSince = 3
 
 // Request is the first line of every connection.
 type Request struct {

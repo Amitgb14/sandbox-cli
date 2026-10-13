@@ -56,10 +56,12 @@ function Chooser({ sb, onDone, onReplaced }: { sb: Sandbox; onDone: () => void; 
 }
 
 /**
- * The endpoint restarts the sandbox at its new size: the same sandbox, with
- * its files, volumes and network; its processes end, and it refuses while
- * one runs. A disk only grows. Through a gateway the growth counts against
- * the quota and must fit on the sandbox's node; the refusal says which.
+ * A disk that only grows is grown live where the endpoint can, the sandbox
+ * and its processes running on. New CPUs or memory restart it at its new
+ * size: the same sandbox, with its files, volumes and network; its processes
+ * end, and it refuses while one runs. Through a gateway the growth counts
+ * against the quota and must fit on the sandbox's node; the refusal says
+ * which.
  */
 function InPlace({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
   const { data: templates } = useTemplates();
@@ -81,6 +83,8 @@ function InPlace({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
             ? `Disk: at most ${formatMiB(limits.max_disk_mb)}`
             : "";
   const same = want.cpus === sb.cpus && want.memory_mb === sb.memory_mb && want.disk_mb === sb.disk_mb;
+  // Only the disk grows: no restart where the endpoint grows it live.
+  const diskOnly = want.disk_mb > sb.disk_mb && want.cpus === sb.cpus && want.memory_mb === sb.memory_mb;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -88,7 +92,9 @@ function InPlace({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
       { id: sb.id, ...want },
       {
         onSuccess: (r) => {
-          toast.success(`${sb.name || sb.id} is now ${r.cpus} vCPU · ${formatMiB(r.memory_mb)} · disk ${formatMiB(r.disk_mb)}`);
+          toast.success(
+            `${sb.name || sb.id} is now ${r.cpus} vCPU · ${formatMiB(r.memory_mb)} · disk ${formatMiB(r.disk_mb)}${r.restarted ? ", restarted" : ", grown live"}`,
+          );
           onDone();
         },
         onError: (err) => toast.error(err.message),
@@ -101,8 +107,9 @@ function InPlace({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
       <DialogHeader>
         <DialogTitle>Resize {sb.name || sb.id}</DialogTitle>
         <DialogDescription>
-          Now {sb.cpus} vCPU · {formatMiB(sb.memory_mb)} · disk {formatMiB(sb.disk_mb)}. It restarts at the new size in a few seconds and stays the same sandbox:
-          its files, volumes and network are kept; running processes end, so stop them first. A disk only grows.
+          Now {sb.cpus} vCPU · {formatMiB(sb.memory_mb)} · disk {formatMiB(sb.disk_mb)}. A larger disk alone is grown live: the sandbox and its processes
+          keep running. New vCPUs or memory restart it in a few seconds as the same sandbox: its files, volumes and network are kept; running processes end,
+          so stop them first. A disk only grows.
         </DialogDescription>
       </DialogHeader>
       {templates?.length ? (
@@ -146,7 +153,7 @@ function InPlace({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
           Cancel
         </Button>
         <Button type="submit" disabled={!!problem || same || resize.isPending}>
-          {resize.isPending ? "Restarting…" : "Resize and restart"}
+          {diskOnly ? (resize.isPending ? "Growing…" : "Grow disk") : resize.isPending ? "Restarting…" : "Resize and restart"}
         </Button>
       </DialogFooter>
     </form>

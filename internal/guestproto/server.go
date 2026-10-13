@@ -35,6 +35,10 @@ type Server struct {
 	// Home is the directory a process starts in when its request names none:
 	// the sandbox user's home, where a sandbox's work happens. Empty is "/".
 	Home string
+	// GrowScratch, when set, grows the scratch filesystem to fill its device
+	// once the device is at least min bytes (OpGrowScratch). Nil where there
+	// is none to grow: tests, a guest booted without an overlay.
+	GrowScratch func(min int64) error
 
 	smu      sync.Mutex
 	sessions map[string]*session // kept processes, by id (session.go)
@@ -87,6 +91,19 @@ func (s *Server) ServeConn(c io.ReadWriteCloser) {
 		s.attach(c, br, req)
 	case OpSessions:
 		s.listSessions(c)
+	case OpGrowScratch:
+		switch {
+		case s.GrowScratch == nil:
+			reply(c, fail(CodeBadRequest, "this guest has no scratch filesystem to grow"))
+		case req.Size <= 0:
+			reply(c, fail(CodeBadRequest, "grow_scratch: a size in bytes"))
+		default:
+			if err := s.GrowScratch(req.Size); err != nil {
+				reply(c, fail(CodeInternal, err.Error()))
+				return
+			}
+			reply(c, Response{OK: true})
+		}
 	default:
 		reply(c, fail(CodeBadRequest, "unknown op "+req.Op))
 	}

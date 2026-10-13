@@ -148,11 +148,15 @@ func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if size == was {
-		writeJSON(w, http.StatusOK, cur)
+		writeJSON(w, http.StatusOK, api.ResizeResult{Sandbox: cur})
 		return
 	}
-	if busy(rec) {
-		writeErr(w, http.StatusConflict, api.CodeConflict, "processes are running, and a resize restarts the sandbox; wait for them or signal them first")
+	// New CPUs or memory restart the sandbox; a disk that only grows may be
+	// grown live, so that is the backend's to say, told whether it may
+	// restart.
+	running := busy(rec)
+	if running && (size.CPUs != was.CPUs || size.MemoryMB != was.MemoryMB) {
+		writeErr(w, http.StatusConflict, api.CodeConflict, "processes are running, and new CPUs or memory restart the sandbox; wait for them or signal them first")
 		return
 	}
 	s.mu.Lock()
@@ -174,7 +178,11 @@ func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
 
 	// The size the backend answers with may be part of what was asked, or
 	// the old one; the record follows the backend.
-	now, err := rz.ResizeSandbox(r.Context(), cur.ID, size)
+	now, restarted, err := rz.ResizeSandbox(r.Context(), cur.ID, size, !running)
+	if err != nil && errors.Is(err, backend.ErrBusy) && running {
+		writeErr(w, http.StatusConflict, api.CodeConflict, "processes are running, and this sandbox's disk cannot be grown without a restart; wait for them or signal them first")
+		return
+	}
 	if err != nil {
 		s.logf("sandbox %s: resize to %v CPUs, %d MB, disk %d MB: %v", cur.ID, size.CPUs, size.MemoryMB, size.DiskMB, err)
 	}
@@ -188,14 +196,18 @@ func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
 	rec.mu.Unlock()
 	s.persist(rec)
 	if now != was {
+		how := "live"
+		if restarted {
+			how = "restarted"
+		}
 		s.event(api.Event{Type: api.EventSandboxResized, Sandbox: out.ID,
-			Reason: fmt.Sprintf("%v CPUs, %d MB, disk %d MB -> %v CPUs, %d MB, disk %d MB", was.CPUs, was.MemoryMB, was.DiskMB, now.CPUs, now.MemoryMB, now.DiskMB)})
+			Reason: fmt.Sprintf("%v CPUs, %d MB, disk %d MB -> %v CPUs, %d MB, disk %d MB, %s", was.CPUs, was.MemoryMB, was.DiskMB, now.CPUs, now.MemoryMB, now.DiskMB, how)})
 	}
 	if err != nil {
 		s.backendErr(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, api.ResizeResult{Sandbox: out, Restarted: restarted})
 }
 
 func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {

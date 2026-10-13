@@ -113,6 +113,8 @@ func serve(args []string) error {
 	uid := fl.Int("uid", defaultUID, "uid processes run as (when root); -1 to keep")
 	gid := fl.Int("gid", defaultGID, "gid processes run as (when root); -1 to keep")
 	home := fl.String("home", defaultHome, "HOME for processes")
+	scratchFD := fl.Int("scratch-fd", 0, "descriptor of the scratch mount, from init, for grow_scratch")
+	scratchDev := fl.String("scratch-dev", "", "the scratch mount's block device")
 	if err := fl.Parse(args); err != nil {
 		return err
 	}
@@ -121,6 +123,9 @@ func serve(args []string) error {
 		imageEnv(env)
 	}
 	s := &guestproto.Server{Root: *root, UID: *uid, GID: *gid, BaseEnv: env, Home: *home}
+	if *scratchFD > 2 && *scratchDev != "" {
+		s.GrowScratch = scratchGrower(os.NewFile(uintptr(*scratchFD), "scratch"), *scratchDev)
+	}
 	switch {
 	case *stdio:
 		s.ServeConn(stdioConn{})

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/audit"
+	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/backend/fake"
 	"github.com/Amitgb14/sandbox-cli/internal/spec"
 )
@@ -76,7 +78,7 @@ func TestResizeChangesWhatTheSandboxIsGiven(t *testing.T) {
 	}
 }
 
-// A resize restarts the sandbox, so it is refused while a process runs.
+// New CPUs restart the sandbox, so they are refused while a process runs.
 func TestResizeWaitsForProcesses(t *testing.T) {
 	_, c := resizeServer(t, api.CapResize)
 	ctx := context.Background()
@@ -111,5 +113,67 @@ func TestResizeIsRefusedWhereItCannotBeDone(t *testing.T) {
 	}
 	if _, err := c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{CPUs: 2}); !api.IsCode(err, api.CodeUnsupported) {
 		t.Fatalf("%v, want unsupported", err)
+	}
+}
+
+// A disk that only grows is grown live while a process runs: the backend is
+// told it may not restart, and the answer says it was not restarted. New
+// CPUs at the same time are still refused.
+func TestADiskGrowsLiveWhileAProcessRuns(t *testing.T) {
+	be, c := resizeServer(t, api.CapResize)
+	ctx := context.Background()
+	sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{DiskMB: 2048})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"sleep", "30"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{DiskMB: 4096})
+	if err != nil || got.Restarted || got.DiskMB != 4096 {
+		t.Fatalf("a disk grown with a process running: %+v, %v; want 4096, not restarted", got, err)
+	}
+	if size, _ := be.Size(sb.ID); size.DiskMB != 4096 {
+		t.Fatalf("the backend has %+v", size)
+	}
+	if _, err := c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{CPUs: 2, DiskMB: 8192}); !api.IsCode(err, api.CodeConflict) {
+		t.Fatalf("new CPUs with the disk, a process running: %v, want conflict", err)
+	}
+	if size, _ := be.Size(sb.ID); size.DiskMB != 4096 {
+		t.Fatalf("a refused resize changed the disk: %+v", size)
+	}
+}
+
+// noLiveGrow is a backend whose disk cannot be grown live (an old guest
+// agent): it needs a restart, and refuses one it is not allowed.
+type noLiveGrow struct{ *fake.Backend }
+
+func (b noLiveGrow) ResizeSandbox(ctx context.Context, id string, size api.NodeResources, mayRestart bool) (api.NodeResources, bool, error) {
+	if !mayRestart {
+		now, _ := b.Size(id)
+		return now, false, fmt.Errorf("%w: needs a restart", backend.ErrBusy)
+	}
+	return b.Backend.ResizeSandbox(ctx, id, size, true)
+}
+
+// Where the disk cannot be grown live, a process running refuses it with
+// a conflict that says why, rather than a restart that would end it.
+func TestADiskThatNeedsARestartWaitsForProcesses(t *testing.T) {
+	be := noLiveGrow{fake.New(api.CapResize)}
+	s := &Server{Backend: be, Policy: spec.DefaultPolicyFor(be.Capabilities()), Capacity: api.NodeResources{CPUs: 16, MemoryMB: 32768, DiskMB: 1 << 20}}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	c, _ := api.NewClient(ts.URL, "")
+	ctx := context.Background()
+	sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{DiskMB: 2048})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: []string{"sleep", "30"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{DiskMB: 4096})
+	if !api.IsCode(err, api.CodeConflict) || !strings.Contains(err.Error(), "without a restart") {
+		t.Fatalf("%v, want a conflict saying the disk needs a restart", err)
 	}
 }

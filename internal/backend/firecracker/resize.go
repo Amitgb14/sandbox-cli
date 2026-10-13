@@ -8,17 +8,25 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
+	"github.com/Amitgb14/sandbox-cli/internal/guestproto"
 )
 
 // Resizing a sandbox.
 //
-// Firecracker cannot add vCPUs or memory to a running VM, so a resize is a
-// restart in place: the guest flushes its disks, the VMM is stopped, the
+// A disk that only grows is grown live (growLive): the VMM rereads a
+// lengthened file under a running VM, and the guest grows its filesystem
+// online, its processes running on. A guest agent older than that, or a
+// live grow that fails, falls back to a restart where the caller allows one.
+//
+// Firecracker cannot add vCPUs or memory to a running VM, so any other
+// resize is a restart in place: the guest flushes its disks, the VMM is stopped, the
 // scratch file is lengthened if asked (the guest grows its filesystem into
 // it as it boots), and a new VMM boots from the same disks,
 // tap and jail with the new machine configuration. The sandbox keeps its
@@ -30,34 +38,100 @@ import (
 // memory are booted again, so a refused resize does not cost the sandbox.
 
 // ResizeSandbox is backend.SandboxResizer.
-func (b *Backend) ResizeSandbox(ctx context.Context, id string, size api.NodeResources) (api.NodeResources, error) {
-	// The restart outlives the request: a client that goes away halfway
+func (b *Backend) ResizeSandbox(ctx context.Context, id string, size api.NodeResources, mayRestart bool) (api.NodeResources, bool, error) {
+	// The resize outlives the request: a client that goes away halfway
 	// must not leave the VM stopped.
 	ctx = context.WithoutCancel(ctx)
 	v, err := b.get(id)
 	if err != nil {
-		return api.NodeResources{}, err
+		return api.NodeResources{}, false, err
 	}
 	v.restart.Lock()
 	defer v.restart.Unlock()
 	if v, err = b.get(id); err != nil { // terminated while waiting
-		return api.NodeResources{}, err
-	}
-	data, err := os.ReadFile(v.hostPath("vm.json"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return sizeOf(v.spec), fmt.Errorf("%w: a sandbox started from a memory snapshot keeps the snapshot's size", backend.ErrUnsupported)
-	}
-	if err != nil {
-		return sizeOf(v.spec), err
-	}
-	var cfg VMConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return sizeOf(v.spec), fmt.Errorf("vm.json: %w", err)
+		return api.NodeResources{}, false, err
 	}
 	old := v.spec
 	was := sizeOf(old)
 	if size.DiskMB < old.DiskMB {
-		return was, fmt.Errorf("%w: a disk only grows", backend.ErrUnsupported)
+		return was, false, fmt.Errorf("%w: a disk only grows", backend.ErrUnsupported)
+	}
+	if size.CPUs == old.CPUs && size.MemoryMB == old.MemoryMB {
+		err := b.growLive(ctx, v, size.DiskMB)
+		if err == nil {
+			next := old
+			next.DiskMB = size.DiskMB
+			b.setSpec(v, next)
+			b.cfg.Logf("sandbox %s: grew its disk to %d MiB live", id, size.DiskMB)
+			return sizeOf(next), false, nil
+		}
+		b.cfg.Logf("sandbox %s: resize: the disk could not be grown live: %v", id, err)
+		// A file already lengthened is lengthened again harmlessly by the
+		// restart, whose boot grows the filesystem into it.
+	}
+	if !mayRestart {
+		return was, false, fmt.Errorf("%w: this resize restarts the sandbox, and processes are running", backend.ErrBusy)
+	}
+	now, err := b.restartAt(ctx, v, size)
+	return now, true, err
+}
+
+// growLive grows a running sandbox's scratch disk to mib MiB without
+// stopping it: the file is lengthened, the VMM told to look at it again —
+// which tells the guest's kernel — and the guest asked to grow its
+// filesystem into the larger device. A guest agent too old to do the last
+// is found out first, by its protocol version, so nothing is changed for
+// one that cannot finish.
+func (b *Backend) growLive(ctx context.Context, v *vm, mib int) error {
+	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ver, err := v.client.Ping(pctx)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("the guest agent: %w", err)
+	}
+	if n, err := strconv.Atoi(ver); err != nil || n < guestproto.GrowScratchSince {
+		return fmt.Errorf("the guest agent speaks protocol %q, older than live growth", ver)
+	}
+	// hostPath: under a jailer the scratch disk was moved into the jail.
+	if err := growDisk(v.hostPath("scratch.ext4"), mib); err != nil {
+		return err
+	}
+	// The drive's path as the VMM was given it: in the jail's root under a
+	// jailer, beside it otherwise (vmPaths). Setting it again makes the
+	// VMM reread the file's size and signal the guest.
+	path := "scratch.ext4"
+	if v.root != "" {
+		path = "/scratch.ext4"
+	}
+	actx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err = fcAPI(actx, v.hostPath("api.sock"), http.MethodPatch, "/drives/scratch", map[string]string{"drive_id": "scratch", "path_on_host": path})
+	cancel()
+	if err != nil {
+		return fmt.Errorf("telling the VMM: %w", err)
+	}
+	gctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := v.client.GrowScratch(gctx, int64(mib)<<20); err != nil {
+		return fmt.Errorf("the guest growing its filesystem: %w", err)
+	}
+	return nil
+}
+
+// restartAt is a resize by restart: see the top of this file.
+func (b *Backend) restartAt(ctx context.Context, v *vm, size api.NodeResources) (api.NodeResources, error) {
+	id := v.id
+	old := v.spec
+	was := sizeOf(old)
+	data, err := os.ReadFile(v.hostPath("vm.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return was, fmt.Errorf("%w: a sandbox started from a memory snapshot keeps the snapshot's size", backend.ErrUnsupported)
+	}
+	if err != nil {
+		return was, err
+	}
+	var cfg VMConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return was, fmt.Errorf("vm.json: %w", err)
 	}
 
 	// Its scratch disk is kept this time, so everything the guest has
