@@ -279,7 +279,9 @@ in `_old/` as reference, to be ported where this design still wants it.
   a sandbox started before this release keeps its disk space. Through a
   gateway the growth counts against the
   tenant's quota and must fit on the sandbox's node. `sandbox-cli resize
-  SANDBOX --cpus --memory --disk`; Studio's Resize resizes in place where the
+  SANDBOX --cpus --memory --disk` shows each size before and after, says when
+  nothing changed, and after a partial failure says what the sandbox is now;
+  Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)

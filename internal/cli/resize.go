@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -32,11 +33,27 @@ func newResizeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sb, err := c.Resize(cmd.Context(), args[0], req)
+			out := cmd.OutOrStdout()
+			before, err := c.Sandbox(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s: %v CPUs, %d MiB memory, %d MiB disk\n", termsafe.Clean(sb.ID), sb.CPUs, sb.MemoryMB, sb.DiskMB)
+			after, rerr := c.Resize(cmd.Context(), before.ID, req)
+			if rerr != nil {
+				// A resize can fail part way — the disk not grown, the CPUs
+				// and memory changed — so say what the sandbox is now.
+				if now, err := c.Sandbox(cmd.Context(), before.ID); err == nil {
+					fmt.Fprintf(out, "%s: not fully resized; it is now:\n", termsafe.Clean(now.ID))
+					printSizes(out, before, now)
+				}
+				return rerr
+			}
+			if sizeOf(before) == sizeOf(after) {
+				fmt.Fprintf(out, "%s: already that size; not restarted\n", termsafe.Clean(after.ID))
+			} else {
+				fmt.Fprintf(out, "%s: resized and restarted\n", termsafe.Clean(after.ID))
+			}
+			printSizes(out, before, after)
 			return nil
 		},
 	}
@@ -46,4 +63,23 @@ func newResizeCmd() *cobra.Command {
 	f.IntVar(&req.MemoryMB, "memory", 0, "memory in MiB")
 	f.IntVar(&req.DiskMB, "disk", 0, "writable disk in MiB (only grows)")
 	return cmd
+}
+
+func sizeOf(sb api.Sandbox) api.NodeResources {
+	return api.NodeResources{CPUs: sb.CPUs, MemoryMB: sb.MemoryMB, DiskMB: sb.DiskMB}
+}
+
+// printSizes shows each size as it was and as it is, so a user sees what
+// changed and what did not.
+func printSizes(w io.Writer, was, now api.Sandbox) {
+	line := func(name, a, b string) {
+		if a == b {
+			fmt.Fprintf(w, "  %-7s %s (unchanged)\n", name, b)
+		} else {
+			fmt.Fprintf(w, "  %-7s %s -> %s\n", name, a, b)
+		}
+	}
+	line("CPUs", fmt.Sprint(was.CPUs), fmt.Sprint(now.CPUs))
+	line("memory", fmt.Sprintf("%d MiB", was.MemoryMB), fmt.Sprintf("%d MiB", now.MemoryMB))
+	line("disk", fmt.Sprintf("%d MiB", was.DiskMB), fmt.Sprintf("%d MiB", now.DiskMB))
 }
