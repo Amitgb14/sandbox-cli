@@ -21,6 +21,14 @@ cd studio && npm run typecheck && npm run lint && npm run build && npm run test:
   `SANDBOX_CONFORMANCE_TOKEN` set (`-run TestEndpoint`).
 - **A real microVM** needs `/dev/kvm`, a guest kernel and Firecracker:
   `SANDBOX_TEST_KERNEL=… SANDBOX_TEST_FIRECRACKER=… go test -tags vm -v ./internal/backend/firecracker`.
+- **On the fleet, in CI.** The `fleet` job in `.github/workflows/ci.yml` runs
+  on a push to `main` or a manual run, never on a pull request. It uses a
+  self-hosted runner on the gateway's tailnet. `sandbox-cli run` creates a
+  sandbox on the gateway, the checkout goes in by `git archive` on stdin, and
+  `go vet` and `go test -race` run inside it. Then `TestEndpoint` runs against
+  the same gateway. It needs the repository secret `SANDBOX_CI_TOKEN`, a gateway
+  API key. The repository variable `SANDBOX_CI_ENDPOINT` can point it at another
+  gateway.
 - **What fakes cannot prove** is listed, with the command that proves it on a
   real host, in [docs/testing/end-to-end.md](docs/testing/end-to-end.md). The
   maintainer runs those on a Mac with macOS 26 and on a KVM Linux machine.
