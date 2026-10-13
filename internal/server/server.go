@@ -395,7 +395,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.sandboxes, id)
 		s.mu.Unlock()
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	rec.mu.Lock()
@@ -650,7 +650,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.Backend.UpdateNetwork(r.Context(), id, pol); err != nil {
-			writeBackendErr(w, err)
+			s.backendErr(w, r, err)
 			return
 		}
 		rec.mu.Lock()
@@ -737,7 +737,7 @@ func (s *Server) terminateSandbox(w http.ResponseWriter, r *http.Request) {
 	sb := rec.snapshot()
 	if sb.State != api.StateTerminated {
 		if err := s.Backend.Terminate(r.Context(), sb.ID); err != nil {
-			writeBackendErr(w, err)
+			s.backendErr(w, r, err)
 			return
 		}
 		rec.mu.Lock()
@@ -895,7 +895,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request, rec *record, req 
 	// ended by its own exit, a signal, or the sandbox being terminated.
 	proc, err := s.Backend.Start(context.WithoutCancel(r.Context()), id, ps, log.writer("stdout"), log.writer("stderr"))
 	if err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return nil, false
 	}
 
@@ -1124,7 +1124,7 @@ func (s *Server) signal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := pr.proc.Signal(req.Signal); err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1175,7 +1175,7 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := s.Backend.ReadFile(r.Context(), rec.snapshot().ID, p)
 	if err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	s.event(api.Event{Type: api.EventFileRead, Sandbox: rec.snapshot().ID, Path: p, Bytes: int64(len(data))})
@@ -1196,7 +1196,7 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Backend.WriteFile(r.Context(), rec.snapshot().ID, p, data); err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	s.event(api.Event{Type: api.EventFileWritten, Sandbox: rec.snapshot().ID, Path: p, Bytes: int64(len(data))})
@@ -1209,7 +1209,7 @@ func (s *Server) removeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Backend.Remove(r.Context(), rec.snapshot().ID, p); err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	s.event(api.Event{Type: api.EventFileRemoved, Sandbox: rec.snapshot().ID, Path: p})
@@ -1223,7 +1223,7 @@ func (s *Server) listDir(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := s.Backend.ListDir(r.Context(), rec.snapshot().ID, p)
 	if err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, api.DirList{Entries: entries})
@@ -1264,7 +1264,20 @@ func writeSpecErr(w http.ResponseWriter, err error) {
 	}
 }
 
-func writeBackendErr(w http.ResponseWriter, err error) {
+// backendErr answers a backend error as writeBackendErr does and, where the
+// caller is told only "the backend failed", gives the operator the error
+// itself: without it the reason was nowhere — not in the answer, which is
+// generic on purpose, and not in sandboxd's log. Quoted, because a backend
+// error can carry what a guest wrote, which must not forge a log line.
+func (s *Server) backendErr(w http.ResponseWriter, r *http.Request, err error) {
+	if writeBackendErr(w, err) {
+		s.logf("%s %s: the backend failed: %q", r.Method, r.URL.Path, err.Error())
+	}
+}
+
+// writeBackendErr answers a backend error, and reports whether the answer
+// was the generic one, which says nothing of the error.
+func writeBackendErr(w http.ResponseWriter, err error) (generic bool) {
 	switch {
 	case errors.Is(err, backend.ErrNotFound):
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "not found")
@@ -1294,7 +1307,9 @@ func writeBackendErr(w http.ResponseWriter, err error) {
 		// The message is generic on purpose: a backend error can carry host paths
 		// and engine detail that are the operator's to read, not the caller's.
 		writeErr(w, http.StatusInternalServerError, api.CodeInternal, "the backend failed")
+		return true
 	}
+	return false
 }
 
 func sortedKeys(m map[string]string) []string {

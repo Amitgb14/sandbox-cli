@@ -83,7 +83,7 @@ func (s *Server) volumesExist(w http.ResponseWriter, r *http.Request, mounts []a
 	}
 	have, err := vs.Volumes(r.Context())
 	if err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return false
 	}
 	known := map[string]bool{}
@@ -122,7 +122,7 @@ func (s *Server) createVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	have, err := vs.Volumes(r.Context())
 	if err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	for _, v := range have {
@@ -132,7 +132,7 @@ func (s *Server) createVolume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := vs.CreateVolume(r.Context(), req.Name, size); err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, api.Volume{Name: req.Name, SizeMB: size, CreatedAt: s.now().UTC()})
@@ -145,7 +145,7 @@ func (s *Server) listVolumes(w http.ResponseWriter, r *http.Request) {
 	}
 	have, err := vs.Volumes(r.Context())
 	if err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	out := make([]api.Volume, 0, len(have))
@@ -185,7 +185,7 @@ func (s *Server) deleteVolume(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 	if err := vs.DeleteVolume(r.Context(), name); err != nil {
-		writeBackendErr(w, err)
+		s.backendErr(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

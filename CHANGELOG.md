@@ -908,6 +908,12 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **sandboxd logs why the backend failed.** A request the backend failed in
+  an unexpected way answered `internal (500): the backend failed` and logged
+  nothing, so its operator could not find the reason. The answer is still
+  generic — the error can name host paths — and sandboxd's log now has the
+  method, the path and the error.
+
 - **An image the registry will not serve is named, with the likely reason.**
   Pulling an image that does not exist or is private, a misspelt name
   included, failed with only `token request: 403 Forbidden`, which read like
