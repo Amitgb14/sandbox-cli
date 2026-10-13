@@ -639,4 +639,4 @@ func (c *createTimer) mark(step string) {
 	c.last = now
 }
 
-func (c *createTimer) String() string { return strings.Join(c.steps, ", ") }
+func (c createTimer) String() string { return strings.Join(c.steps, ", ") }

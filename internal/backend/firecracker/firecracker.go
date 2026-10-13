@@ -316,7 +316,17 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	if s.FromSnapshot != "" {
 		return b.createFromSnapshot(ctx, s)
 	}
+	// Each step's time is logged, so a slow create says where it waited:
+	// the image (a registry, a root disk being built), the scratch disk,
+	// the network, the jail or the boot.
+	t := steps{start: time.Now()}
+	defer func() {
+		if err != nil {
+			b.cfg.Logf("sandbox %s: not created after %v (%s)", s.ID, time.Since(t.start).Round(time.Millisecond), &t)
+		}
+	}()
 	rootfs, err := image.BuildRootFS(ctx, b.cfg.Puller, s.Image, b.cfg.Agent, b.cfg.ImageDir)
+	t.mark("image")
 	if err != nil {
 		b.cfg.Logf("sandbox %s: image %s: %v", s.ID, s.Image, err)
 		return fmt.Errorf("image %s: %w", s.Image, err)
@@ -345,6 +355,7 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	if err := image.MakeScratch(ctx, scratch, s.DiskMB); err != nil {
 		return err
 	}
+	t.mark("scratch disk")
 	bootArgs := []string{
 		"console=ttyS0", "reboot=k", "panic=1", "pci=off", "ro", FastBootArgs,
 		"init=" + image.GuestAgentPath, "sbx.overlay=/dev/vdb",
@@ -364,12 +375,13 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 		volumes = append(volumes, p)
 	}
 	if b.cfg.Network != nil {
-		t, err := b.cfg.Network.attach(s.ID, s.Network, b.ownerFor(s.ID))
+		tap, err := b.cfg.Network.attach(s.ID, s.Network, b.ownerFor(s.ID))
 		if err != nil {
 			return fmt.Errorf("network: %w", err)
 		}
-		v.net = t
-		bootArgs = append(bootArgs, t.kernelArgs()...)
+		v.net = tap
+		bootArgs = append(bootArgs, tap.kernelArgs()...)
+		t.mark("network")
 	}
 
 	// The sandbox's own files are named relative to the VMM's working directory
@@ -381,6 +393,7 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 		if paths, err = b.cfg.Jailer.prepare(s.ID, b.cfg.Kernel, rootfs.Path, scratch, volumes); err != nil {
 			return err
 		}
+		t.mark("jail")
 	}
 	cfgJSON, _ := json.MarshalIndent(BuildConfig(s, paths, strings.Join(bootArgs, " "), v.net), "", "  ")
 	if err := os.WriteFile(v.hostPath("vm.json"), cfgJSON, 0o600); err != nil {
@@ -388,20 +401,39 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	}
 	b.own(s.ID, v.hostPath("vm.json"))
 
-	t0 := time.Now()
 	if err := b.vmm(v, "--config-file", "vm.json"); err != nil {
 		return err
 	}
 	if err := b.waitReady(ctx, v); err != nil {
+		t.mark("boot")
 		return err
 	}
-	b.cfg.Logf("sandbox %s: ready in %v", s.ID, time.Since(t0).Round(time.Millisecond))
+	t.mark("boot")
+	b.cfg.Logf("sandbox %s: created in %v (%s)", s.ID, time.Since(t.start).Round(time.Millisecond), &t)
 	b.mu.Lock()
 	b.vms[s.ID] = v
 	b.mu.Unlock()
 	b.saveKeep(v)
 	return nil
 }
+
+// steps adds up a create's time by step, for its log line.
+type steps struct {
+	start, last time.Time
+	done        []string
+}
+
+func (t *steps) mark(step string) {
+	now := time.Now()
+	from := t.last
+	if from.IsZero() {
+		from = t.start
+	}
+	t.done = append(t.done, step+" "+now.Sub(from).Round(time.Millisecond).String())
+	t.last = now
+}
+
+func (t *steps) String() string { return strings.Join(t.done, ", ") }
 
 // newVM makes a sandbox's directory and record.
 func (b *Backend) newVM(s backend.Spec) (*vm, error) {
