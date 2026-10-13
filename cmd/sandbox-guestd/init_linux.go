@@ -112,6 +112,12 @@ func overlayRoot(dev string) error {
 	if err := growToDevice(rw, dev); err != nil {
 		fmt.Printf("sandbox-guestd: growing the scratch filesystem: %v\n", err)
 	}
+	// Kept open for the agent, which grows the filesystem while it runs
+	// (OpGrowScratch): after the pivot below its mount is reachable by no
+	// path, only through a descriptor opened on it now.
+	if d, err := os.Open(rw); err == nil {
+		scratchDir, scratchDev = d, dev
+	}
 	for _, d := range []string{rw + "/upper", rw + "/work"} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
@@ -157,29 +163,76 @@ const (
 // reads the filesystem the guest writes, so the guest's own kernel grows it
 // here, on every boot, which is nothing when it already fills the device.
 func growToDevice(dir, dev string) error {
-	d, err := os.Open(dev)
+	f, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	var size uint64
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, d.Fd(), blkGetSize64, uintptr(unsafe.Pointer(&size)))
-	d.Close()
-	if errno != 0 {
-		return fmt.Errorf("the size of %s: %w", dev, errno)
+	defer f.Close()
+	size, err := deviceSize(dev)
+	if err != nil {
+		return err
 	}
+	return growFS(f, size)
+}
+
+// The scratch filesystem's mount, opened before the pivot, and its device;
+// nil and "" when the guest booted without an overlay.
+var (
+	scratchDir *os.File
+	scratchDev string
+)
+
+// scratchGrower is OpGrowScratch for the agent: f is the scratch mount
+// (passed down from PID 1), dev its device. The host has lengthened the file
+// and told the VMM; the guest's kernel learns the new size a moment later,
+// so it waits, briefly, for the device to be at least min bytes.
+func scratchGrower(f *os.File, dev string) func(min int64) error {
+	// Inherited without close-on-exec: set it, or every process the agent
+	// starts for the sandbox user would hold the raw scratch mount, under
+	// the overlay, open.
+	syscall.CloseOnExec(int(f.Fd()))
+	return func(min int64) error {
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			size, err := deviceSize(dev)
+			if err != nil {
+				return err
+			}
+			if size >= uint64(min) {
+				return growFS(f, size)
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("%s is %d bytes, not the %d asked for", dev, size, min)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+}
+
+// deviceSize is a block device's size in bytes.
+func deviceSize(dev string) (uint64, error) {
+	d, err := os.Open(dev)
+	if err != nil {
+		return 0, err
+	}
+	defer d.Close()
+	var size uint64
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, d.Fd(), blkGetSize64, uintptr(unsafe.Pointer(&size))); errno != 0 {
+		return 0, fmt.Errorf("the size of %s: %w", dev, errno)
+	}
+	return size, nil
+}
+
+// growFS grows the ext4 filesystem mounted where f is open to size bytes.
+func growFS(f *os.File, size uint64) error {
 	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err != nil {
+	if err := syscall.Fstatfs(int(f.Fd()), &st); err != nil {
 		return err
 	}
 	if st.Bsize <= 0 {
 		return fmt.Errorf("block size %d", st.Bsize)
 	}
 	blocks := size / uint64(st.Bsize)
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), ext4IocResizeFS, uintptr(unsafe.Pointer(&blocks))); errno != 0 {
 		return fmt.Errorf("resize to %d blocks: %w", blocks, errno)
 	}
@@ -287,6 +340,10 @@ func supervise(port string) {
 	var child *exec.Cmd
 	start := func() {
 		child = exec.Command(self, "serve", "--vsock", port)
+		if scratchDir != nil {
+			child.ExtraFiles = []*os.File{scratchDir} // fd 3
+			child.Args = append(child.Args, "--scratch-fd", "3", "--scratch-dev", scratchDev)
+		}
 		child.Stdout, child.Stderr = os.Stdout, os.Stderr
 		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		if err := child.Start(); err != nil {

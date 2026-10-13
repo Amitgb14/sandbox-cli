@@ -180,6 +180,18 @@ func (c *Client) Sync(ctx context.Context, final bool) error {
 	return err
 }
 
+// GrowScratch asks the guest to grow its scratch filesystem into a device
+// of at least size bytes (OpGrowScratch).
+func (c *Client) GrowScratch(ctx context.Context, size int64) error {
+	cn, done, err := c.open(ctx, Request{Op: OpGrowScratch, Size: size})
+	if err != nil {
+		return err
+	}
+	defer done()
+	_, err = cn.response()
+	return err
+}
+
 // List lists a guest directory.
 func (c *Client) List(ctx context.Context, path string) ([]DirEntry, error) {
 	cn, done, err := c.open(ctx, Request{Op: OpList, Path: path})

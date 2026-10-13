@@ -19,10 +19,12 @@ func newResizeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "resize SANDBOX",
 		Short: "Give a running sandbox more or fewer CPUs and memory, or a larger disk",
-		Long: "The sandbox restarts at its new size, in a few seconds: it keeps its id, its\n" +
-			"network, its files and its volumes; its processes end, so it is refused while\n" +
-			"any run. A size left out is kept. A disk only grows. Through a gateway what it\n" +
-			"adds counts against your quota, and the sandbox's node must have the room.",
+		Long: "A disk that only grows is grown live where the endpoint can: the sandbox and\n" +
+			"its processes keep running. New CPUs or memory restart the sandbox at its new\n" +
+			"size, in a few seconds: it keeps its id, its network, its files and its\n" +
+			"volumes; its processes end, so that is refused while any run. A size left out\n" +
+			"is kept. A disk only grows. Through a gateway what it adds counts against your\n" +
+			"quota, and the sandbox's node must have the room.",
 		Example: "  sandbox-cli resize my-box --cpus 4 --memory 8192\n  sandbox-cli resize my-box --disk 20480",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -48,12 +50,15 @@ func newResizeCmd() *cobra.Command {
 				}
 				return rerr
 			}
-			if sizeOf(before) == sizeOf(after) {
+			switch {
+			case sizeOf(before) == sizeOf(after.Sandbox):
 				fmt.Fprintf(out, "%s: already that size; not restarted\n", termsafe.Clean(after.ID))
-			} else {
+			case after.Restarted:
 				fmt.Fprintf(out, "%s: resized and restarted\n", termsafe.Clean(after.ID))
+			default:
+				fmt.Fprintf(out, "%s: resized live; its processes kept running\n", termsafe.Clean(after.ID))
 			}
-			printSizes(out, before, after)
+			printSizes(out, before, after.Sandbox)
 			return nil
 		},
 	}

@@ -6,3 +6,6 @@ import "os"
 
 // runInit is the Linux guest's PID 1; there is no other kind of guest.
 func runInit() { os.Exit(1) }
+
+// scratchGrower: a guest is Linux, so there is no scratch to grow elsewhere.
+func scratchGrower(*os.File, string) func(int64) error { return nil }

@@ -81,10 +81,10 @@ func (g *Gateway) resizeHandler(w http.ResponseWriter, r *http.Request, p Princi
 		writeNodeErr(w, err)
 		return
 	}
-	if err := hold.record(ctx, g.store.ForTenant(o.Tenant), o, out); err != nil {
+	if err := hold.record(ctx, g.store.ForTenant(o.Tenant), o, out.Sandbox); err != nil {
 		g.logf("resize %s: recording its size: %v", id, err)
 	}
-	g.logf("sandbox %s resized by key %s to %v CPUs, %d MB, disk %d MB", id, p.KeyID, out.CPUs, out.MemoryMB, out.DiskMB)
+	g.logf("sandbox %s resized by key %s to %v CPUs, %d MB, disk %d MB (restarted: %v)", id, p.KeyID, out.CPUs, out.MemoryMB, out.DiskMB, out.Restarted)
 	writeJSON(w, http.StatusOK, out)
 }
 

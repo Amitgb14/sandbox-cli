@@ -209,6 +209,14 @@ type ResizeSandboxRequest struct {
 	DiskMB   int     `json:"disk_mb,omitempty"`
 }
 
+// ResizeResult answers a resize: the sandbox at its size after, and whether
+// it was restarted to get there. A disk that only grows is grown live where
+// the endpoint can, its processes running on; anything else restarts it.
+type ResizeResult struct {
+	Sandbox
+	Restarted bool `json:"restarted"`
+}
+
 // VolumeMount attaches a volume at a path inside the sandbox.
 type VolumeMount struct {
 	Name     string `json:"name"`

@@ -1409,10 +1409,12 @@ sandbox-cli resize SANDBOX [flags]
 ```
 
 ```text
-The sandbox restarts at its new size, in a few seconds: it keeps its id, its
-network, its files and its volumes; its processes end, so it is refused while
-any run. A size left out is kept. A disk only grows. Through a gateway what it
-adds counts against your quota, and the sandbox's node must have the room.
+A disk that only grows is grown live where the endpoint can: the sandbox and
+its processes keep running. New CPUs or memory restart the sandbox at its new
+size, in a few seconds: it keeps its id, its network, its files and its
+volumes; its processes end, so that is refused while any run. A size left out
+is kept. A disk only grows. Through a gateway what it adds counts against your
+quota, and the sandbox's node must have the room.
 ```
 
 Examples:

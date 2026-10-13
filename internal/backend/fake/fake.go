@@ -131,19 +131,26 @@ func (b *Backend) RegistryLogin(id string) (backend.RegistryLogin, bool) {
 	return l, ok
 }
 
-// ResizeSandbox is backend.SandboxResizer: the new size, nothing else.
-func (b *Backend) ResizeSandbox(_ context.Context, id string, size api.NodeResources) (api.NodeResources, error) {
+// ResizeSandbox is backend.SandboxResizer: the new size, nothing else. A
+// disk that only grows is grown live, as Firecracker does; anything else is
+// a restart, refused without mayRestart.
+func (b *Backend) ResizeSandbox(_ context.Context, id string, size api.NodeResources, mayRestart bool) (api.NodeResources, bool, error) {
 	s, err := b.get(id)
 	if err != nil {
-		return api.NodeResources{}, err
+		return api.NodeResources{}, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	was := api.NodeResources{CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}
 	if size.DiskMB < s.spec.DiskMB {
-		return api.NodeResources{CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}, fmt.Errorf("%w: a disk only grows", backend.ErrUnsupported)
+		return was, false, fmt.Errorf("%w: a disk only grows", backend.ErrUnsupported)
+	}
+	live := size.CPUs == s.spec.CPUs && size.MemoryMB == s.spec.MemoryMB
+	if !live && !mayRestart {
+		return was, false, fmt.Errorf("%w: this resize restarts the sandbox, and processes are running", backend.ErrBusy)
 	}
 	s.spec.CPUs, s.spec.MemoryMB, s.spec.DiskMB = size.CPUs, size.MemoryMB, size.DiskMB
-	return size, nil
+	return size, !live, nil
 }
 
 // Size is the resources the fake last gave id, for tests.

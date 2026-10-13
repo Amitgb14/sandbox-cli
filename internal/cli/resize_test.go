@@ -46,6 +46,10 @@ func TestResizeShowsWhatChanged(t *testing.T) {
 			t.Errorf("a resize: missing %q in\n%s", want, out)
 		}
 	}
+	out = run("--disk", "4096")
+	if !strings.Contains(out, "resized live; its processes kept running") || !strings.Contains(out, "disk    2048 MiB -> 4096 MiB") {
+		t.Errorf("a disk grown live:\n%s", out)
+	}
 	out = run("--memory", "1024")
 	if !strings.Contains(out, "already that size; not restarted") || !strings.Contains(out, "memory  1024 MiB (unchanged)") {
 		t.Errorf("the same size again:\n%s", out)
