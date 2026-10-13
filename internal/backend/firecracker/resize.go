@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
@@ -76,7 +75,8 @@ func (b *Backend) ResizeSandbox(ctx context.Context, id string, size api.NodeRes
 	next := old
 	next.CPUs, next.MemoryMB = size.CPUs, size.MemoryMB
 	if size.DiskMB > old.DiskMB {
-		if err := growDisk(filepath.Join(v.dir, "scratch.ext4"), size.DiskMB); err != nil {
+		// hostPath: under a jailer the scratch disk was moved into the jail.
+		if err := growDisk(v.hostPath("scratch.ext4"), size.DiskMB); err != nil {
 			b.cfg.Logf("sandbox %s: resize: growing its disk: %v", id, err)
 		} else {
 			next.DiskMB = size.DiskMB
