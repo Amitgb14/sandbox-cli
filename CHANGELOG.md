@@ -912,6 +912,13 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **A slow create says where it waited.** A Firecracker sandbox showed
+  `pending` for most of a minute, and sandboxd's log said only `ready in
+  82ms`, the boot alone. Its line is now `created in 48.2s (image …,
+  scratch disk …, network …, jail …, boot …)`, and a create that fails logs
+  the steps it got through. The gateway's slow-create line, which printed
+  `%!s(uint64=…)` in place of its steps, prints them.
+
 - **sandboxd logs why the backend failed.** A request the backend failed in
   an unexpected way answered `internal (500): the backend failed` and logged
   nothing, so its operator could not find the reason. The answer is still
