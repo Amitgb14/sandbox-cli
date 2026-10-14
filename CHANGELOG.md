@@ -296,7 +296,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   list and revoke their own, at most 20 live. Revoking, suspending or
   expiring the account, or an admin's password reset, ends them; signing
   out does not. A personal key manages no keys and cannot change the
-  password. The admin's Users screen lists them (`personal key · NAME`) and
+  password. Each acts only in the organization it was made in, is listed
+  there, and stops when its user leaves it. A super admin makes them too,
+  with any scope but `admin`. An account alone in its first organization
+  now owns it and can add members to it (migration 8 makes existing
+  accounts the owners of theirs). The admin's Users screen lists them (`personal key · NAME`) and
   revokes them; it cannot suspend one alone.
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)

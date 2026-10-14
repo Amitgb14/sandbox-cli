@@ -425,14 +425,25 @@ func (s *FileStore) RemoveMember(org, user, userTenant string) error {
 func (g *Gateway) selectOrg(w http.ResponseWriter, r *http.Request, p Principal) (Principal, bool) {
 	ctx := r.Context()
 	vals := r.Header.Values(api.OrgHeader)
-	if len(vals) == 0 {
-		return p, true
-	}
 	if len(vals) > 1 {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, api.OrgHeader+" is given more than once")
 		return Principal{}, false
 	}
-	name := strings.TrimSpace(vals[0])
+	name := ""
+	if len(vals) == 1 {
+		name = strings.TrimSpace(vals[0])
+	}
+	if p.Bound {
+		// A key made in an organisation acts there, asked or not, and is
+		// held to its user's membership below as any selection is.
+		if name == "" {
+			name = wireOrg(p.BoundOrg)
+		}
+		if !strings.EqualFold(tenantOfOrg(name), p.BoundOrg) {
+			writeErr(w, http.StatusForbidden, api.CodeRefused, "this API key acts only in organization "+wireOrg(p.BoundOrg))
+			return Principal{}, false
+		}
+	}
 	if name == "" {
 		return p, true
 	}
@@ -478,6 +489,9 @@ func (g *Gateway) selectOrg(w http.ResponseWriter, r *http.Request, p Principal)
 // now. The key's own tenant always passes; another needs the membership, or
 // an admin key.
 func stillInTenant(ctx context.Context, st Store, p Principal, k Key) (bool, error) {
+	if k.Bound && !strings.EqualFold(p.Tenant, k.Org) {
+		return false, nil
+	}
 	if p.Tenant == k.Tenant {
 		return true, nil
 	}

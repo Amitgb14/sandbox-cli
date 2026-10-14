@@ -210,7 +210,7 @@ function Keys() {
                   <div className="font-mono text-[11px] text-muted-foreground">{k.id}</div>
                   {k.personal ? (
                     <div className="text-xs text-muted-foreground" data-testid={`personal-${k.id}`}>
-                      personal key · {k.name}
+                      personal key · {k.name}{k.org ? ` · in ${k.org}` : ""}
                     </div>
                   ) : null}
                   {k.email ? (

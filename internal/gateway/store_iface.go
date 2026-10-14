@@ -46,11 +46,12 @@ type Store interface {
 	// KeysOfUser is every key whose user is named user, in any tenant.
 	KeysOfUser(ctx context.Context, user string) ([]Key, error)
 	// CreatePersonalKey makes a key for the user of key by, under by's
-	// account or itself, with scopes it holds, ending no later than it;
-	// PersonalKeys lists those made under the same root, and
+	// account or itself, with scopes it holds, ending no later than it,
+	// acting only in org (their own tenant or one they are a member of);
+	// PersonalKeys lists those made under the same root in org, and
 	// RevokePersonalKey revokes one of them (keys_personal.go).
-	CreatePersonalKey(ctx context.Context, by, name string, scopes []string, expires time.Time) (string, Key, error)
-	PersonalKeys(ctx context.Context, by string) ([]Key, error)
+	CreatePersonalKey(ctx context.Context, by, org, name string, scopes []string, expires time.Time) (string, Key, error)
+	PersonalKeys(ctx context.Context, by, org string) ([]Key, error)
 	RevokePersonalKey(ctx context.Context, by, id string) (Key, error)
 
 	CreateInvite(ctx context.Context, req api.CreateInviteRequest) (string, inviteRecord, error)

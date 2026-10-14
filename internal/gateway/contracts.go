@@ -79,6 +79,10 @@ type Principal struct {
 	// Sandbox, when set, confines the principal to that one sandbox: what a
 	// short-lived SSH token becomes.
 	Sandbox string
+	// Bound confines the principal to the tenant BoundOrg: a personal key
+	// made in an organisation acts there and nowhere else (selectOrg).
+	Bound    bool
+	BoundOrg string
 }
 
 // Can reports whether p holds scope. Admin holds every scope.
@@ -116,6 +120,11 @@ type Key struct {
 	// password. Name is what its user called it.
 	Personal bool   `json:"personal,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// Bound keys act only in Org, the organisation's tenant they were made
+	// in (a personal key's; keys_personal.go), and only while their user
+	// may act there.
+	Bound bool   `json:"bound,omitempty"`
+	Org   string `json:"org,omitempty"`
 	// RestoreUntil, on a revoked key, makes it a suspended one
 	// (keys_suspend.go): refused like any revoked key, and restorable until
 	// then. Past it, the revocation is for good.

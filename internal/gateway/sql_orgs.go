@@ -160,9 +160,12 @@ func (s *sqlStore) CreateOrg(ctx context.Context, name, user, userTenant string,
 			var n int
 			// Made counts as well as owns, so handing an organisation to
 			// someone else does not free a place for another.
+			// A user's own first organisation (ownFirstOrg) is not one they
+			// made, and does not count.
 			if err := q.row(ctx, `SELECT COUNT(*) FROM orgs o WHERE o.kind = ? AND (o.created_by = ?
-				OR EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.user_id = ? AND m.role = ?))`,
-				orgTeam, uid, uid, api.RoleOwner).Scan(&n); err != nil {
+				OR EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.user_id = ? AND m.role = ?))
+				AND o.id <> (SELECT org_id FROM users WHERE id = ?)`,
+				orgTeam, uid, uid, api.RoleOwner, uid).Scan(&n); err != nil {
 				return storeErr(err)
 			}
 			if n >= maxOwned {
