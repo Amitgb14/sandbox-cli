@@ -49,3 +49,14 @@ internal/studio/ui/*
 
 # Passwords made by scripts/postgres-local.sh.
 /deploy/postgres/secrets/
+
+# `go build ./cmd/<name>` without -o writes the binary to the repository root,
+# where `git add -A` picks it up: 27MB of build output reached main that way
+# once. Anchored, so cmd/sandboxd and its siblings are not matched.
+/sandbox-cli
+/sandbox-cli.exe
+/sandboxd
+/sandboxd.exe
+/sandbox-guestd
+/sandbox-gateway
+/sandbox-gateway.exe
