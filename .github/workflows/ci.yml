@@ -45,10 +45,31 @@ jobs:
       studio: ${{ steps.f.outputs.studio }}
       web: ${{ steps.f.outputs.web }}
       sdks: ${{ steps.f.outputs.sdks }}
+      fleet: ${{ steps.fleet.outputs.configured }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Whether the fleet job has what it needs. A job's `if` cannot read
+      # secrets, so this step does, and says only whether they are set. Until
+      # the gateway key and the tailnet's OAuth client are added, the fleet job
+      # is skipped with a notice, rather than failing every push to main.
+      - id: fleet
+        env:
+          SANDBOX_CI_TOKEN: ${{ secrets.SANDBOX_CI_TOKEN }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          missing=""
+          for k in SANDBOX_CI_TOKEN TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET; do
+            [ -n "$(printenv "$k")" ] || missing="$missing $k"
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice title=fleet skipped::repository secrets not set:$missing"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
       - id: f
         env:
           EVENT: ${{ github.event_name }}
@@ -271,21 +292,30 @@ jobs:
   # sandboxes of its own. This is what proves the fleet, not the fakes, still
   # does what the API says.
   #
-  # The gateway is on a private tailnet, which a GitHub-hosted runner cannot
-  # reach, so this runs on a self-hosted runner that is on it. And it runs only
-  # on a push to main or a manual run, never on a pull request: a PR's code,
-  # from a fork above all, would otherwise run on a machine we own with a key to
-  # our gateway. A skipped job counts as passed, so this does not hold a PR up.
+  # The gateway is on a private tailnet. The runner is GitHub's own and joins
+  # the tailnet for the job only, as an ephemeral node tagged tag:ci, which
+  # the tailnet removes when the runner goes. The tag is what the tailnet's
+  # access rules grant, so they can let a CI runner reach the gateway's API
+  # port and nothing else. There is no machine of ours for a job to run on.
   #
-  # Needs, in the repository's settings: the secret SANDBOX_CI_TOKEN (a gateway
-  # API key, `sandbox-cli gateway keys create`) and, optionally, the variable
-  # SANDBOX_CI_ENDPOINT to point at another gateway. The default is the
-  # gateway's own API port; the same host without a port is hosted Studio,
-  # which takes only a browser session and refuses an API key.
+  # It runs only on a push to main or a manual run, never on a pull request: a
+  # PR could change this workflow or the tests to use the gateway key and the
+  # tailnet login for something else. A fork's PR gets no secrets anyway, but
+  # a branch in this repository would. A skipped job counts as passed, so this
+  # does not hold a PR up.
+  #
+  # Needs, in the repository's settings: the secrets SANDBOX_CI_TOKEN (a
+  # gateway API key, `sandbox-cli gateway keys create`), TS_OAUTH_CLIENT_ID and
+  # TS_OAUTH_SECRET (a tailnet OAuth client allowed to create auth keys for
+  # tag:ci), and optionally the variable SANDBOX_CI_ENDPOINT to point at
+  # another gateway. Without all three secrets the job is skipped, and the run
+  # carries a notice naming the missing ones. The default is the gateway's own
+  # API port; the same host without a port is hosted Studio, which takes only
+  # a browser session and refuses an API key.
   fleet:
     needs: changes
-    if: needs.changes.outputs.go == 'true' && github.event_name != 'pull_request'
-    runs-on: [self-hosted, linux]
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.fleet == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     # One run at a time on the gateway: two pushes in quick succession would
     # otherwise compete for its capacity and fail each other for no reason.
@@ -305,13 +335,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: join the tailnet
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
       - name: sandbox-cli and its context
         env:
           SANDBOX_CI_TOKEN: ${{ secrets.SANDBOX_CI_TOKEN }}
         run: |
-          if [ -z "$SANDBOX_CI_TOKEN" ]; then
-            echo "SANDBOX_CI_TOKEN is not set: add a gateway API key as a repository secret"; exit 1
-          fi
           go build -o bin/sandbox-cli ./cmd/sandbox-cli
           # The run's own config directory, so a context added here neither reads
           # nor overwrites the runner user's ~/.config/sandbox. Set here, and for
