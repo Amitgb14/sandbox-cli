@@ -45,10 +45,31 @@ jobs:
       studio: ${{ steps.f.outputs.studio }}
       web: ${{ steps.f.outputs.web }}
       sdks: ${{ steps.f.outputs.sdks }}
+      fleet: ${{ steps.fleet.outputs.configured }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Whether the fleet job has what it needs. A job's `if` cannot read
+      # secrets, so this step does, and says only whether they are set. Until
+      # the gateway key and the tailnet's OAuth client are added, the fleet job
+      # is skipped with a notice, rather than failing every push to main.
+      - id: fleet
+        env:
+          SANDBOX_CI_TOKEN: ${{ secrets.SANDBOX_CI_TOKEN }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+        run: |
+          missing=""
+          for k in SANDBOX_CI_TOKEN TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET; do
+            [ -n "$(printenv "$k")" ] || missing="$missing $k"
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice title=fleet skipped::repository secrets not set:$missing"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
       - id: f
         env:
           EVENT: ${{ github.event_name }}
@@ -287,12 +308,13 @@ jobs:
   # gateway API key, `sandbox-cli gateway keys create`), TS_OAUTH_CLIENT_ID and
   # TS_OAUTH_SECRET (a tailnet OAuth client allowed to create auth keys for
   # tag:ci), and optionally the variable SANDBOX_CI_ENDPOINT to point at
-  # another gateway. The default is the gateway's own API port; the same host
-  # without a port is hosted Studio, which takes only a browser session and
-  # refuses an API key.
+  # another gateway. Without all three secrets the job is skipped, and the run
+  # carries a notice naming the missing ones. The default is the gateway's own
+  # API port; the same host without a port is hosted Studio, which takes only
+  # a browser session and refuses an API key.
   fleet:
     needs: changes
-    if: needs.changes.outputs.go == 'true' && github.event_name != 'pull_request'
+    if: needs.changes.outputs.go == 'true' && needs.changes.outputs.fleet == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # One run at a time on the gateway: two pushes in quick succession would
@@ -324,9 +346,6 @@ jobs:
         env:
           SANDBOX_CI_TOKEN: ${{ secrets.SANDBOX_CI_TOKEN }}
         run: |
-          if [ -z "$SANDBOX_CI_TOKEN" ]; then
-            echo "SANDBOX_CI_TOKEN is not set: add a gateway API key as a repository secret"; exit 1
-          fi
           go build -o bin/sandbox-cli ./cmd/sandbox-cli
           # The run's own config directory, so a context added here neither reads
           # nor overwrites the runner user's ~/.config/sandbox. Set here, and for

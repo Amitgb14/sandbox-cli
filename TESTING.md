@@ -29,7 +29,8 @@ cd studio && npm run typecheck && npm run lint && npm run build && npm run test:
   run inside it. Then `TestEndpoint` runs against the same gateway. It needs
   the repository secrets `SANDBOX_CI_TOKEN` (a gateway API key),
   `TS_OAUTH_CLIENT_ID` and `TS_OAUTH_SECRET` (a tailnet OAuth client that may
-  create auth keys for `tag:ci`). The repository variable `SANDBOX_CI_ENDPOINT`
+  create auth keys for `tag:ci`). Until all three are set the job is skipped,
+  with a notice on the run naming the missing ones. The repository variable `SANDBOX_CI_ENDPOINT`
   can point it at another gateway.
 - **What fakes cannot prove** is listed, with the command that proves it on a
   real host, in [docs/testing/end-to-end.md](docs/testing/end-to-end.md). The
