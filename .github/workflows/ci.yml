@@ -263,3 +263,110 @@ jobs:
         if: matrix.python == '3.13'
         working-directory: sdk/typescript
         run: npm install --no-audit --no-fund && npx tsc --noEmit
+
+  # The suite again, in a real microVM on our own gateway rather than on the
+  # runner: sandbox-cli creates a sandbox there, the checkout is streamed into
+  # it, and `go vet` and `go test -race` run inside. Then the conformance suite
+  # runs from the runner against the same gateway, which creates and ends
+  # sandboxes of its own. This is what proves the fleet, not the fakes, still
+  # does what the API says.
+  #
+  # The gateway is on a private tailnet, which a GitHub-hosted runner cannot
+  # reach, so this runs on a self-hosted runner that is on it. And it runs only
+  # on a push to main or a manual run, never on a pull request: a PR's code,
+  # from a fork above all, would otherwise run on a machine we own with a key to
+  # our gateway. A skipped job counts as passed, so this does not hold a PR up.
+  #
+  # Needs, in the repository's settings: the secret SANDBOX_CI_TOKEN (a gateway
+  # API key, `sandbox-cli gateway keys create`) and, optionally, the variable
+  # SANDBOX_CI_ENDPOINT to point at another gateway. The default is the
+  # gateway's own API port; the same host without a port is hosted Studio,
+  # which takes only a browser session and refuses an API key.
+  fleet:
+    needs: changes
+    if: needs.changes.outputs.go == 'true' && github.event_name != 'pull_request'
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 60
+    # One run at a time on the gateway: two pushes in quick succession would
+    # otherwise compete for its capacity and fail each other for no reason.
+    concurrency:
+      group: fleet
+      cancel-in-progress: false
+    env:
+      SANDBOX_CI_ENDPOINT: ${{ vars.SANDBOX_CI_ENDPOINT || 'https://localhost-0.taile91c8c.ts.net:8443' }}
+      SANDBOX_NAME: ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: sandbox-cli and its context
+        env:
+          SANDBOX_CI_TOKEN: ${{ secrets.SANDBOX_CI_TOKEN }}
+        run: |
+          if [ -z "$SANDBOX_CI_TOKEN" ]; then
+            echo "SANDBOX_CI_TOKEN is not set: add a gateway API key as a repository secret"; exit 1
+          fi
+          go build -o bin/sandbox-cli ./cmd/sandbox-cli
+          # The run's own config directory, so a context added here neither reads
+          # nor overwrites the runner user's ~/.config/sandbox. Set here, and for
+          # the later steps, because a job's env cannot name the runner context.
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/sandbox-config"
+          echo "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$XDG_CONFIG_HOME"
+          # The token by file, never on a command line.
+          umask 077
+          printf '%s' "$SANDBOX_CI_TOKEN" > "$RUNNER_TEMP/sandbox-ci.token"
+          bin/sandbox-cli context add ci "$SANDBOX_CI_ENDPOINT" --token-file "$RUNNER_TEMP/sandbox-ci.token"
+          bin/sandbox-cli context use ci
+          bin/sandbox-cli whoami
+          bin/sandbox-cli doctor
+
+      # The checkout goes in as a tar on stdin (git archive: tracked files only,
+      # so nothing of the runner's comes along), and the sandbox fetches only the
+      # Go toolchain and modules. The base image has no Go, so the version is
+      # the one go.mod names, for the guest's own architecture. sandbox-cli run
+      # exits with the command's status, and removes the sandbox when it ends.
+      - name: go vet and go test -race in a sandbox
+        run: |
+          GOVERSION="$(awk '$1 == "go" { print $2 }' go.mod)"
+          git archive --format=tar HEAD | bin/sandbox-cli run \
+            --name "$SANDBOX_NAME" \
+            --label ci=github --label run="${{ github.run_id }}" \
+            --template large --lifetime 45m \
+            --network allowlist \
+            --allow go.dev --allow dl.google.com \
+            --allow proxy.golang.org --allow sum.golang.org --allow storage.googleapis.com \
+            -e GOVERSION="$GOVERSION" \
+            -- bash -c '
+              set -euo pipefail
+              case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) echo "unknown arch $(uname -m)"; exit 1 ;; esac
+              mkdir -p src toolchain
+              tar -x -C src
+              curl -fsSL "https://go.dev/dl/go${GOVERSION}.linux-${arch}.tar.gz" | tar -xz -C toolchain
+              export PATH="$PWD/toolchain/go/bin:$PATH" GOTOOLCHAIN=local
+              cd src
+              go version
+              go vet ./...
+              go test -race -count=1 ./...
+            '
+
+      - name: conformance suite against the gateway
+        env:
+          SANDBOX_CONFORMANCE_ENDPOINT: ${{ env.SANDBOX_CI_ENDPOINT }}
+          SANDBOX_CONFORMANCE_TOKEN: ${{ secrets.SANDBOX_CI_TOKEN }}
+        run: go test -count=1 -v -run TestEndpoint ./internal/api/conformance
+
+      # A cancelled or timed-out run leaves its sandbox behind, since run only
+      # removes it when the command ends. End it by name; it is gone already
+      # after a run that finished, so a failure here is not one.
+      - name: clean up
+        if: always()
+        run: |
+          [ -x bin/sandbox-cli ] && bin/sandbox-cli kill "$SANDBOX_NAME" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/sandbox-ci.token"
