@@ -436,12 +436,12 @@ sudo systemctl start sandboxd
 
 ## The network default
 
-A Firecracker sandbox's egress is always by name: there is no open mode on
-this backend, because everything a guest sends goes through sandboxd's proxy
-and resolver on the host (below), and they let through only names on the
-sandbox's allowlist. So with no policy file — whose built-in default is open —
-or with a policy that asks for `open`, the default becomes the **allowlist**
-and so does the ceiling; the startup line says so. A run adds the names it
+A Firecracker sandbox's egress is by name unless the operator offers open
+egress (below): everything a guest sends goes through sandboxd's proxy and
+resolver on the host, and they let through only names on the sandbox's
+allowlist. So without `--egress-open`, with no policy file — whose built-in
+default is open — or with a policy that asks for `open`, the default becomes
+the **allowlist** and so does the ceiling; the startup line says so. A run adds the names it
 needs with `--allow host` (`--allow '*.example.com'` for a domain and every
 name under it), and the built-in `may_allow: ["*"]` lets it add any. The
 `prod` profile always uses an allowlist.
@@ -453,6 +453,42 @@ that is refused is logged (`egress denied: …` in sandboxd's log). An agent run
 agent that cannot reach its model cannot run at all, so claude reaches
 api.anthropic.com, codex api.openai.com, and so on. Every other name has to be
 asked for, and under `prod` the built-in list of registries is off too.
+
+### Open egress
+
+`--egress-open` offers network mode `open`: a sandbox may then make TCP
+connections to any public address, on any port — `ssh` to a git host, a
+database, a site not on any list. The policy decides who gets it: set the
+ceiling to `open` and keep the default an allowlist, so a sandbox is open
+only when it asks (`sandbox-cli run --network open`, Open in Studio's
+launch page):
+
+```yaml
+network:
+  default:
+    mode: allowlist
+    allow: [api.anthropic.com, github.com]
+  ceiling: open
+```
+
+Open is the internet, not your network. A sandbox with open egress still
+cannot reach:
+
+- the host itself, on any of its addresses;
+- private networks (10/8, 172.16/12, 192.168/16), the shared range tailnets
+  and carrier NAT use (100.64/10), link-local addresses — where a cloud's
+  metadata service answers (169.254.169.254) — loopback, multicast and the
+  reserved ranges;
+- anything over UDP but DNS, or ICMP (`ping`). QUIC falls back to TCP.
+
+A `deny` list still applies, by name: a denied name does not resolve, and a
+connection to port 80 or 443 that names it is refused. A connection to an
+address the sandbox found some other way, naming nothing, is not.
+
+Without the flag nothing changes: a node that had no policy file stays on
+the allowlist, and a request for `open` is refused. Turning the flag off
+again leaves a sandbox that was kept across the restart with open egress
+with no network, rather than more than the node now offers.
 
 A machine shared by a team usually wants to choose what every run may reach:
 `packaging/systemd/policy.example.yaml` sets the default list, and
@@ -808,8 +844,16 @@ is one interface and one address, as before namespaces. In nftables table
 - the guest's DNS is redirected to a resolver in sandboxd. It answers
   allowlisted names with the host's address and refuses every other name. It
   forwards nothing, so DNS is not a way out;
+- with `--egress-open`, an `open` sandbox's TCP, every port, is redirected to a
+  forwarder in sandboxd, which connects from the host to where each
+  connection was going — if that is a public address and not the host's —
+  and its DNS to the same resolver, which answers it with real addresses
+  resolved on the host. Its guests are in the table's `egress_open` set,
+  allowlisted ones in `egress_on`;
 - everything else from the sandbox's interface is dropped, and nothing is
-  ever forwarded.
+  ever forwarded: open egress too leaves from sandboxd's own sockets, so it
+  needs no `ip_forward` and does not meet Docker's or another firewall's
+  forward rules.
 
 A sandbox started before namespaces, and taken back across the upgrade,
 keeps its tap in the host's namespace until it ends; it alone cannot be
@@ -825,14 +869,16 @@ its table is the only one. A connection to the proxy or resolver port that was
 *not* redirected is dropped, so neither is reachable from other machines.
 
 **The host ports.** The proxy listens on TCP 3128 and the resolver on UDP
-7353, on every host address (a connection that was not redirected is
-dropped, as above). If another program on the host already holds one —
-3128 is also Squid's port — sandboxd refuses to start and names the port;
-move it with `--egress-proxy-port` or `--egress-dns-port`. The guest never
-sees either: it sends to 53, 80 and 443 and is redirected.
+7353, and with `--egress-open` the forwarder on TCP 7354, on every host
+address (a connection that was not redirected is dropped, as above). If
+another program on the host already holds one — 3128 is also Squid's port —
+sandboxd refuses to start and names the port; move it with
+`--egress-proxy-port`, `--egress-dns-port` or `--egress-open-port`. The
+guest never sees any of them: it sends to the address it wants and is
+redirected.
 
 **What allowlist mode does not cover:** traffic that is not on tcp/80, tcp/443
-or DNS. `ssh` to a git host, for example, is dropped.
+or DNS. `ssh` to a git host, for example, is dropped; open egress carries it.
 
 ## Checking it works
 

@@ -74,6 +74,16 @@ func TestRunRefusesABadNodeID(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--egress-dns-port") {
 		t.Fatalf("--egress-dns-port out of range: %v", err)
 	}
+	// Open egress is the Firecracker backend's; elsewhere the flag is refused,
+	// never ignored.
+	err = run([]string{"--backend", "fake", "--egress-open", "--listen", "unix://" + filepath.Join(t.TempDir(), "s.sock")})
+	if err == nil || !strings.Contains(err.Error(), "--egress-open") {
+		t.Fatalf("--egress-open on the fake backend: %v", err)
+	}
+	err = run([]string{"--backend", "firecracker", "--egress-open-port", "-1", "--listen", "unix://" + filepath.Join(t.TempDir(), "s.sock")})
+	if err == nil || !strings.Contains(err.Error(), "--egress-open-port") {
+		t.Fatalf("--egress-open-port out of range: %v", err)
+	}
 }
 
 func TestMemTotalMB(t *testing.T) {

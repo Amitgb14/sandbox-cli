@@ -70,7 +70,8 @@ func TestNSRulesetGolden(t *testing.T) {
 
 // The host firewall, as text, because that is how it is reviewed.
 func TestRulesetGolden(t *testing.T) {
-	golden(t, "ruleset.nft", []byte(Ruleset("sandboxd", DefaultProxyPort, DefaultDNSPort)))
+	golden(t, "ruleset.nft", []byte(Ruleset("sandboxd", DefaultProxyPort, DefaultDNSPort, 0)))
+	golden(t, "ruleset-open.nft", []byte(Ruleset("sandboxd", DefaultProxyPort, DefaultDNSPort, DefaultOpenPort)))
 }
 
 // The proxy and the resolver bind every host address, so a default port that
@@ -82,7 +83,7 @@ func TestDefaultPortsAvoidHostServices(t *testing.T) {
 		53: "DNS", 67: "DHCP", 68: "DHCP", 123: "NTP", 323: "chronyd",
 		5353: "mDNS (avahi-daemon)", 5355: "LLMNR (systemd-resolved)",
 	}
-	for name, port := range map[string]int{"proxy": DefaultProxyPort, "dns": DefaultDNSPort} {
+	for name, port := range map[string]int{"proxy": DefaultProxyPort, "dns": DefaultDNSPort, "open": DefaultOpenPort} {
 		if s, ok := taken[port]; ok {
 			t.Errorf("default %s port %d is %s's", name, port, s)
 		}

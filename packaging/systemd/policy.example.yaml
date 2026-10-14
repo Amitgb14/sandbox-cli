@@ -32,5 +32,5 @@ network:
       - codeload.github.com
       - objects.githubusercontent.com
     deny: []
-  ceiling: allowlist      # requests may ask for allowlist or none
+  ceiling: allowlist      # requests may ask for allowlist or none; open (Firecracker: with sandboxd --egress-open) lets them ask for TCP to any public address
   may_allow: ["*"]        # names a request may add; [] allows only the default list

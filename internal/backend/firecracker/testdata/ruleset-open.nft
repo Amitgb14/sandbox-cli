@@ -1,0 +1,31 @@
+table inet sandboxd {
+	set egress_on {
+		type ipv4_addr
+	}
+	set egress_open {
+		type ipv4_addr
+	}
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname "sbx*" ip saddr @egress_on tcp dport { 80, 443 } redirect to :3128
+		iifname "sbx*" ip saddr @egress_on udp dport 53 redirect to :7353
+		iifname "sbx*" ip saddr @egress_open udp dport 53 redirect to :7353
+		iifname "sbx*" ip saddr @egress_open meta l4proto tcp redirect to :7354
+	}
+	chain input {
+		type filter hook input priority filter; policy accept;
+		iifname "sbx*" ct state established,related accept
+		iifname "sbx*" ct status dnat tcp dport 3128 accept
+		iifname "sbx*" ct status dnat udp dport 7353 accept
+		iifname "sbx*" ct status dnat tcp dport 7354 accept
+		iifname "sbx*" counter drop
+		tcp dport 3128 counter drop
+		udp dport 7353 counter drop
+		tcp dport 7354 counter drop
+	}
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		iifname "sbx*" counter drop
+		oifname "sbx*" counter drop
+	}
+}

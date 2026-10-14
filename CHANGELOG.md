@@ -287,6 +287,18 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **Open egress on Linux.** `sandboxd --egress-open` offers network mode
+  `open` on Firecracker: with the policy's ceiling at `open`, a sandbox that
+  asks for it (`run --network open`, Open in Studio) makes TCP connections to
+  any public address on any port — `ssh` to a git host included — and its DNS
+  answers with real addresses. It never reaches the host, private networks,
+  tailnet (100.64/10) or link-local addresses such as a cloud's metadata
+  service; UDP other than DNS and ICMP are not carried. `deny` still refuses
+  names. Traffic leaves from sandboxd's own sockets (a forwarder on TCP 7354,
+  `--egress-open-port`), so the host needs no `ip_forward`. Without the flag
+  nothing changes: Firecracker still narrows an open default or ceiling to
+  the allowlist, and a node turned back off gives a kept open sandbox no
+  network rather than more than it now offers.
 - **API keys in the SDKs.** The Python and TypeScript SDKs make, list and
   revoke the caller's personal API keys on a gateway (`create_api_key`,
   `api_keys`, `revoke_api_key`; `createAPIKey`, `apiKeys`, `revokeAPIKey`),

@@ -3,8 +3,10 @@
 package firecracker
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -38,6 +40,15 @@ import (
 // `none` guest is not, so its packets meet the drop), and the proxy and the
 // resolver hold its allowlist.
 //
+// Open egress (Open, sandboxd --egress-open) is the same shape with a third
+// listener. An `open` guest is in the egress_open set instead: all its TCP is
+// redirected to the forwarder (egressproxy.Forwarder), which connects from
+// the host to where each connection was going, if that is a public address
+// and not the host's; its DNS goes to the same resolver, which answers it
+// with real addresses. Still nothing is forwarded, so open egress needs no
+// ip_forward on the host and meets no other firewall's forward chain. UDP
+// other than DNS, and ICMP, are dropped as for every guest.
+//
 // Each VM has a network namespace of its own (sbx<n>), and its tap is in it.
 // A snapshot records the guest's address and its tap's name, so a fork must
 // find both again: every namespace has the same tap, tap0, and every guest
@@ -57,6 +68,11 @@ type Network struct {
 	// ProxyPort and DNSPort are where redirected traffic arrives on the host;
 	// zero means DefaultProxyPort and DefaultDNSPort.
 	ProxyPort, DNSPort int
+	// Open offers network mode open; the operator's choice, since a node
+	// whose policy names no network defaults to open (spec.DefaultPolicy).
+	// OpenPort is the forwarder's port; zero means DefaultOpenPort.
+	Open     bool
+	OpenPort int
 	// Subnet is the pool tap /30s are carved from; default 172.16.0.0/16.
 	Subnet *net.IPNet
 	Logf   func(format string, a ...any)
@@ -67,6 +83,11 @@ type Network struct {
 	byIP  map[string]*tap // guest IP -> tap
 	proxy *egressproxy.Server
 	dns   *egressproxy.DNS
+	fwd   *egressproxy.Forwarder
+	// listening are the proxy's, the resolver's and the forwarder's sockets,
+	// closed with the table, so a Network can be started again in the same
+	// process (the VM tests start one per test).
+	listening []io.Closer
 }
 
 // The host ports the proxy and the resolver listen on. They bind every
@@ -81,6 +102,13 @@ type Network struct {
 const (
 	DefaultProxyPort = 3128
 	DefaultDNSPort   = 7353
+	DefaultOpenPort  = 7354
+)
+
+// The host table's sets: the guests whose traffic is redirected, by mode.
+const (
+	setAllowlist = "egress_on"
+	setOpen      = "egress_open"
 )
 
 // tap is a sandbox's slot on the host's network. name is the host's
@@ -94,7 +122,10 @@ type tap struct {
 	mac   string
 	// ns is the VM's network namespace, "" for a VM from before them, whose
 	// tap is name itself in the host's namespace.
-	ns      string
+	ns string
+	// set is the host table's set the guest is in ("" for none); guarded by
+	// the Network's mu.
+	set     string
 	policy  atomic.Pointer[api.NetworkPolicy]
 	matcher atomic.Pointer[egressproxy.Matcher]
 }
@@ -170,6 +201,9 @@ func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 	if n.DNSPort == 0 {
 		n.DNSPort = DefaultDNSPort
 	}
+	if n.Open && n.OpenPort == 0 {
+		n.OpenPort = DefaultOpenPort
+	}
 	if n.Subnet == nil {
 		_, n.Subnet, _ = net.ParseCIDR("172.16.0.0/16")
 	}
@@ -181,27 +215,42 @@ func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 	n.byIP = map[string]*tap{}
 
 	byID := map[string]*tap{}
-	var allowed []string
+	sets := map[string][]string{}
 	for _, k := range kept {
 		t := n.tapAt(k.idx, k.ns)
 		pc := k.policy
+		if pc.Mode == api.NetworkOpen && !n.Open {
+			// Taken back by a sandboxd that no longer offers open egress: it
+			// gets none rather than more than the operator now allows.
+			n.Logf("network: sandbox %s had open egress, which this sandboxd does not offer (--egress-open): it has no network now", k.id)
+			pc = api.NetworkPolicy{Mode: api.NetworkNone}
+		}
 		t.policy.Store(&pc)
-		t.matcher.Store(egressproxy.NewPolicyMatcher(pc.Allow, pc.Deny))
+		t.matcher.Store(matcherFor(pc))
+		t.set = setFor(pc.Mode)
 		n.used[t.idx] = true
 		n.byIP[t.guest.String()] = t
 		byID[k.id] = t
-		if pc.Mode == api.NetworkAllowlist {
-			allowed = append(allowed, t.guest.String())
+		if t.set != "" {
+			sets[t.set] = append(sets[t.set], t.guest.String())
 		}
 	}
-	if err := n.installTable(allowed); err != nil {
+	if err := n.installTable(sets); err != nil {
 		return nil, err
 	}
+	// The proxy answers allowlisted guests only; the resolver answers open
+	// ones too, with real addresses (Open below).
 	matchFor := func(a net.Addr) *egressproxy.Matcher {
 		if t := n.lookup(a); t != nil && t.policy.Load().Mode == api.NetworkAllowlist {
 			return t.matcher.Load()
 		}
 		return nil
+	}
+	openFor := func(a net.Addr) (*egressproxy.Matcher, bool) {
+		if t := n.lookup(a); t != nil && n.Open && t.policy.Load().Mode == api.NetworkOpen {
+			return t.matcher.Load(), true
+		}
+		return nil, false
 	}
 	n.proxy = egressproxy.New(nil, func(d egressproxy.Decision) {
 		if !d.Allowed {
@@ -213,10 +262,23 @@ func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 	if err != nil {
 		return nil, fmt.Errorf("network: proxy: %w (if another program holds tcp port %d, move the proxy with --egress-proxy-port)", err, n.ProxyPort)
 	}
+	n.listening = append(n.listening, l)
 	go n.proxy.Serve(l)
 
 	n.dns = &egressproxy.DNS{
-		MatchFor: matchFor,
+		MatchFor: func(a net.Addr) *egressproxy.Matcher {
+			if m, ok := openFor(a); ok {
+				return m
+			}
+			return matchFor(a)
+		},
+		Open: func(a net.Addr) bool {
+			_, ok := openFor(a)
+			return ok
+		},
+		Resolve: func(name string) ([]net.IP, error) {
+			return net.DefaultResolver.LookupIP(context.Background(), "ip4", name)
+		},
 		Sinkhole: func(a net.Addr) net.IP {
 			if t := n.lookup(a); t != nil {
 				return t.host
@@ -234,7 +296,23 @@ func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 	if err != nil {
 		return nil, fmt.Errorf("network: dns: %w (if another program holds udp port %d, move the resolver with --egress-dns-port)", err, n.DNSPort)
 	}
+	n.listening = append(n.listening, pc)
 	go n.dns.ServeUDP(pc)
+	if n.Open {
+		n.fwd = egressproxy.NewForwarder(func(d egressproxy.Decision) {
+			if !d.Allowed {
+				n.Logf("%s", deniedLine(d))
+			}
+		})
+		n.fwd.For = openFor
+		ol, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", n.OpenPort))
+		if err != nil {
+			return nil, fmt.Errorf("network: open egress: %w (if another program holds tcp port %d, move it with --egress-open-port)", err, n.OpenPort)
+		}
+		n.listening = append(n.listening, ol)
+		go n.fwd.Serve(ol)
+		n.Logf("network: open egress offered: TCP to public addresses, through port %d", n.OpenPort)
+	}
 	n.sweepTaps()
 	return byID, nil
 }
@@ -312,25 +390,34 @@ func (n *Network) lookup(a net.Addr) *tap {
 }
 
 // Ruleset is the nftables table, rendered from the ports. A pure function, so
-// the rules are reviewed as text and pinned by test.
-func Ruleset(table string, proxyPort, dnsPort int) string {
+// the rules are reviewed as text and pinned by test. openPort 0 is a node
+// without open egress, whose table has no open set and no rule for it.
+func Ruleset(table string, proxyPort, dnsPort, openPort int) string {
+	var openSet, openRedirect, openInput, openDrop string
+	if openPort > 0 {
+		openSet = fmt.Sprintf("\n\tset %s {\n\t\ttype ipv4_addr\n\t}", setOpen)
+		openRedirect = fmt.Sprintf("\n\t\tiifname \"sbx*\" ip saddr @%[1]s udp dport 53 redirect to :%[2]d"+
+			"\n\t\tiifname \"sbx*\" ip saddr @%[1]s meta l4proto tcp redirect to :%[3]d", setOpen, dnsPort, openPort)
+		openInput = fmt.Sprintf("\n\t\tiifname \"sbx*\" ct status dnat tcp dport %d accept", openPort)
+		openDrop = fmt.Sprintf("\n\t\ttcp dport %d counter drop", openPort)
+	}
 	return fmt.Sprintf(`table inet %[1]s {
 	set egress_on {
 		type ipv4_addr
-	}
+	}%[4]s
 	chain prerouting {
 		type nat hook prerouting priority dstnat; policy accept;
 		iifname "sbx*" ip saddr @egress_on tcp dport { 80, 443 } redirect to :%[2]d
-		iifname "sbx*" ip saddr @egress_on udp dport 53 redirect to :%[3]d
+		iifname "sbx*" ip saddr @egress_on udp dport 53 redirect to :%[3]d%[5]s
 	}
 	chain input {
 		type filter hook input priority filter; policy accept;
 		iifname "sbx*" ct state established,related accept
 		iifname "sbx*" ct status dnat tcp dport %[2]d accept
-		iifname "sbx*" ct status dnat udp dport %[3]d accept
+		iifname "sbx*" ct status dnat udp dport %[3]d accept%[6]s
 		iifname "sbx*" counter drop
 		tcp dport %[2]d counter drop
-		udp dport %[3]d counter drop
+		udp dport %[3]d counter drop%[7]s
 	}
 	chain forward {
 		type filter hook forward priority filter; policy accept;
@@ -338,7 +425,7 @@ func Ruleset(table string, proxyPort, dnsPort int) string {
 		oifname "sbx*" counter drop
 	}
 }
-`, table, proxyPort, dnsPort)
+`, table, proxyPort, dnsPort, openSet, openRedirect, openInput, openDrop)
 }
 
 // NSRuleset is the table in each VM's namespace, rendered from the slot's
@@ -376,10 +463,10 @@ func NSRuleset(hostIP string) string {
 }
 
 // installTable replaces whatever table an earlier sandboxd left with this
-// one's, and puts the guests in allowed in its egress set (installScript).
-func (n *Network) installTable(allowed []string) error {
+// one's, and puts the guests in sets in its sets (installScript).
+func (n *Network) installTable(sets map[string][]string) error {
 	cmd := exec.Command("nft", "-f", "-")
-	cmd.Stdin = strings.NewReader(installScript(n.table, n.ProxyPort, n.DNSPort, allowed))
+	cmd.Stdin = strings.NewReader(installScript(n.table, n.ProxyPort, n.DNSPort, n.OpenPort, sets))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("network: installing the nftables table: %v: %s", err, out)
 	}
@@ -388,22 +475,29 @@ func (n *Network) installTable(allowed []string) error {
 
 // installScript is one nft transaction: declare the table (so the delete
 // cannot fail when there is none), delete it, add it afresh, and put the
-// guests in allowed in its egress set. nft -f applies a file atomically, so
-// no packet meets a missing table or an empty set: a VM taken back keeps its
-// egress through the restart, and one that was refused it stays refused.
-func installScript(table string, proxyPort, dnsPort int, allowed []string) string {
+// guests in sets in its sets. nft -f applies a file atomically, so no packet
+// meets a missing table or an empty set: a VM taken back keeps its egress
+// through the restart, and one that was refused it stays refused.
+func installScript(table string, proxyPort, dnsPort, openPort int, sets map[string][]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s\ndelete table inet %s\n", table, table)
-	b.WriteString(Ruleset(table, proxyPort, dnsPort))
-	if len(allowed) > 0 {
-		fmt.Fprintf(&b, "add element inet %s egress_on { %s }\n", table, strings.Join(allowed, ", "))
+	b.WriteString(Ruleset(table, proxyPort, dnsPort, openPort))
+	for _, set := range []string{setAllowlist, setOpen} {
+		if len(sets[set]) > 0 {
+			fmt.Fprintf(&b, "add element inet %s %s { %s }\n", table, set, strings.Join(sets[set], ", "))
+		}
 	}
 	return b.String()
 }
 
-// Close removes the table. Sandboxes still running lose their network.
+// Close removes the table and stops listening. Sandboxes still running lose
+// their network.
 func (n *Network) Close() {
 	_ = run("nft", "delete", "table", "inet", n.table)
+	for _, c := range n.listening {
+		_ = c.Close()
+	}
+	n.listening = nil
 }
 
 // attach creates a sandbox's namespace, its tap and the veth to the host, and
@@ -505,33 +599,87 @@ func (n *Network) tapAt(idx int, ns bool) *tap {
 	return t
 }
 
-// update applies a policy to a running sandbox. The allowlist is swapped in one
-// pointer store; the nftables set change is one atomic transaction. Neither has
-// a moment where the sandbox is less restricted than both the old and the new
-// policy — when tightening, the set change comes first.
+// update applies a policy to a running sandbox. The policy is swapped in one
+// pointer store, and the proxy, the resolver and the forwarder each check
+// the mode on every connection, so they hold the new policy from that
+// moment; the nftables set change (moving the guest from one set to another)
+// is one atomic transaction after it. Neither has a moment where the sandbox
+// is less restricted than both the old and the new policy.
 func (n *Network) update(t *tap, p api.NetworkPolicy) error {
 	switch p.Mode {
 	case api.NetworkNone, api.NetworkAllowlist:
+	case api.NetworkOpen:
+		if !n.Open {
+			return errors.New("network mode open is not offered by this sandboxd (--egress-open)")
+		}
 	default:
 		return fmt.Errorf("network mode %q is not supported by this backend", p.Mode)
 	}
 	pc := p
-	m := egressproxy.NewPolicyMatcher(p.Allow, p.Deny)
-	if p.Mode == api.NetworkNone {
-		if err := run("nft", "delete", "element", "inet", n.table, "egress_on", "{", t.guest.String(), "}"); err != nil && !strings.Contains(err.Error(), "No such file") {
-			n.Logf("network: %s: %v", t.name, err)
-		}
-		t.policy.Store(&pc)
-		t.matcher.Store(m)
+	t.matcher.Store(matcherFor(pc))
+	t.policy.Store(&pc)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.moveLocked(t, setFor(p.Mode))
+}
+
+// moveLocked puts the guest in set ("" for none) and out of the one it was
+// in, in one nft transaction. n.mu is held.
+func (n *Network) moveLocked(t *tap, set string) error {
+	if t.set == set {
 		return nil
 	}
-	t.matcher.Store(m)
-	t.policy.Store(&pc)
-	return run("nft", "add", "element", "inet", n.table, "egress_on", "{", t.guest.String(), "}")
+	script := setMove(n.table, t.guest.String(), t.set, set)
+	cmd := exec.Command("nft", "-f", "-")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("network: %s: %v: %s", t.name, err, strings.TrimSpace(string(out)))
+	}
+	t.set = set
+	return nil
+}
+
+// setMove is the nft transaction moving guest from set from to set to, either
+// of which may be "" (in none).
+func setMove(table, guest, from, to string) string {
+	var b strings.Builder
+	if from != "" {
+		fmt.Fprintf(&b, "delete element inet %s %s { %s }\n", table, from, guest)
+	}
+	if to != "" {
+		fmt.Fprintf(&b, "add element inet %s %s { %s }\n", table, to, guest)
+	}
+	return b.String()
+}
+
+// setFor is the host table's set for a network mode: "" for none.
+func setFor(mode string) string {
+	switch mode {
+	case api.NetworkAllowlist:
+		return setAllowlist
+	case api.NetworkOpen:
+		return setOpen
+	}
+	return ""
+}
+
+// matcherFor is a policy's names: its allowlist, or under open every name
+// but its deny list.
+func matcherFor(p api.NetworkPolicy) *egressproxy.Matcher {
+	if p.Mode == api.NetworkOpen {
+		return egressproxy.NewDenyMatcher(p.Deny)
+	}
+	return egressproxy.NewPolicyMatcher(p.Allow, p.Deny)
 }
 
 func (n *Network) detach(t *tap) {
-	_ = run("nft", "delete", "element", "inet", n.table, "egress_on", "{", t.guest.String(), "}")
+	none := api.NetworkPolicy{Mode: api.NetworkNone}
+	t.policy.Store(&none)
+	n.mu.Lock()
+	if err := n.moveLocked(t, ""); err != nil {
+		n.Logf("%v", err)
+	}
+	n.mu.Unlock()
 	n.removeNamespace(t)
 	n.release(t)
 }

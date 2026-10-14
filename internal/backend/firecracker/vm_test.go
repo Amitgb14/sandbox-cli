@@ -239,7 +239,7 @@ func newTestBackend(t *testing.T, fc, kernel, agent, state string, puller *image
 		Logf:     func(f string, a ...any) { t.Logf(f, a...) },
 	}
 	if os.Getenv("SANDBOX_TEST_NETWORK") == "1" {
-		cfg.Network = &Network{Logf: cfg.Logf}
+		cfg.Network = &Network{Logf: cfg.Logf, Open: true}
 	}
 	if j := os.Getenv("SANDBOX_TEST_JAILER"); j != "" {
 		cfg.Jailer = &Jailer{Path: j, ChrootBase: filepath.Join(state, "jail"), UIDBase: 900000}
@@ -337,4 +337,80 @@ func TestVMEgress(t *testing.T) {
 	}
 	probe("after the update to none, nothing resolves", "getent hosts github.com", false)
 	probe("after the update to none, nothing connects", "curl -s -m 5 -o /dev/null --resolve github.com:443:1.1.1.1 https://github.com/", false)
+}
+
+// TestVMOpenEgress checks open egress from inside a real guest: any public
+// address on any port is reached, names resolve to their real addresses, and
+// the host, private networks and link-local addresses (a cloud's metadata
+// service) are not; a denied name neither resolves nor connects. A live
+// update to allowlist puts it back behind the proxy.
+//
+// Needs root, SANDBOX_TEST_NETWORK=1, SANDBOX_TEST_INTERNET=1 (the probes
+// that should connect need a route out) and an image with curl and getent.
+func TestVMOpenEgress(t *testing.T) {
+	kernel := os.Getenv("SANDBOX_TEST_KERNEL")
+	fc := os.Getenv("SANDBOX_TEST_FIRECRACKER")
+	if kernel == "" || fc == "" || os.Getenv("SANDBOX_TEST_NETWORK") != "1" || os.Getenv("SANDBOX_TEST_INTERNET") != "1" || os.Getenv("SANDBOX_TEST_IMAGE") == "" {
+		t.Skip("set SANDBOX_TEST_KERNEL, SANDBOX_TEST_FIRECRACKER, SANDBOX_TEST_NETWORK=1, SANDBOX_TEST_INTERNET=1 and SANDBOX_TEST_IMAGE")
+	}
+	state, _ := os.MkdirTemp("", "fcopen")
+	t.Cleanup(func() { os.RemoveAll(state) })
+	agent := filepath.Join(state, "sandbox-guestd")
+	build := exec.Command("go", "build", "-trimpath", "-o", agent, "../../../cmd/sandbox-guestd")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	be := newTestBackend(t, fc, kernel, agent, state, &image.Puller{Cache: filepath.Join(os.TempDir(), "sandbox-test-images")})
+	if !be.Capabilities()[api.CapEgressOpen] {
+		t.Fatal("a networked backend with Open does not offer egress_open")
+	}
+	ctx := context.Background()
+	id := spec.NewID()
+	if err := be.Create(ctx, backend.Spec{
+		ID: id, Image: os.Getenv("SANDBOX_TEST_IMAGE"), CPUs: 1, MemoryMB: 512, DiskMB: 1024,
+		Network: api.NetworkPolicy{Mode: api.NetworkOpen, Deny: []string{"example.com"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sh := func(script string) (string, int) {
+		var out bytes.Buffer
+		p, err := be.Start(ctx, id, backend.ProcSpec{Argv: []string{"sh", "-c", script}}, &out, &out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Stdin().Close()
+		code := p.Wait()
+		return strings.TrimSpace(out.String()), code
+	}
+	probe := func(name, script string, wantOK bool) {
+		t.Helper()
+		out, code := sh(script)
+		if (code == 0) != wantOK {
+			t.Errorf("%s: exit %d, want success=%v\n%s", name, code, wantOK, out)
+		} else {
+			t.Logf("%s: exit %d as expected", name, code)
+		}
+	}
+	v, _ := be.get(id)
+	host := v.net.host.String()
+
+	probe("a name resolves to a public address, not the host's", "getent hosts github.com | grep -v '^172\\.'", true)
+	probe("HTTPS to any name", "curl -sS -m 10 -o /dev/null https://www.wikipedia.org/", true)
+	probe("a port other than 80 and 443 (ssh)", "timeout 10 bash -c 'exec 3<>/dev/tcp/github.com/22 && head -c 4 <&3' | grep -q SSH", true)
+	probe("TLS to a bare address", "curl -sk -m 10 -o /dev/null https://1.1.1.1/", true)
+	probe("a denied name does not resolve", "getent hosts example.com", false)
+	probe("a denied name is refused when dialled by address", "curl -s -m 5 -o /dev/null --resolve example.com:443:1.1.1.1 https://example.com/", false)
+	probe("a cloud's metadata service", "curl -s -m 5 -o /dev/null http://169.254.169.254/", false)
+	probe("a private network", "timeout 5 bash -c 'echo > /dev/tcp/192.168.1.1/80'", false)
+	probe("the host, at its slot address", "timeout 5 bash -c 'echo > /dev/tcp/"+host+"/22'", false)
+	probe("the host's proxy port", "timeout 5 bash -c 'echo > /dev/tcp/"+host+"/3128'", false)
+
+	// A live update to allowlist: the guest is behind the proxy again.
+	if err := be.UpdateNetwork(ctx, id, api.NetworkPolicy{Mode: api.NetworkAllowlist, Allow: []string{"github.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	probe("after the update to allowlist, an unlisted name does not resolve", "getent hosts www.wikipedia.org", false)
+	probe("after the update to allowlist, other ports go nowhere", "timeout 5 bash -c 'echo > /dev/tcp/1.1.1.1/22'", false)
+	probe("after the update to allowlist, a listed name connects", "curl -sS -m 10 -o /dev/null https://github.com/", true)
 }

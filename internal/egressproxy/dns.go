@@ -7,15 +7,21 @@ import (
 	"strings"
 )
 
-// DNS is the resolver a sandbox's guest is given. It never forwards a query —
-// nothing leaves the host on a guest's behalf over DNS — so DNS is not an
-// exfiltration channel, however a name is spelled.
+// DNS is the resolver a sandbox's guest is given. For a sandbox under an
+// allowlist it never forwards a query — nothing leaves the host on its behalf
+// over DNS — so DNS is not an exfiltration channel, however a name is spelled.
 //
 // An allowlisted name is answered with Sinkhole(remote): an address on the
 // host, which is enough, because the guest's tcp/80 and tcp/443 are redirected
 // to the proxy whatever their destination, and the proxy resolves the real
 // address itself, freshly, by name. Any other name is NXDOMAIN. AAAA and every
 // other type get an empty answer, so clients fall back to the A record.
+//
+// A sandbox with open egress is the exception (Open): it may connect to any
+// public address, so it is told the real ones. A permitted name — any but its
+// deny list — is resolved on the host and answered with up to maxAnswers A
+// records. That does forward the name, which open egress allows anyway: the
+// sandbox could as well connect to a resolver of its own over TCP.
 type DNS struct {
 	// MatchFor picks the allowlist by the querying address; nil means no answer
 	// for anything.
@@ -25,7 +31,15 @@ type DNS struct {
 	Sinkhole func(remote net.Addr) net.IP
 	// Log receives one line per refused name.
 	Log func(Decision)
+	// Open, when it reports true for the querier, answers with the name's
+	// real addresses from Resolve rather than the sinkhole.
+	Open    func(remote net.Addr) bool
+	Resolve func(name string) ([]net.IP, error)
 }
+
+// maxAnswers bounds an open answer to the 512 bytes of a UDP reply: the
+// question is at most 259 and each record 16.
+const maxAnswers = 8
 
 // ServeUDP answers queries on pc until it is closed.
 func (d *DNS) ServeUDP(pc net.PacketConn) error {
@@ -87,11 +101,37 @@ func (d *DNS) answer(q []byte, remote net.Addr) []byte {
 	if qtype != typeA {
 		return reply(id, flags, rcodeOK, question, nil, 0, nil) // exists, no record of this type
 	}
+	if d.Open != nil && d.Open(remote) {
+		return d.resolved(id, flags, question, name)
+	}
 	ip := d.Sinkhole(remote).To4()
 	if ip == nil {
 		return reply(id, flags, rcodeFail, question, nil, 0, nil)
 	}
-	return reply(id, flags, rcodeOK, question, ip, typeA, nil)
+	return reply(id, flags, rcodeOK, question, []net.IP{ip}, typeA, nil)
+}
+
+// resolved answers an open sandbox's query with the name's IPv4 addresses,
+// NXDOMAIN when it has none, SERVFAIL when the host could not resolve it.
+func (d *DNS) resolved(id []byte, flags uint16, question []byte, name string) []byte {
+	if d.Resolve == nil {
+		return reply(id, flags, rcodeFail, question, nil, 0, nil)
+	}
+	ips, err := d.Resolve(name)
+	if err != nil {
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return reply(id, flags, rcodeNX, question, nil, 0, nil)
+		}
+		return reply(id, flags, rcodeFail, question, nil, 0, nil)
+	}
+	var v4 []net.IP
+	for _, ip := range ips {
+		if a := ip.To4(); a != nil && len(v4) < maxAnswers {
+			v4 = append(v4, a)
+		}
+	}
+	return reply(id, flags, rcodeOK, question, v4, typeA, nil)
 }
 
 // parseQuestion reads one question: an uncompressed name, type and class.
@@ -128,9 +168,9 @@ func parseQuestion(b []byte, off int) (name string, qtype, qclass uint16, end in
 	return strings.ToLower(strings.Join(labels, ".")), qtype, qclass, off + 4, nil
 }
 
-// reply assembles a response: the question echoed, and at most one A record
-// pointing back at it.
-func reply(id []byte, qflags uint16, rcode int, question []byte, ip net.IP, typ uint16, _ []byte) []byte {
+// reply assembles a response: the question echoed, and an A record for each
+// of ips.
+func reply(id []byte, qflags uint16, rcode int, question []byte, ips []net.IP, typ uint16, _ []byte) []byte {
 	out := make([]byte, 12, 64)
 	copy(out[0:2], id)
 	flags := uint16(0x8000)  // QR
@@ -142,8 +182,10 @@ func reply(id []byte, qflags uint16, rcode int, question []byte, ip net.IP, typ 
 		binary.BigEndian.PutUint16(out[4:6], 1)
 		out = append(out, question...)
 	}
-	if ip != nil {
-		binary.BigEndian.PutUint16(out[6:8], 1)
+	if len(ips) > 0 {
+		binary.BigEndian.PutUint16(out[6:8], uint16(len(ips)))
+	}
+	for _, ip := range ips {
 		out = append(out, 0xC0, 0x0C) // the question's name
 		out = binary.BigEndian.AppendUint16(out, typ)
 		out = binary.BigEndian.AppendUint16(out, classIN)

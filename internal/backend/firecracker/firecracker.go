@@ -280,6 +280,7 @@ func (b *Backend) Capabilities() map[string]bool {
 	return map[string]bool{
 		api.CapNetworkPolicyUpdate: net,
 		api.CapEgressAllowlist:     net,
+		api.CapEgressOpen:          net && b.cfg.Network.Open,
 		api.CapSuspend:             true,
 		api.CapMemorySnapshot:      true,
 		api.CapTunnel:              true,

@@ -70,6 +70,15 @@ type Matcher struct {
 	exact    map[string]bool
 	suffixes []string // ".example.com" for a "*.example.com" pattern
 	deny     *Matcher // names refused even when allowed: deny wins
+	all      bool     // every name is allowed but deny's (open egress)
+}
+
+// NewDenyMatcher allows every name except those deny matches: the names of
+// open egress.
+func NewDenyMatcher(deny []string) *Matcher {
+	m := NewPolicyMatcher(nil, deny)
+	m.all = true
+	return m
 }
 
 // NewPolicyMatcher is NewMatcher with a deny list that wins over the allowlist,
@@ -111,7 +120,7 @@ func (m *Matcher) Allows(host string) bool {
 	if m.deny != nil && m.deny.Allows(h) {
 		return false
 	}
-	if m.exact[h] {
+	if m.all || m.exact[h] {
 		return true
 	}
 	for _, suf := range m.suffixes {

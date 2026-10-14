@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 )
 
@@ -30,17 +31,39 @@ func TestParseStatStart(t *testing.T) {
 	}
 }
 
-// One transaction: declare, delete and re-add the table, then the kept guests.
+// One transaction: declare, delete and re-add the table, then the kept guests,
+// each in its mode's set.
 func TestInstallScript(t *testing.T) {
-	got := installScript("sandboxd", 3128, 7353, []string{"172.16.0.2", "172.16.0.6"})
-	if !strings.HasPrefix(got, "table inet sandboxd\ndelete table inet sandboxd\n"+Ruleset("sandboxd", 3128, 7353)) {
+	got := installScript("sandboxd", 3128, 7353, 7354, map[string][]string{
+		setAllowlist: {"172.16.0.2", "172.16.0.6"},
+		setOpen:      {"172.16.0.10"},
+	})
+	if !strings.HasPrefix(got, "table inet sandboxd\ndelete table inet sandboxd\n"+Ruleset("sandboxd", 3128, 7353, 7354)) {
 		t.Fatalf("the script does not replace the table first:\n%s", got)
 	}
-	if !strings.HasSuffix(got, "add element inet sandboxd egress_on { 172.16.0.2, 172.16.0.6 }\n") {
+	if !strings.HasSuffix(got, "add element inet sandboxd egress_on { 172.16.0.2, 172.16.0.6 }\n"+
+		"add element inet sandboxd egress_open { 172.16.0.10 }\n") {
 		t.Fatalf("kept guests not added in the same script:\n%s", got)
 	}
-	if strings.Contains(installScript("sandboxd", 3128, 7353, nil), "add element") {
+	if strings.Contains(installScript("sandboxd", 3128, 7353, 0, nil), "add element") {
 		t.Fatal("an element line with no guests")
+	}
+}
+
+// A mode change moves the guest between sets in one transaction, and to none
+// takes it out of every set.
+func TestSetMove(t *testing.T) {
+	for _, c := range []struct{ from, to, want string }{
+		{"", setAllowlist, "add element inet sandboxd egress_on { 172.16.0.2 }\n"},
+		{setAllowlist, setOpen, "delete element inet sandboxd egress_on { 172.16.0.2 }\nadd element inet sandboxd egress_open { 172.16.0.2 }\n"},
+		{setOpen, "", "delete element inet sandboxd egress_open { 172.16.0.2 }\n"},
+	} {
+		if got := setMove("sandboxd", "172.16.0.2", c.from, c.to); got != c.want {
+			t.Errorf("%q -> %q:\n%s", c.from, c.to, got)
+		}
+	}
+	if setFor(api.NetworkNone) != "" || setFor(api.NetworkAllowlist) != setAllowlist || setFor(api.NetworkOpen) != setOpen || setFor("bogus") != "" {
+		t.Error("setFor")
 	}
 }
 
