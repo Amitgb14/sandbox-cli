@@ -34,7 +34,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newResizeCmd())
 	root.AddCommand(newUpdateCmd())
 	root.AddCommand(newAgentGroupCmd(), newVolumeCmd(), newImageCmd(), newTemplateCmd(), newStudioCmd())
-	root.AddCommand(newSSHCmd(), newSSHKeyCmd(), newSSHAccessCmd(), newWhoamiCmd())
+	root.AddCommand(newSSHCmd(), newSSHKeyCmd(), newSSHAccessCmd(), newWhoamiCmd(), newAPIKeyCmd())
 	root.AddCommand(newGatewayCmd())
 	root.AddCommand(newJobCmd(), newAgentRunCmd(), newSecretCmd(), newRegistryCmd())
 	root.AddCommand(newServiceCmd(), newOrgCmd())

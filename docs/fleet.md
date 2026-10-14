@@ -677,8 +677,19 @@ sandbox-gateway --state-dir … serve … \
 ### Personal API keys
 
 A user makes keys of their own for their programs — a CI job, a script, the
-CLI on another machine — under **API keys** in Studio's sidebar, or with
-`POST /v1/keys` ([api/v1.md](api/v1.md#personal-api-keys)). Signed in with
+CLI on another machine — under **API keys** in Studio's sidebar, with
+`sandbox-cli api-key`, or with `POST /v1/keys`
+([api/v1.md](api/v1.md#personal-api-keys)).
+
+```sh
+sandbox-cli api-key create ci --scope sandbox:read --scope sandbox:create --expires 90d
+sandbox-cli api-key create laptop --scope sandbox:read --out ~/.config/sandbox/laptop.key
+sandbox-cli api-key list
+sandbox-cli api-key revoke KEY_ID
+```
+
+`--out` writes the secret to a new file (mode 0600) instead of printing it,
+ready for `context add … --token-file`. Signed in with
 a password, that is how a person gets a key at all without asking an admin,
 and without handing their password to a program.
 
