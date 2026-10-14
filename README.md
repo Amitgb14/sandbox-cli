@@ -58,7 +58,7 @@ sandbox-cli run --detach --name dev -- sleep infinity
 sandbox-cli shell dev               # a shell in a running sandbox; exit leaves it running
 sandbox-cli exec dev -- git clone https://github.com/you/app   # one command in it; its exit code is yours
 sandbox-cli list · logs ID · attach ID · kill ID
-sandbox-cli snapshot · suspend · resume · tunnel
+sandbox-cli snapshot · snapshot-ls · snapshot-rm · suspend · resume · tunnel
 sandbox-cli events ID                # what the sandbox was asked to do, and how it ended
 sandbox-cli volume create cache; sandbox-cli run --volume cache:/sandbox/home/.cache -- npm ci
 sandbox-cli run --label team=infra -- make; sandbox-cli list --label team=infra

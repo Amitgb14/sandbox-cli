@@ -123,6 +123,8 @@ Global flags:
 | [`sandbox-cli service scale`](#sandbox-cli-service-scale) | Set how many replicas a service keeps |
 | [`sandbox-cli shell`](#sandbox-cli-shell) | Open an interactive shell in a running sandbox |
 | [`sandbox-cli snapshot`](#sandbox-cli-snapshot) | Capture a sandbox; start forks of it with run --from-snapshot |
+| [`sandbox-cli snapshot-ls`](#sandbox-cli-snapshot-ls) | List snapshots, newest first |
+| [`sandbox-cli snapshot-rm`](#sandbox-cli-snapshot-rm) | Delete snapshots; sandboxes already started from them keep running |
 | [`sandbox-cli snapshot-schedule`](#sandbox-cli-snapshot-schedule) | Snapshot a running sandbox on a schedule, keeping the newest few |
 | [`sandbox-cli ssh`](#sandbox-cli-ssh) | Open an SSH session to a sandbox through a gateway (or a shell over the API on a plain sandboxd) |
 | [`sandbox-cli ssh-access`](#sandbox-cli-ssh-access) | Print a short-lived ssh command for one sandbox, needing no registered key |
@@ -1761,6 +1763,41 @@ Capture a sandbox; start forks of it with run --from-snapshot.
 
 ```text
 sandbox-cli snapshot SANDBOX [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which sandboxd to use |
+
+## sandbox-cli snapshot-ls
+
+List snapshots, newest first.
+
+```text
+sandbox-cli snapshot-ls [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which sandboxd to use |
+
+## sandbox-cli snapshot-rm
+
+Delete snapshots; sandboxes already started from them keep running.
+
+```text
+sandbox-cli snapshot-rm SNAPSHOT... [flags]
+```
+
+Examples:
+
+```sh
+sandbox-cli snapshot-rm snp_0f80da1e250655e9
+sandbox-cli snapshot-ls
 ```
 
 Flags:
