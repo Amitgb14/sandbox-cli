@@ -87,7 +87,12 @@ run)
   while [ $# -gt 0 ]; do
     case "$1" in --name) id=$2; shift 2 ;; --) shift; break ;; *) shift ;; esac
   done
-  cp -a "$FAKE_TEMPLATE" "$FAKE_ROOT/$id"
+  # The image is the first argument after --: a snapshot image loaded below
+  # runs its own files, anything else the template's.
+  src="$FAKE_TEMPLATE"
+  snap="$FAKE_ROOT/.snapshots/$(echo "$1" | tr '/:' '__')"
+  [ -d "$snap" ] && src="$snap"
+  cp -a "$src" "$FAKE_ROOT/$id"
   mkdir -p "$FAKE_ROOT/$id/.sbx" "$FAKE_ROOT/$id/sandbox/home" "$FAKE_ROOT/$id/tmp"
   cp "$FAKE_AGENT" "$FAKE_ROOT/$id/.sbx/sandbox-guestd"
   echo "$id" ;;
@@ -98,6 +103,16 @@ exec)
 rm)
   shift # --force
   rm -rf "$FAKE_ROOT/$1" ;;
+stats)
+  # One entry per sandbox, idle: the backend's sampler only needs the shape.
+  printf '['; sep=''
+  for d in "$FAKE_ROOT"/sbx_*; do
+    [ -d "$d" ] || continue
+    printf '%s{"id":"%s","cpuUsageUsec":0,"memoryUsageBytes":1048576,"memoryLimitBytes":1073741824,"numProcesses":1}' "$sep" "${d##*/}"; sep=','
+  done
+  printf ']\n' ;;
+export)
+  tar -C "$FAKE_ROOT/$1" -cf - . ;;
 image)
   # The runtime's image store, one name a line: run adds what it runs, pull
   # adds, delete removes and fails on a name it does not have.
@@ -108,10 +123,26 @@ image)
     while read -r n; do printf '%s{"configuration":{"name":"%s"}}' "$sep" "$n"; sep=','; done < "$db"
     printf ']\n' ;;
   pull) grep -qxF "$1" "$db" || echo "$1" >> "$db" ;;
+  inspect)
+    # Every image is linux/arm64 here, which is what a snapshot looks for.
+    echo '[{"variants":[{"config":{"architecture":"arm64","os":"linux","config":{"Env":["PATH=/usr/bin:/bin"],"WorkingDir":"/"}},"platform":{"architecture":"arm64","os":"linux"}}]}]' ;;
+  load)
+    # A snapshot's archive: its first entry is the one layer, and index.json
+    # names the image. The layer is unpacked where run looks for it.
+    [ "$1" = --input ] && shift
+    tmp=$(mktemp -d)
+    tar -xf "$1" -C "$tmp"
+    ref=$(grep -o '"org.opencontainers.image.ref.name":"[^"]*"' "$tmp/index.json" | cut -d'"' -f4)
+    snap="$FAKE_ROOT/.snapshots/$(echo "$ref" | tr '/:' '__')"
+    mkdir -p "$snap"
+    tar -xf "$tmp/$(tar -tf "$1" | head -n 1)" -C "$snap"
+    rm -rf "$tmp"
+    grep -qxF "$ref" "$db" || echo "$ref" >> "$db" ;;
   delete)
     [ "$1" = --force ] && shift
     grep -qxF "$1" "$db" || { echo "image $1 not found" >&2; exit 1; }
-    grep -vxF "$1" "$db" > "$db.new" || true; mv "$db.new" "$db" ;;
+    grep -vxF "$1" "$db" > "$db.new" || true; mv "$db.new" "$db"
+    rm -rf "$FAKE_ROOT/.snapshots/$(echo "$1" | tr '/:' '__')" ;;
   esac ;;
 esac
 `
