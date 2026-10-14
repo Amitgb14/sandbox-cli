@@ -100,6 +100,9 @@ export interface KeyInfo {
   /** Revoked, and restorable until restore_until (POST …/restore). */
   suspended?: boolean;
   restore_until?: string;
+  /** A key its user made for themselves (POST /v1/keys), named name; it ends with their account. */
+  personal?: boolean;
+  name?: string;
 }
 
 /** A sign-up link not yet used (docs/fleet.md#accounts); its token is shown once. */

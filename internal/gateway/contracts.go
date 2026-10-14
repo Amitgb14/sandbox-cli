@@ -110,6 +110,12 @@ type Key struct {
 	// to the account key it names, with that key's user and scopes, and
 	// never outliving it.
 	Parent string `json:"parent,omitempty"`
+	// Personal, with Parent, makes this a key its user made for themselves
+	// (keys_personal.go) under the key or account Parent names: cut off
+	// with it like a sign-in's, but not ended by a sign-out or a new
+	// password. Name is what its user called it.
+	Personal bool   `json:"personal,omitempty"`
+	Name     string `json:"name,omitempty"`
 	// RestoreUntil, on a revoked key, makes it a suspended one
 	// (keys_suspend.go): refused like any revoked key, and restorable until
 	// then. Past it, the revocation is for good.

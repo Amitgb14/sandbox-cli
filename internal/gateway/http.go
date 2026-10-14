@@ -138,6 +138,10 @@ func (g *Gateway) Handler() http.Handler {
 
 	g.jobRoutes(route) // jobs, agent runs, secrets (jobs.go)
 
+	route("POST /v1/keys", false, g.createPersonalKey)
+	route("GET /v1/keys", false, g.listPersonalKeys)
+	route("DELETE /v1/keys/{id}", false, g.revokePersonalKey)
+
 	route("POST /v1/admin/keys", false, g.adminCreateKey)
 	route("GET /v1/admin/keys", false, g.adminListKeys)
 	route("DELETE /v1/admin/keys/{id}", false, g.adminRevokeKey)

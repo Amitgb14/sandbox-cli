@@ -30,6 +30,7 @@ import {
   useResetPassword,
   useRevokeInvite,
   useRestoreKey,
+  useRevokeKey,
   useSetKeyExpiry,
   useUserSSHKeys,
   type CreatedInvite,
@@ -114,6 +115,7 @@ function Keys() {
   const [revoking, setRevoking] = useState<KeyInfo | null>(null);
   const assign = useAssignPolicy();
   const renew = useSetKeyExpiry();
+  const revokeNow = useRevokeKey();
   const reset = useResetPassword();
   const canEmail = useInvites().data?.canEmail ?? false;
   const [created, setCreated] = useState<CreatedKey | null>(null);
@@ -206,6 +208,11 @@ function Keys() {
                 <TableCell className="text-sm">
                   {k.user}
                   <div className="font-mono text-[11px] text-muted-foreground">{k.id}</div>
+                  {k.personal ? (
+                    <div className="text-xs text-muted-foreground" data-testid={`personal-${k.id}`}>
+                      personal key · {k.name}
+                    </div>
+                  ) : null}
                   {k.email ? (
                     <div className="text-xs text-muted-foreground" data-testid={`account-${k.user}`}>
                       {k.email}
@@ -234,6 +241,8 @@ function Keys() {
                 <TableCell>
                   {k.scopes.includes("admin") ? (
                     <span className="text-xs text-muted-foreground">super admin: none</span>
+                  ) : k.personal ? (
+                    <span className="text-xs text-muted-foreground">{k.policy ?? "none"}, its user&apos;s</span>
                   ) : (
                     <PolicySelect
                       label={`Policy of ${k.user}`}
@@ -264,6 +273,20 @@ function Keys() {
                     </span>
                   ) : k.revoked ? (
                     <span className="text-xs text-muted-foreground">revoked</span>
+                  ) : k.personal ? (
+                    // Revoked outright, not suspended: restoring one key alone
+                    // could bring back one its user had meant to end.
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={revokeNow.isPending}
+                      onClick={() =>
+                        confirm(`Revoke ${k.user}'s personal key ${k.name}? Whatever uses it is refused at once; it cannot be restored.`) &&
+                        revokeNow.mutate(k.id, { onError: (e) => toast.error(e.message), onSuccess: () => toast.success(`Revoked ${k.name}`) })
+                      }
+                    >
+                      Revoke
+                    </Button>
                   ) : (
                     <>
                       <DropdownMenu>

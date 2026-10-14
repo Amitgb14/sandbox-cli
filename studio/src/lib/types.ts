@@ -352,6 +352,25 @@ export interface SSHInfo {
   fingerprint: string;
 }
 
+/** GET /v1/keys: an API key the caller made for themselves (docs/fleet.md#personal-api-keys). */
+export interface PersonalKey {
+  id: string;
+  name: string;
+  user: string;
+  scopes: string[];
+  created: string;
+  /** When it stops working: always set, never after the caller's account. */
+  expires?: string;
+  revoked?: boolean;
+  /** The policy its user holds, which every key of theirs is under. */
+  policy?: string;
+}
+
+/** POST /v1/keys: the one answer with the secret in it. */
+export interface CreatedPersonalKey extends PersonalKey {
+  secret: string;
+}
+
 export interface SSHKey {
   id: string;
   fingerprint: string;

@@ -11,7 +11,7 @@ import { e2eState, gatewayStudio, HOSTED_PORT, type GatewayStudio } from "./stat
  * caller may not see.
  */
 
-const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account"];
+const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account", "API keys"];
 const ADMIN = ["Nodes", "Lost sandboxes", "Users", "Allowlist groups", "Audit", "All organizations"];
 const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
 
@@ -223,6 +223,42 @@ test("a tenant saves a registry login whose token is never shown, and removes it
   page.once("dialog", (d) => d.accept());
   await row.getByRole("button", { name: "Remove" }).click();
   await expect(page.getByText("No registry logins")).toBeVisible();
+});
+
+test("a user makes an API key for a program, sees its secret once, and revokes it", async ({ page }) => {
+  const base = await open(page, "gw-member", "dana@team-a");
+  await page.goto(`${base}/api-keys/`);
+  // Only the scopes dana holds are offered, and never admin.
+  await expect(page.getByRole("checkbox", { name: "sandbox:read" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "sandbox:ssh" })).toHaveCount(0);
+  await expect(page.getByRole("checkbox", { name: "admin" })).toHaveCount(0);
+  await page.getByLabel("Key name").fill("e2e-ci");
+  await page.getByRole("checkbox", { name: "sandbox:create" }).click(); // off: read only
+  await page.getByRole("button", { name: "Create key" }).click();
+  const secret = (await page.getByTestId("new-personal-key-secret").textContent()) ?? "";
+  expect(secret).toMatch(/^sgk_/);
+  const row = page.getByTestId("personal-keys").getByRole("row").filter({ hasText: "e2e-ci" });
+  await expect(row).toContainText("sandbox:read");
+  await expect(row).not.toContainText("sandbox:create");
+
+  // The key acts as dana, read-only.
+  const { gatewayURL } = e2eState();
+  const who = await fetch(`${gatewayURL}/v1/whoami`, { headers: { Authorization: `Bearer ${secret}` } });
+  expect(who.status).toBe(200);
+  expect((await who.json()).user).toBe("dana");
+  const made = await fetch(`${gatewayURL}/v1/sandboxes`, { method: "POST", headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" }, body: "{}" });
+  expect(made.status).toBe(403);
+
+  // Shown once: gone after Done and a reload.
+  await page.getByRole("button", { name: "Done" }).click();
+  await page.reload();
+  await expect(row).toBeVisible();
+  expect(await page.content()).not.toContain(secret);
+
+  page.once("dialog", (d) => d.accept());
+  await row.getByRole("button", { name: "Revoke" }).click();
+  await expect(row).toContainText("revoked");
+  expect((await fetch(`${gatewayURL}/v1/whoami`, { headers: { Authorization: `Bearer ${secret}` } })).status).toBe(401);
 });
 
 test("a secret named for its purpose is set in a job as the variable the job says", async ({ page }) => {

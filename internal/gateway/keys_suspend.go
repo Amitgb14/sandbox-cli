@@ -39,6 +39,9 @@ const suspendGrace = time.Hour
 var (
 	ErrNotSuspended = errors.New("the key is not suspended")
 	ErrSignInKey    = errors.New("this is a sign-in's key; suspend the account it signs in to")
+	// A personal key is revoked, or its account suspended: restoring one
+	// alone would bring back a key its user may have revoked meanwhile.
+	ErrPersonalSuspend = errors.New("this is a personal key; revoke it, or suspend the account it was made under")
 )
 
 // SuspendKey revokes key id and its sign-ins' keys, restorable until until.
@@ -53,6 +56,8 @@ func (s *sqlStore) SuspendKey(ctx context.Context, id string, until time.Time) (
 			return ErrNoSuchKey
 		case k.Revoked:
 			return ErrKeyRevoked
+		case k.Personal:
+			return ErrPersonalSuspend
 		case k.Parent != "":
 			return ErrSignInKey
 		}
@@ -121,7 +126,7 @@ func (g *Gateway) adminSuspendKey(w http.ResponseWriter, r *http.Request, p Prin
 	case errors.Is(err, ErrKeyRevoked):
 		writeErr(w, http.StatusConflict, api.CodeConflict, "the key is revoked already")
 		return
-	case errors.Is(err, ErrSignInKey):
+	case errors.Is(err, ErrSignInKey), errors.Is(err, ErrPersonalSuspend):
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 		return
 	case err != nil:

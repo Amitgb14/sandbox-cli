@@ -9,7 +9,20 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, apiFetch, authHeaders } from "@/lib/api/client";
-import type { Job, JobOutput, JobSpec, RegistryLoginInfo, SecretInfo, Service, ServiceSpec, SSHAccess, SSHInfo, SSHKey } from "@/lib/types";
+import type {
+  CreatedPersonalKey,
+  Job,
+  JobOutput,
+  JobSpec,
+  PersonalKey,
+  RegistryLoginInfo,
+  SecretInfo,
+  Service,
+  ServiceSpec,
+  SSHAccess,
+  SSHInfo,
+  SSHKey,
+} from "@/lib/types";
 
 const enc = encodeURIComponent;
 
@@ -23,6 +36,7 @@ export const gkeys = {
   registryLogins: ["registry-logins"] as const,
   ssh: ["ssh"] as const,
   sshKeys: ["ssh-keys"] as const,
+  personalKeys: ["personal-keys"] as const,
 };
 
 /** ?tenant=T, which an admin uses to name another tenant's service. */
@@ -195,6 +209,27 @@ export function useRemoveSecret() {
     (name: string) => apiFetch<void>(`/v1/secrets/${enc(name)}`, { method: "DELETE" }),
     () => [gkeys.secrets],
   );
+}
+
+// --- personal API keys: a secret comes back once, in the create's answer ------------------
+
+export function usePersonalKeys() {
+  return useQuery({
+    queryKey: gkeys.personalKeys,
+    queryFn: async () => (await apiFetch<{ keys: PersonalKey[] }>("/v1/keys")).keys ?? [],
+    retry: false,
+  });
+}
+
+export function useCreatePersonalKey() {
+  return useInvalidating(
+    (req: { name: string; scopes: string[]; expires_in_secs: number }) => apiFetch<CreatedPersonalKey>("/v1/keys", { method: "POST", json: req }),
+    () => [gkeys.personalKeys],
+  );
+}
+
+export function useRevokePersonalKey() {
+  return useInvalidating((id: string) => apiFetch<void>(`/v1/keys/${enc(id)}`, { method: "DELETE" }), () => [gkeys.personalKeys]);
 }
 
 // --- registry logins: a token goes in and never comes back -----------------------------

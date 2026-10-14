@@ -24,7 +24,7 @@ import (
 // keySelect reads keys as k, with their users (u) and home organisations
 // (h). A where clause names k's columns as k.<column>.
 const keySelect = `SELECT k.id, k.hash, u.name, h.key, k.scopes, k.created, k.revoked, k.expires, k.account,
-	u.email, u.password, u.last_login, k.parent, k.restore_until
+	u.email, u.password, u.last_login, k.parent, k.restore_until, k.personal, k.name
 	FROM api_keys k JOIN users u ON u.id = k.user_id JOIN orgs h ON h.id = u.org_id `
 
 func scanKey(sc interface{ Scan(...any) error }) (Key, error) {
@@ -33,7 +33,7 @@ func scanKey(sc interface{ Scan(...any) error }) (Key, error) {
 	var email, password, parent sql.NullString
 	var account bool
 	err := sc.Scan(&k.ID, &k.Hash, &k.User, &k.Tenant, jsonCol{&k.Scopes}, &created, &k.Revoked, &expires, &account,
-		&email, &password, &lastLogin, &parent, &restore)
+		&email, &password, &lastLogin, &parent, &restore, &k.Personal, &k.Name)
 	if err != nil {
 		return Key{}, err
 	}
@@ -108,9 +108,9 @@ func (q *sqlTx) insertKey(ctx context.Context, k Key) error {
 			return err
 		}
 	}
-	_, err = q.exec(ctx, `INSERT INTO api_keys (id, hash, user_id, scopes, created, revoked, expires, account, parent)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		k.ID, k.Hash, uid, scopes, q.s.t(k.Created), k.Revoked, q.s.tp(k.Expires), account, parent)
+	_, err = q.exec(ctx, `INSERT INTO api_keys (id, hash, user_id, scopes, created, revoked, expires, account, parent, personal, name)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Hash, uid, scopes, q.s.t(k.Created), k.Revoked, q.s.tp(k.Expires), account, parent, k.Personal, k.Name)
 	if isUnique(err) && account {
 		return ErrEmailTaken
 	}
@@ -229,6 +229,18 @@ func (s *sqlStore) SetKeyExpiry(ctx context.Context, id string, at *time.Time) (
 			t := at.UTC().Truncate(time.Microsecond)
 			at = &t
 		}
+		// A sign-in's or a personal key ends no later than what it was made
+		// under, a renewal included: liveness is read off each key alone
+		// in places (userActive), so one must not outlast its root.
+		if k.Parent != "" {
+			root, found, err := q.key(ctx, "WHERE k.id = ?", k.Parent)
+			if err != nil {
+				return err
+			}
+			if found && root.Expires != nil && (at == nil || root.Expires.Before(*at)) {
+				at = root.Expires
+			}
+		}
 		if _, err := q.exec(ctx, "UPDATE api_keys SET expires = ? WHERE id = ?", s.tp(at), id); err != nil {
 			return err
 		}
@@ -285,7 +297,9 @@ func (s *sqlStore) AccountOf(ctx context.Context, keyID string) (Key, bool, erro
 	var ok bool
 	err := s.read(ctx, func(q *sqlTx) error {
 		k, found, err := q.key(ctx, "WHERE k.id = ?", keyID)
-		if err != nil || !found {
+		// A personal key acts for its user but is not their account: it
+		// cannot change the password, or pass for the account anywhere.
+		if err != nil || !found || k.Personal {
 			return err
 		}
 		if k.Parent != "" {
@@ -321,8 +335,9 @@ func (s *sqlStore) SignIn(ctx context.Context, account string, ttl time.Duration
 		if _, err := q.exec(ctx, "UPDATE users SET last_login = ? WHERE id = (SELECT user_id FROM api_keys WHERE id = ?)", s.t(now), acct.ID); err != nil {
 			return err
 		}
-		// Sign-ins that ended are forgotten, so they do not pile up.
-		if _, err := q.exec(ctx, "DELETE FROM api_keys WHERE parent IS NOT NULL AND (revoked OR expires <= ?)", s.t(now)); err != nil {
+		// Sign-ins that ended are forgotten, so they do not pile up. A
+		// personal key stays listed, revoked or expired, as any key does.
+		if _, err := q.exec(ctx, "DELETE FROM api_keys WHERE parent IS NOT NULL AND NOT personal AND (revoked OR expires <= ?)", s.t(now)); err != nil {
 			return err
 		}
 		out = Key{ID: newID("key_"), User: acct.User, Tenant: acct.Tenant, Scopes: slices.Clone(acct.Scopes),
@@ -334,7 +349,7 @@ func (s *sqlStore) SignIn(ctx context.Context, account string, ttl time.Duration
 
 func (s *sqlStore) SignOut(ctx context.Context, id string) error {
 	return s.tx(ctx, func(q *sqlTx) error {
-		r, err := q.exec(ctx, "DELETE FROM api_keys WHERE id = ? AND parent IS NOT NULL", id)
+		r, err := q.exec(ctx, "DELETE FROM api_keys WHERE id = ? AND parent IS NOT NULL AND NOT personal", id)
 		if err != nil {
 			return err
 		}
@@ -355,7 +370,9 @@ func (s *sqlStore) SetPassword(ctx context.Context, account, passwordHash, keep 
 		if n, _ := r.RowsAffected(); n == 0 {
 			return ErrNotAccount
 		}
-		_, err = q.exec(ctx, "DELETE FROM api_keys WHERE parent = ? AND id <> ?", account, keep)
+		// Every other sign-in ends. Personal keys are kept: each was made
+		// on purpose, for a program, and is revoked by its user one by one.
+		_, err = q.exec(ctx, "DELETE FROM api_keys WHERE parent = ? AND NOT personal AND id <> ?", account, keep)
 		return err
 	})
 }
@@ -697,8 +714,15 @@ func (s *sqlStore) RedeemInvite(ctx context.Context, token, passwordHash string)
 				passwordHash, a.ID); err != nil {
 				return err
 			}
-			// A new password ends every sign-in.
-			if _, err := q.exec(ctx, "DELETE FROM api_keys WHERE parent = ?", a.ID); err != nil {
+			// A new password ends every sign-in. A reset is an admin's, for
+			// a password lost or taken, so the personal keys go too: one
+			// made by whoever took it must not outlast it. They stay
+			// listed, revoked. (A change the user makes, knowing the
+			// password, keeps them: SetPassword.)
+			if _, err := q.exec(ctx, "DELETE FROM api_keys WHERE parent = ? AND NOT personal", a.ID); err != nil {
+				return err
+			}
+			if _, err := q.exec(ctx, "UPDATE api_keys SET revoked = ? WHERE parent = ? AND personal", true, a.ID); err != nil {
 				return err
 			}
 			a.Password = passwordHash
