@@ -288,7 +288,8 @@ in `_old/` as reference, to be ported where this design still wants it.
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
 - **Users make their own API keys.** Under **API keys** in Studio's sidebar,
-  or `POST`, `GET` and `DELETE /v1/keys`, a user signed in with a password,
+  with `sandbox-cli api-key create|list|revoke` (`--out FILE` writes the
+  secret to a new 0600 file), or `POST`, `GET` and `DELETE /v1/keys`, a user signed in with a password,
   or holding a key, makes keys for their programs: a name, some of their own
   scopes (never `admin`) and an expiry of an hour to a year, never past their
   account's. Their policy applies to each. The secret is shown once; they

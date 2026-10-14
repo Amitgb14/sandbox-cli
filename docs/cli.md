@@ -37,6 +37,10 @@ Global flags:
 | [`sandbox-cli agent state`](#sandbox-cli-agent-state) | Say what each agent is doing: working, blocked (waiting for you), idle, done or failed |
 | [`sandbox-cli agent wait`](#sandbox-cli-agent-wait) | Wait until an agent is in one of the given states (blocked, idle, done, failed, …) |
 | [`sandbox-cli agent-run`](#sandbox-cli-agent-run) | Run an agent on a prompt on a gateway's fleet, unattended; prints the job id |
+| [`sandbox-cli api-key`](#sandbox-cli-api-key) | Make, list and revoke your own API keys on a gateway, for your programs to act as you |
+| [`sandbox-cli api-key create`](#sandbox-cli-api-key-create) | Make a key; its secret is printed once, or written to --out |
+| [`sandbox-cli api-key list`](#sandbox-cli-api-key-list) | List your personal keys (never their secrets) |
+| [`sandbox-cli api-key revoke`](#sandbox-cli-api-key-revoke) | Revoke one of your personal keys; whatever uses it is refused at once |
 | [`sandbox-cli attach`](#sandbox-cli-attach) | Attach your terminal to a sandbox's process; closing the terminal, or Ctrl-C without one, detaches and leaves it running |
 | [`sandbox-cli context`](#sandbox-cli-context) | Choose which sandboxd the CLI talks to: local, self-hosted, or cloud |
 | [`sandbox-cli context add`](#sandbox-cli-context-add) | Add a context: https://host:port with --token-file, or unix:///path |
@@ -366,6 +370,77 @@ Flags:
 | `--secret stringArray` |  | a gateway secret to set in the run's environment: NAME, or VAR=NAME to set it as VAR (repeatable) |
 | `--timeout duration` |  | how long the agent may run, e.g. 30m (default: the gateway's, 1h) |
 | `--wait` |  | wait, print the output, and exit with the agent's exit code |
+
+## sandbox-cli api-key
+
+Make, list and revoke your own API keys on a gateway, for your programs to act as you.
+
+```text
+sandbox-cli api-key [command]
+```
+
+```text
+A personal API key acts as you, for a program: a CI job, a script, the CLI on
+another machine. It has the scopes you give it, from your own (never admin),
+and always expires: in an hour to 366 days, never after the key or account
+you make it with. Your policy applies to it. Revoking, suspending or expiring
+your account ends it. A personal key cannot make or revoke keys itself.
+Gateway only.
+```
+
+Subcommands: [`create`](#sandbox-cli-api-key-create), [`list`](#sandbox-cli-api-key-list), [`revoke`](#sandbox-cli-api-key-revoke).
+
+### sandbox-cli api-key create
+
+Make a key; its secret is printed once, or written to --out.
+
+```text
+sandbox-cli api-key create NAME [flags]
+```
+
+Examples:
+
+```sh
+sandbox-cli api-key create ci --scope sandbox:read --scope sandbox:create --expires 90d
+sandbox-cli api-key create laptop --scope sandbox:read --out ~/.config/sandbox/laptop.key
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which endpoint to use |
+| `--expires string` | `30d` | how long the key works: 1h to 366d, e.g. 7d or 12h |
+| `--out string` |  | write the secret to this new file (mode 0600) rather than print it |
+| `--scope stringArray` |  | a scope you hold: sandbox:read, sandbox:create, sandbox:delete, sandbox:ssh, secrets:write, org:create (repeatable) |
+
+### sandbox-cli api-key list
+
+List your personal keys (never their secrets).
+
+```text
+sandbox-cli api-key list [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which endpoint to use |
+
+### sandbox-cli api-key revoke
+
+Revoke one of your personal keys; whatever uses it is refused at once.
+
+```text
+sandbox-cli api-key revoke ID [flags]
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which endpoint to use |
 
 ## sandbox-cli attach
 

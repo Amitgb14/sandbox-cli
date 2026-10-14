@@ -194,7 +194,7 @@ function NewSecret({ created, onDone }: { created: CreatedPersonalKey; onDone: (
       </p>
       <p className="text-xs text-muted-foreground">
         Keep it as you would a password, in a file or your CI&apos;s secret store: sandbox-cli context add NAME GATEWAY-URL --token-file FILE, or an
-        Authorization: Bearer header.
+        Authorization: Bearer header. From a terminal, sandbox-cli api-key create NAME --out FILE makes one straight into a file.
       </p>
       <div className="flex items-center gap-2">
         <code data-testid="new-personal-key-secret" className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1 font-mono text-xs">{created.secret}</code>
