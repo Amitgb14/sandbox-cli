@@ -277,6 +277,44 @@ test("a snapshot being taken shows how far it has got, in the panel and the list
   await api(`/v1/sandboxes/${sb.id}`, "DELETE");
 });
 
+test("Snapshots takes one of a running sandbox, and Launch starts from it", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "to-snap" })).json();
+  // The fake takes no snapshots: the endpoint is said to, and the snapshot
+  // calls are answered here.
+  const snap = { id: "snp_00000000000000e2", sandbox: sb.id, image: sb.image, kind: "disk", bytes: 5 << 20, created_at: new Date().toISOString() };
+  const taken: string[] = [];
+  await page.route("**/api/info", async (route) => {
+    const res = await route.fetch();
+    const info = await res.json();
+    info.capabilities.capabilities.disk_snapshot = true;
+    await route.fulfill({ response: res, json: info });
+  });
+  await page.route(`**/api/v1/sandboxes/${sb.id}/snapshots`, async (route) => {
+    taken.push(route.request().method());
+    await route.fulfill({ status: 201, json: snap });
+  });
+  await page.route("**/api/v1/snapshots", (route) => route.fulfill({ json: { snapshots: taken.length ? [snap] : [] } }));
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/snapshots/");
+  await page.getByRole("combobox", { name: "Sandbox to snapshot" }).click();
+  await page.getByRole("option", { name: "to-snap" }).click();
+  await page.getByRole("button", { name: "Take snapshot" }).click();
+  await expect(page.getByText(`Snapshot ${snap.id} taken`)).toBeVisible();
+  expect(taken).toEqual(["POST"]);
+
+  // The row's Launch opens the launch page with the snapshot chosen.
+  const row = page.getByRole("row").filter({ hasText: snap.id });
+  await row.getByRole("link", { name: "Launch" }).click();
+  await expect(page).toHaveURL(new RegExp(`/launch/\\?snapshot=${snap.id}`));
+  await expect(page.getByRole("radio", { name: "A snapshot" })).toBeChecked();
+  await expect(page.locator("dd").filter({ hasText: snap.id })).toBeVisible();
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
+});
+
 test("Agents lists only the verified agents, and Launch starts a sandbox", async ({ page }) => {
   await page.goto(`/#token=${token}`);
   await expect(page.getByText("e2e · fake")).toBeVisible();

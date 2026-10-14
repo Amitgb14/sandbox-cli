@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Launch from a snapshot, and take one, on Snapshots.** Each snapshot has a
+  Launch button that opens the launch page with it chosen (also from a
+  sandbox's own snapshot list in its overview), and the page's Take snapshot
+  picks one of your running sandboxes and snapshots it; the toast offers to
+  launch from it. The launch page takes `?snapshot=ID`.
 - **Members for the super admin.** Super admin › Members manages any
   organization's members — add one, remove one, make an owner — picked from
   every organization on the gateway, without switching into it. Each name

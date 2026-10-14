@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,7 @@ export function SandboxSnapshots({ sb }: { sb: Sandbox }) {
   if (!takes) {
     return <p className="text-sm text-muted-foreground">This endpoint takes no snapshots.</p>;
   }
+  const canLaunch = can("sandbox:create");
   const mine = (all ?? []).filter((s) => s.sandbox === sb.id).sort((a, b) => b.created_at.localeCompare(a.created_at));
   const on = !!sb.snapshot_every_secs;
   const save = (e: number, k: number) =>
@@ -131,6 +133,11 @@ export function SandboxSnapshots({ sb }: { sb: Sandbox }) {
               </span>
               <span className="w-16 text-right text-muted-foreground tabular-nums">{formatBytes(s.bytes)}</span>
               <span className="w-16 text-right text-muted-foreground">{formatRelative(s.created_at)}</span>
+              {canLaunch ? (
+                <Link href={`/launch/?snapshot=${encodeURIComponent(s.id)}`} className="text-primary underline-offset-4 hover:underline" title="Start a new sandbox from this snapshot">
+                  Launch
+                </Link>
+              ) : null}
             </div>
           ))}
         </div>

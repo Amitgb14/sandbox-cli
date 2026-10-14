@@ -32,6 +32,10 @@ REPLIES = {
     ("GET", "/v1/orgs/acme/members"): {"members": [{"user": "ana", "role": "owner"}]},
     ("POST", "/v1/orgs/acme/members"): {"user": "bob", "tenant": "t2", "role": "member"},
     ("DELETE", "/v1/orgs/acme/members/bob?tenant=t2"): None,
+    ("POST", "/v1/keys"): {"id": "key_9", "name": "ci", "scopes": ["sandbox:read"], "personal": True,
+                           "org": "acme", "secret": "sbx_secret"},
+    ("GET", "/v1/keys"): {"keys": [{"id": "key_9", "name": "ci", "scopes": ["sandbox:read"], "personal": True}]},
+    ("DELETE", "/v1/keys/key%2F9"): None,
     ("GET", "/v1/admin/orgs"): {"orgs": [{"name": "acme", "members": 2, "owners": 1}]},
     ("POST", "/v1/sandboxes/demo/ssh-access"): {"user": "tok", "host": "gw.example", "port": 2222,
                                                 "expires_at": "2026-10-04T00:15:00Z",
@@ -106,6 +110,44 @@ class GatewayTest(unittest.TestCase):
         self.c.remove_org_member("acme", "bob", tenant="t2")
         self.assertEqual(self.last()[:2], ("DELETE", "/v1/orgs/acme/members/bob?tenant=t2"))
         self.assertEqual(self.c.admin_orgs()[0]["members"], 2)
+
+    def test_api_keys(self):
+        k = self.c.with_org("acme").create_api_key("ci", ["sandbox:read"], expires_in_secs=7 * 86400)
+        self.assertEqual(k["secret"], "sbx_secret")
+        self.assertEqual(self.last(), ("POST", "/v1/keys", "Bearer gw-key",
+                                       {"name": "ci", "scopes": ["sandbox:read"], "expires_in_secs": 604800}))
+        self.assertEqual(self.srv.orgs[-1], "acme")
+        self.c.create_api_key("ci", ["sandbox:read"])
+        self.assertEqual(self.last()[3]["expires_in_secs"], 30 * 86400)
+        with self.assertRaises(ValueError):
+            self.c.create_api_key("ci", [])
+        self.assertEqual([k["id"] for k in self.c.api_keys()], ["key_9"])
+        self.c.revoke_api_key("key/9")
+        self.assertEqual(self.last()[:2], ("DELETE", "/v1/keys/key%2F9"))
+
+    def test_from_env(self):
+        port = self.srv.server_address[1]
+        env = {"SANDBOX_ENDPOINT": f"http://127.0.0.1:{port}", "SANDBOX_API_KEY": "env-key", "SANDBOX_ORG": "acme"}
+        old = {k: os.environ.get(k) for k in [*env, "SANDBOX_TOKEN", "SANDBOX_CA_FILE"]}
+        try:
+            for k in old:
+                os.environ.pop(k, None)
+            with self.assertRaises(ValueError):
+                Client.from_env()
+            os.environ.update(env)
+            Client.from_env().whoami()
+            self.assertEqual(self.last()[2], "Bearer env-key")
+            self.assertEqual(self.srv.orgs[-1], "acme")
+            del os.environ["SANDBOX_API_KEY"]
+            os.environ["SANDBOX_TOKEN"] = "old-name"
+            Client.from_env().whoami()
+            self.assertEqual(self.last()[2], "Bearer old-name")
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
     def test_whoami(self):
         self.assertEqual(self.c.whoami()["user"], "ana")

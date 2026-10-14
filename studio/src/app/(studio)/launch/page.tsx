@@ -95,9 +95,10 @@ function LaunchForm() {
   const [baseline, setBaseline] = useState(true);
   const [labels, setLabels] = useState("");
   const [mounts, setMounts] = useState<Mount[]>([]);
-  const [from, setFrom] = useState<"image" | "snapshot">("image");
+  // ?snapshot=ID, from the Snapshots page's Launch, starts with it chosen.
+  const [from, setFrom] = useState<"image" | "snapshot">(params.get("snapshot") ? "snapshot" : "image");
   const [image, setImage] = useState(params.get("image") ?? "");
-  const [snapshot, setSnapshot] = useState("");
+  const [snapshot, setSnapshot] = useState(params.get("snapshot") ?? "");
   const canSnapshot = !!(info?.capabilities?.capabilities?.memory_snapshot || info?.capabilities?.capabilities?.disk_snapshot);
   const { data: snapshots } = useSnapshots(canSnapshot);
   const caller = useCaller();
