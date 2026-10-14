@@ -1,0 +1,24 @@
+table inet sbxns {
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname "tap0" ip daddr 10.0.0.1 udp dport 53 dnat ip to 172.16.0.29
+		iifname "tap0" ip daddr 10.0.0.1 tcp dport 53 dnat ip to 172.16.0.29
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "veth0" ip saddr 10.0.0.2 masquerade
+	}
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "lo" accept
+		ct state established,related accept
+	}
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		iifname "tap0" oifname "veth0" ip saddr 10.0.0.2 accept
+		iifname "veth0" oifname "tap0" ct state established,related accept
+	}
+	chain output {
+		type filter hook output priority filter; policy accept;
+	}
+}

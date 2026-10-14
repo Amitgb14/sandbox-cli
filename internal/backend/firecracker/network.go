@@ -37,6 +37,22 @@ import (
 // a guest is redirected at all (an `allowlist` guest is in the egress_on set, a
 // `none` guest is not, so its packets meet the drop), and the proxy and the
 // resolver hold its allowlist.
+//
+// Each VM has a network namespace of its own (sbx<n>), and its tap is in it.
+// A snapshot records the guest's address and its tap's name, so a fork must
+// find both again: every namespace has the same tap, tap0, and every guest
+// the same address, 10.0.0.2 behind 10.0.0.1, which collide with nothing
+// because no two share a namespace. A veth pair joins the namespace to the
+// host — sbx<n> on the host's side, on the slot's /30 — and the namespace
+// rewrites the guest's packets to the slot's address (ns.nft). So the host
+// sees each VM, a fork among them, at an address of its own on an interface
+// of its own, exactly as it saw a tap before: these rules, the proxy and the
+// resolver tell sandboxes apart as they always did. This is the scheme
+// Firecracker documents for networking snapshot clones.
+//
+// A VM started before namespaces (its kept record says no netns) keeps its tap
+// in the host's namespace, and cannot be snapshotted: its snapshot would carry
+// a slot's address and tap name, which a fork could not have.
 type Network struct {
 	// ProxyPort and DNSPort are where redirected traffic arrives on the host;
 	// zero means DefaultProxyPort and DefaultDNSPort.
@@ -67,27 +83,71 @@ const (
 	DefaultDNSPort   = 7353
 )
 
+// tap is a sandbox's slot on the host's network. name is the host's
+// interface for it (the tap itself, or the veth's host end), host its address
+// there, and guest the address the host sees the VM at.
 type tap struct {
-	name    string
-	idx     int
-	host    net.IP
-	guest   net.IP
-	mac     string
+	name  string
+	idx   int
+	host  net.IP
+	guest net.IP
+	mac   string
+	// ns is the VM's network namespace, "" for a VM from before them, whose
+	// tap is name itself in the host's namespace.
+	ns      string
 	policy  atomic.Pointer[api.NetworkPolicy]
 	matcher atomic.Pointer[egressproxy.Matcher]
 }
 
+// Inside a VM's namespace everything is the same for every VM, which is what
+// lets a snapshot be restored into any of them.
+const (
+	nsTap   = "tap0"
+	nsVeth  = "veth0"
+	nsTable = "sbxns"
+	nsMAC   = "06:00:0a:00:00:02"
+)
+
+var (
+	nsGateway = net.IPv4(10, 0, 0, 1).To4()
+	nsGuest   = net.IPv4(10, 0, 0, 2).To4()
+)
+
+// gateway is what the guest is told its gateway and resolver are.
+func (t *tap) gateway() net.IP {
+	if t.ns != "" {
+		return nsGateway
+	}
+	return t.host
+}
+
 func (t *tap) kernelArgs() []string {
+	guest := t.guest
+	if t.ns != "" {
+		guest = nsGuest
+	}
 	return []string{
-		fmt.Sprintf("ip=%s::%s:255.255.255.252::eth0:off", t.guest, t.host),
-		"sbx.dns=" + t.host.String(),
+		fmt.Sprintf("ip=%s::%s:255.255.255.252::eth0:off", guest, t.gateway()),
+		"sbx.dns=" + t.gateway().String(),
 	}
 }
+
+// device is the tap's name and the guest's MAC, as the VMM is given them.
+func (t *tap) device() (name, mac string) {
+	if t.ns != "" {
+		return nsTap, nsMAC
+	}
+	return t.name, t.mac
+}
+
+// nsPath is the namespace's file, which the jailer joins (--netns).
+func (t *tap) nsPath() string { return "/run/netns/" + t.ns }
 
 // keptTap is a tap an earlier sandboxd made for a VM this one takes back.
 type keptTap struct {
 	id     string
 	idx    int
+	ns     bool
 	policy api.NetworkPolicy
 }
 
@@ -99,7 +159,7 @@ func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 	if os.Geteuid() != 0 {
 		return nil, errors.New("network: tap devices and nftables need root; run sandboxd as root or without networking")
 	}
-	for _, bin := range []string{"ip", "nft"} {
+	for _, bin := range []string{"ip", "nft", "sysctl"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			return nil, fmt.Errorf("network: %s is required", bin)
 		}
@@ -123,7 +183,7 @@ func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 	byID := map[string]*tap{}
 	var allowed []string
 	for _, k := range kept {
-		t := n.tapAt(k.idx)
+		t := n.tapAt(k.idx, k.ns)
 		pc := k.policy
 		t.policy.Store(&pc)
 		t.matcher.Store(egressproxy.NewPolicyMatcher(pc.Allow, pc.Deny))
@@ -179,21 +239,28 @@ func (n *Network) start(kept []keptTap) (map[string]*tap, error) {
 	return byID, nil
 }
 
-// sweepTaps deletes the taps no VM taken back owns: one an earlier sandboxd
-// made for a VM since removed, or whose record was unreadable. Only names this
-// backend gives (sbx<n>).
+// sweepTaps deletes the taps and namespaces no VM taken back owns: one an
+// earlier sandboxd made for a VM since removed, or whose record was
+// unreadable. Only names this backend gives (sbx<n>).
 func (n *Network) sweepTaps() {
-	des, _ := os.ReadDir("/sys/class/net")
-	var names []string
-	for _, de := range des {
-		names = append(names, de.Name())
-	}
-	n.mu.Lock()
-	stray := strayTaps(names, n.used)
-	n.mu.Unlock()
-	for _, name := range stray {
-		if err := run("ip", "link", "del", name); err == nil {
-			n.Logf("network: removed a tap no sandbox owns: %s", name)
+	for _, dir := range []string{"/run/netns", "/sys/class/net"} {
+		des, _ := os.ReadDir(dir)
+		var names []string
+		for _, de := range des {
+			names = append(names, de.Name())
+		}
+		n.mu.Lock()
+		stray := strayTaps(names, n.used)
+		n.mu.Unlock()
+		for _, name := range stray {
+			args := []string{"link", "del", name}
+			what := "a network device"
+			if dir == "/run/netns" {
+				args, what = []string{"netns", "del", name}, "a network namespace"
+			}
+			if err := run("ip", args...); err == nil {
+				n.Logf("network: removed %s no sandbox owns: %s", what, name)
+			}
 		}
 	}
 }
@@ -274,6 +341,40 @@ func Ruleset(table string, proxyPort, dnsPort int) string {
 `, table, proxyPort, dnsPort)
 }
 
+// NSRuleset is the table in each VM's namespace, rendered from the slot's
+// host address. A pure function, pinned by test. It lets the guest out only
+// to the host, as the guest's own address rewritten to the slot's
+// (masquerade), and its DNS to the gateway on to the host's resolver; the
+// host's table then decides as it does for every sandbox. Nothing reaches
+// the guest but replies, and the namespace itself answers nothing.
+func NSRuleset(hostIP string) string {
+	return fmt.Sprintf(`table inet %[1]s {
+	chain prerouting {
+		type nat hook prerouting priority dstnat; policy accept;
+		iifname "%[2]s" ip daddr %[4]s udp dport 53 dnat ip to %[5]s
+		iifname "%[2]s" ip daddr %[4]s tcp dport 53 dnat ip to %[5]s
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "%[3]s" ip saddr %[6]s masquerade
+	}
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iifname "lo" accept
+		ct state established,related accept
+	}
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		iifname "%[2]s" oifname "%[3]s" ip saddr %[6]s accept
+		iifname "%[3]s" oifname "%[2]s" ct state established,related accept
+	}
+	chain output {
+		type filter hook output priority filter; policy accept;
+	}
+}
+`, nsTable, nsTap, nsVeth, nsGateway, hostIP, nsGuest)
+}
+
 // installTable replaces whatever table an earlier sandboxd left with this
 // one's, and puts the guests in allowed in its egress set (installScript).
 func (n *Network) installTable(allowed []string) error {
@@ -305,8 +406,8 @@ func (n *Network) Close() {
 	_ = run("nft", "delete", "table", "inet", n.table)
 }
 
-// attach creates a sandbox's tap and applies its policy. owner is the uid the
-// VMM runs as (the jailer's), or -1.
+// attach creates a sandbox's namespace, its tap and the veth to the host, and
+// applies its policy. owner is the uid the VMM runs as (the jailer's), or -1.
 func (n *Network) attach(id string, p api.NetworkPolicy, owner int) (*tap, error) {
 	n.mu.Lock()
 	idx := -1
@@ -324,21 +425,11 @@ func (n *Network) attach(id string, p api.NetworkPolicy, owner int) (*tap, error
 	n.used[idx] = true
 	n.mu.Unlock()
 
-	t := n.tapAt(idx)
-	args := []string{"tuntap", "add", "dev", t.name, "mode", "tap"}
-	if owner >= 0 {
-		args = append(args, "user", fmt.Sprint(owner), "group", fmt.Sprint(owner))
-	}
-	_ = run("ip", "link", "del", t.name) // a leftover with the same name
-	for _, a := range [][]string{
-		args,
-		{"addr", "add", t.host.String() + "/30", "dev", t.name},
-		{"link", "set", t.name, "up"},
-	} {
-		if err := run("ip", a...); err != nil {
-			n.release(t)
-			return nil, err
-		}
+	t := n.tapAt(idx, true)
+	if err := n.makeNamespace(t, owner); err != nil {
+		n.removeNamespace(t)
+		n.release(t)
+		return nil, err
 	}
 	n.mu.Lock()
 	n.byIP[t.guest.String()] = t
@@ -350,17 +441,68 @@ func (n *Network) attach(id string, p api.NetworkPolicy, owner int) (*tap, error
 	return t, nil
 }
 
+// makeNamespace builds slot t's namespace: the veth pair to the host on the
+// slot's /30, the tap the VMM opens (owned by its uid), the route out, and
+// the namespace's table (NSRuleset).
+func (n *Network) makeNamespace(t *tap, owner int) error {
+	n.removeNamespace(t) // a leftover with the same name
+	tapArgs := []string{"-n", t.ns, "tuntap", "add", "dev", nsTap, "mode", "tap"}
+	if owner >= 0 {
+		tapArgs = append(tapArgs, "user", fmt.Sprint(owner), "group", fmt.Sprint(owner))
+	}
+	for _, a := range [][]string{
+		{"netns", "add", t.ns},
+		{"link", "add", t.name, "type", "veth", "peer", "name", nsVeth, "netns", t.ns},
+		{"addr", "add", t.host.String() + "/30", "dev", t.name},
+		{"link", "set", t.name, "up"},
+		{"-n", t.ns, "addr", "add", t.guest.String() + "/30", "dev", nsVeth},
+		{"-n", t.ns, "link", "set", nsVeth, "up"},
+		{"-n", t.ns, "link", "set", "lo", "up"},
+		tapArgs,
+		{"-n", t.ns, "addr", "add", nsGateway.String() + "/30", "dev", nsTap},
+		{"-n", t.ns, "link", "set", nsTap, "up"},
+		{"-n", t.ns, "route", "add", "default", "via", t.host.String()},
+	} {
+		if err := run("ip", a...); err != nil {
+			return err
+		}
+	}
+	if err := run("ip", "netns", "exec", t.ns, "sysctl", "-qw", "net.ipv4.ip_forward=1"); err != nil {
+		return err
+	}
+	cmd := exec.Command("ip", "netns", "exec", t.ns, "nft", "-f", "-")
+	cmd.Stdin = strings.NewReader(NSRuleset(t.host.String()))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("network: the namespace's nftables table: %v: %s", err, out)
+	}
+	return nil
+}
+
+// removeNamespace deletes slot t's namespace, which takes its tap and the
+// veth's inside end with it, and the veth's host end if it is left.
+func (n *Network) removeNamespace(t *tap) {
+	if t.ns != "" {
+		_ = run("ip", "netns", "del", t.ns)
+	}
+	_ = run("ip", "link", "del", t.name)
+}
+
 // tapAt is the tap in slot idx: its name, addresses and MAC are a function
-// of the slot alone, which is what lets a later sandboxd take one back.
-func (n *Network) tapAt(idx int) *tap {
+// of the slot alone, which is what lets a later sandboxd take one back. ns
+// says whether the VM has a namespace of its own (every VM since they came).
+func (n *Network) tapAt(idx int, ns bool) *tap {
 	base := ipAdd(n.Subnet.IP.To4(), idx*4)
-	return &tap{
+	t := &tap{
 		name:  fmt.Sprintf("sbx%d", idx),
 		idx:   idx,
 		host:  ipAdd(base, 1),
 		guest: ipAdd(base, 2),
 		mac:   fmt.Sprintf("06:00:%02x:%02x:%02x:%02x", base[0], base[1], base[2], base[3]+2),
 	}
+	if ns {
+		t.ns = t.name
+	}
+	return t
 }
 
 // update applies a policy to a running sandbox. The allowlist is swapped in one
@@ -390,7 +532,7 @@ func (n *Network) update(t *tap, p api.NetworkPolicy) error {
 
 func (n *Network) detach(t *tap) {
 	_ = run("nft", "delete", "element", "inet", n.table, "egress_on", "{", t.guest.String(), "}")
-	_ = run("ip", "link", "del", t.name)
+	n.removeNamespace(t)
 	n.release(t)
 }
 

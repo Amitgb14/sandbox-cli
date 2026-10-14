@@ -569,10 +569,10 @@ that exists so far**, run by hand on a Mac and a KVM Linux host.
   - **Measured on this machine through the conformance suite:**
     - two forks restored and answering in **20 ms** each, then diverging;
     - suspend and resume with files intact.
-  - **Forks with a network are refused, not half-done.** A snapshot carries the
-    guest's address and tap name, so per-fork network identity needs a network
-    namespace per VM; that is a later step. A networked sandbox can still be
-    suspended and resumed, since it keeps its tap.
+  - **Forks with a network were refused, not half-done,** until each VM got
+    a network namespace of its own (2026-10-14): a snapshot carries the
+    guest's address and tap name, which are now the same in every namespace,
+    and a veth with NAT gives each its own address on the host.
   - **Tunnels.** The guest agent dials `127.0.0.1:<port>` only, so a tunnel
     reaches a server in the sandbox and is never a way around egress. On top of
     that: `GET …/tunnel` upgraded to raw bytes, and `sandbox-cli tunnel ID

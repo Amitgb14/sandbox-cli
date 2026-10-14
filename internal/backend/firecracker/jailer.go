@@ -107,15 +107,19 @@ func (j *Jailer) own(id, path string) {
 }
 
 // command is the jailer invocation; the VMM's own arguments follow "--".
-func (j *Jailer) command(id, firecracker string, args ...string) *exec.Cmd {
+// netns, when set, is the network namespace the jailer joins first.
+func (j *Jailer) command(id, firecracker, netns string, args ...string) *exec.Cmd {
 	u := fmt.Sprint(j.uid(id))
-	return exec.Command(j.Path, append([]string{
+	argv := []string{
 		"--id", jailID(id),
 		"--exec-file", firecracker,
 		"--uid", u, "--gid", u,
 		"--chroot-base-dir", j.ChrootBase,
-		"--", "--api-sock", "api.sock",
-	}, args...)...)
+	}
+	if netns != "" {
+		argv = append(argv, "--netns", netns)
+	}
+	return exec.Command(j.Path, append(append(argv, "--", "--api-sock", "api.sock"), args...)...)
 }
 
 // adopt records the uid of a VM taken back from an earlier sandboxd, so it is
