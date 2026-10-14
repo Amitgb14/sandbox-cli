@@ -727,16 +727,15 @@ func TestServiceOwnershipAndValidation(t *testing.T) {
 	if _, err := carol.DeployService(ctx, webSpec(0)); err != nil {
 		t.Errorf("carol in acme: %v", err)
 	}
-	// An admin sees every service, and reaches another tenant's by ?tenant=.
-	if list, err := e.admin.Services(ctx); err != nil || len(list) != 2 {
-		t.Errorf("admin lists %d, %v", len(list), err)
+	// An admin sees no one else's, by ?tenant= neither: a service is its
+	// owner's, as its sandboxes are.
+	if list, err := e.admin.Services(ctx); err != nil || len(list) != 0 {
+		t.Errorf("admin lists %d, %v; want none", len(list), err)
 	}
 	resp := e.raw(http.MethodGet, "/v1/services/web?tenant=acme", e.adminKey(), "")
-	var got api.Service
-	_ = json.NewDecoder(resp.Body).Decode(&got)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || got.Owner != "carol" {
-		t.Errorf("admin ?tenant=acme: %d %+v", resp.StatusCode, got)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("admin ?tenant=acme: %d; want 404", resp.StatusCode)
 	}
 	// ...and a user's ?tenant= is ignored.
 	if s, err := alice.Service(ctx, "web"); err != nil || s.Owner != "alice" {

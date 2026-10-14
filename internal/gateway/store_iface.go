@@ -45,6 +45,9 @@ type Store interface {
 	Keys(ctx context.Context) ([]Key, error)
 	// KeysOfUser is every key whose user is named user, in any tenant.
 	KeysOfUser(ctx context.Context, user string) ([]Key, error)
+	// StatCounts is the gateway's totals for the super admin's dashboard
+	// (stats.go): counts and sums, never which or whose.
+	StatCounts(ctx context.Context) (statCounts, error)
 	// CreatePersonalKey makes a key for the user of key by, under by's
 	// account or itself, with scopes it holds, ending no later than it,
 	// acting only in org (their own tenant or one they are a member of);

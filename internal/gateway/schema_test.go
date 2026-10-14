@@ -3,6 +3,7 @@ package gateway
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,8 +36,9 @@ func TestEveryTenantIsAnOrganisation(t *testing.T) {
 		t.Errorf("the default tenant's organisation is %q; want it there from the start, of kind default", got)
 	}
 
-	// A key into a tenant makes it a personal organisation, and its user a
-	// user at home there.
+	// A key into a tenant makes it an organisation, and its user a user at
+	// home there. A name with capitals cannot be a team organisation's, so
+	// Globex stays a personal one.
 	if _, _, err := st.CreateKey("bob", "Globex", []string{ScopeRead}); err != nil {
 		t.Fatal(err)
 	}
@@ -50,12 +52,16 @@ func TestEveryTenantIsAnOrganisation(t *testing.T) {
 	if n := sqlValue(t, st, "SELECT COUNT(*) FROM orgs WHERE lower(key) = 'globex'"); n != "2" {
 		t.Errorf("%s organisations for Globex and globex; want two", n)
 	}
+	// globex's first user owns it (ownFirstOrg).
+	if got := kind("globex"); got != orgTeam {
+		t.Errorf("globex is %q; want team, its first user's", got)
+	}
 	// "default" is a tenant like any other, not the default one.
 	if _, _, err := st.CreateKey("dan", "default", []string{ScopeRead}); err != nil {
 		t.Fatal(err)
 	}
-	if got := kind("default"); got != orgPersonal {
-		t.Errorf("the tenant named default is %q; want a personal organisation of its own", got)
+	if got := kind("default"); got != orgTeam {
+		t.Errorf("the tenant named default is %q; want an organisation of its own, dan's", got)
 	}
 
 	// An invite makes the organisation it will put its account in.
@@ -82,9 +88,14 @@ func TestEveryTenantIsAnOrganisation(t *testing.T) {
 	if role := sqlValue(t, st, "SELECT m.role FROM org_members m JOIN orgs o ON o.id = m.org_id WHERE o.key = 'initech' AND m.user_id = ?", ann); role != api.RoleOwner {
 		t.Errorf("ann's membership: %q", role)
 	}
-	// Only team organisations are organisations to the API.
-	if orgs := st.Orgs(); len(orgs) != 1 || orgs[0].Name != "Initech" {
-		t.Errorf("Orgs: %+v; want Initech alone", orgs)
+	// Only team organisations are organisations to the API: not Globex,
+	// not the default tenant.
+	var names []string
+	for _, o := range st.Orgs() {
+		names = append(names, o.Name)
+	}
+	if strings.Join(names, ",") != "default,globex,Initech" {
+		t.Errorf("Orgs: %v; want default (dan's), globex (bob's) and Initech", names)
 	}
 	// One with keys in it may not be taken over.
 	if _, err := st.CreateOrg("GLOBEX", "ann", "", 0); !errors.Is(err, ErrOrgExists) {

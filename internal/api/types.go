@@ -884,6 +884,69 @@ type NodeInfo struct {
 	Status   *NodeStatus `json:"status,omitempty"`
 }
 
+// GatewayStats is GET /v1/admin/stats: the gateway's totals for its super
+// admin's dashboard. Counts and sums only: which sandboxes there are, and
+// whose, are their users' to see.
+type GatewayStats struct {
+	Time  time.Time `json:"time"`
+	Users UserStats `json:"users"`
+	// Orgs counts the organizations: each user's own, and those made.
+	Orgs      int          `json:"orgs"`
+	Keys      KeyStats     `json:"keys"`
+	Sandboxes SandboxStats `json:"sandboxes"`
+	Jobs      JobStats     `json:"jobs"`
+	Services  int          `json:"services"`
+	// Allocated is what running sandboxes were given, by the gateway's
+	// records; Nodes.Used is the nodes' own account of the same.
+	Allocated NodeResources `json:"allocated"`
+	Nodes     NodeStats     `json:"nodes"`
+}
+
+// UserStats counts users: Total holds a working key or account of their
+// own; Accounts sign in with a password; Suspended may still be restored.
+type UserStats struct {
+	Total       int `json:"total"`
+	Accounts    int `json:"accounts"`
+	SignedIn24h int `json:"signed_in_24h"`
+	Suspended   int `json:"suspended"`
+}
+
+// KeyStats counts working keys: users' own (Active, accounts among them)
+// and the personal keys users made.
+type KeyStats struct {
+	Active   int `json:"active"`
+	Personal int `json:"personal"`
+}
+
+// SandboxStats counts sandboxes: Running now, and Created in the last day,
+// week, and the HistoryDays the gateway keeps a terminated one's record
+// (0 is for ever).
+type SandboxStats struct {
+	Running     int `json:"running"`
+	Created24h  int `json:"created_24h"`
+	Created7d   int `json:"created_7d"`
+	Created     int `json:"created"`
+	HistoryDays int `json:"history_days"`
+}
+
+// JobStats counts jobs: Running now, and Total the gateway keeps.
+type JobStats struct {
+	Running int `json:"running"`
+	Total   int `json:"total"`
+}
+
+// NodeStats is the nodes' totals: Capacity for sandboxes, Used what is
+// given to running and suspended ones (allocations, not live usage), and
+// the Running sandboxes they report.
+type NodeStats struct {
+	Total    int           `json:"total"`
+	Healthy  int           `json:"healthy"`
+	Cordoned int           `json:"cordoned"`
+	Running  int           `json:"running"`
+	Capacity NodeResources `json:"capacity"`
+	Used     NodeResources `json:"used"`
+}
+
 // NodeList is GET /v1/admin/nodes.
 type NodeList struct {
 	Nodes []NodeInfo `json:"nodes"`

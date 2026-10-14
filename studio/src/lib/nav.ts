@@ -5,6 +5,7 @@ import {
   Camera,
   CircleUser,
   HardDrive,
+  LayoutDashboard,
   KeyRound,
   Layers3,
   LayoutTemplate,
@@ -82,7 +83,20 @@ const ADMIN_GROUP: NavGroup[] = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off"
     ]
   : [];
 
+/** The super admin's dashboard, first in the sidebar; gone, as ADMIN_GROUP is, from a build without the admin screens. */
+const OVERVIEW_GROUP: NavGroup[] = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off"
+  ? [
+      {
+        label: "Overview",
+        items: [
+          { title: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard, need: "admin", hint: "The gateway in totals: users, organizations, sandboxes running and created, memory, CPUs and disk used of what the nodes have" },
+        ],
+      },
+    ]
+  : [];
+
 export const NAV: NavGroup[] = [
+  ...OVERVIEW_GROUP,
   {
     label: "Sandboxes",
     items: [

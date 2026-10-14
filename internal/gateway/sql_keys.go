@@ -124,19 +124,19 @@ func (q *sqlTx) insertKey(ctx context.Context, k Key) error {
 	if isUnique(err) && account {
 		return ErrEmailTaken
 	}
-	if err != nil || !account {
+	if err != nil || k.Parent != "" {
 		return err
 	}
 	return q.ownFirstOrg(ctx, uid, k.Created)
 }
 
-// ownFirstOrg makes an account's user, uid, the owner of their home tenant
-// when they are the only user in it: a sign-up's own organisation. It
-// becomes a team organisation, as one they had made would be, so they can
-// add members to it. A tenant several users share, the default one, one
-// already a team's, and one an admin issued plain keys into (for programs,
-// not people) are left as they are. Migration 8 did the same to the
-// accounts that existed then.
+// ownFirstOrg makes the user uid the owner of their home tenant when they
+// are the only user in it: a sign-up's own organisation, or a new tenant an
+// admin issues a key into. It becomes a team organisation, as one they had
+// made would be, so they can add members to it. A user keyed into a tenant
+// someone is in already joins it, the first its owner; the default tenant,
+// and a tenant whose name holds capitals (no organisation's can), are left
+// as they are. Migration 8 did this for the accounts that existed then.
 func (q *sqlTx) ownFirstOrg(ctx context.Context, uid string, now time.Time) error {
 	r, err := q.exec(ctx, `UPDATE orgs SET kind = ?, display_name = key, created_by = ?
 		WHERE id = (SELECT org_id FROM users WHERE id = ?) AND kind = ? AND key <> '' AND key = lower(key)

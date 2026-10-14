@@ -184,6 +184,34 @@ export function useNodes() {
   });
 }
 
+/** GET /v1/admin/stats: the gateway's totals, never which sandboxes or whose. */
+export interface Resources {
+  cpus: number;
+  memory_mb: number;
+  disk_mb: number;
+}
+
+export interface GatewayStats {
+  time: string;
+  users: { total: number; accounts: number; signed_in_24h: number; suspended: number };
+  orgs: number;
+  keys: { active: number; personal: number };
+  sandboxes: { running: number; created_24h: number; created_7d: number; created: number; history_days: number };
+  jobs: { running: number; total: number };
+  services: number;
+  allocated: Resources;
+  nodes: { total: number; healthy: number; cordoned: number; running: number; capacity: Resources; used: Resources };
+}
+
+export function useStats() {
+  return useQuery({
+    queryKey: ["admin", "stats"],
+    // The gateway's totals, whatever this browser has selected.
+    queryFn: () => apiFetch<GatewayStats>("/v1/admin/stats", { noOrg: true }),
+    refetchInterval: 10_000,
+  });
+}
+
 export function useLost() {
   return useQuery({
     queryKey: akeys.lost,

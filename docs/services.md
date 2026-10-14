@@ -58,8 +58,8 @@ the Python and TypeScript SDKs have `deploy_service`/`deployService`,
 `redeploy_service`/`redeployService` and `delete_service`.
 Creating, changing and scaling need `sandbox:create`; deleting needs
 `sandbox:delete` as well; reading needs `sandbox:read`. Another user's service
-is not found. An admin sees every service and names one in another tenant
-with `?tenant=T`. A `GET` shows env names, not values, as for a sandbox; the
+is not found, an admin's included: a service is its owner's, as its
+sandboxes are, and `?tenant=` no longer reaches another tenant's. A `GET` shows env names, not values, as for a sandbox; the
 values are kept in the state file, which is why it stays 0600. A value that
 must stay secret belongs in the secret store instead: `secrets: [NAME]` sets
 each of the tenant's secrets (`sandbox-cli secret set NAME`) in every
@@ -124,7 +124,8 @@ replicas, after checking each once.
 
 **Owners.** A service runs in its owner's name. Once the owner holds no
 active API key, no new replica is made and the router stops serving it; what
-runs stays until an admin deletes it (`DELETE /v1/services/{name}?tenant=T`).
+runs stays until its owner, restored, deletes it; an admin ends a user's work
+by suspending or revoking them, and cannot delete it for them.
 
 
 ## The router
