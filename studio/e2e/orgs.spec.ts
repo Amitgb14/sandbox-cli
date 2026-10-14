@@ -131,15 +131,19 @@ test("an owner adds and removes a member, who sees it read-only and loses it", a
   await other.close();
 });
 
-test("a key without org:create is offered no create, and its own tenant has no member list", async ({ page }) => {
+test("a key without org:create is offered no create, and sees its tenant's members without changing them", async ({ page }) => {
   const base = await open(page, "gw-readonly", "bob@team-a");
   await expect(switcher(page)).toHaveAccessibleName("Organization: team-a");
   await switcher(page).click();
   await expect(page.getByRole("menuitem", { name: "Create organization" })).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: new RegExp(ORG) })).toHaveCount(0);
   await page.keyboard.press("Escape");
+  // team-a is its first user's, alice's, organization: bob reads who is in
+  // it, and only its owners change that.
   await page.goto(`${base}/members/`);
-  await expect(page.getByText("team-a has no member list")).toBeVisible();
+  await expect(page.getByText("Only its owners change the members.")).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "alice" })).toContainText("owner");
+  await expect(page.getByRole("button", { name: "Add member" })).toHaveCount(0);
 });
 
 test("an admin lists every organization", async ({ page }) => {

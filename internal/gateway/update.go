@@ -49,7 +49,7 @@ func (g *Gateway) updateHandler(w http.ResponseWriter, r *http.Request, p Princi
 			return
 		}
 		if cur.LifetimeSecs > 0 && *req.LifetimeSecs > cur.LifetimeSecs {
-			writeErr(w, http.StatusForbidden, api.CodeRefused, "only an admin can extend a sandbox's lifetime")
+			writeErr(w, http.StatusForbidden, api.CodeRefused, "a sandbox's lifetime can only be shortened; a longer one comes from your policy, which an admin sets")
 			return
 		}
 	}

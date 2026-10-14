@@ -338,8 +338,7 @@ func TestAPersonalKeyActsOnlyInItsOrganisation(t *testing.T) {
 }
 
 // The super admin makes personal keys for their own work, with any scope
-// but admin, in an organisation they are in; selecting another as an
-// admin does not make them a member of it.
+// but admin, in an organisation they are in, and in no other.
 func TestASuperAdminMakesPersonalKeys(t *testing.T) {
 	tg := startGateway(t, nil, startNode(t, "n1"))
 	ctx := ctxT(t)
@@ -360,7 +359,7 @@ func TestASuperAdminMakesPersonalKeys(t *testing.T) {
 	dana := tg.client("dana", "dana", ScopeRead, ScopeCreate, ScopeOrgCreate)
 	mustOrg(t, dana, "acme")
 	_, err = amit.WithOrg("acme").CreatePersonalKey(ctx, api.CreatePersonalKeyRequest{Name: "x", Scopes: []string{ScopeRead}, ExpiresInSecs: 86400})
-	wantCode(t, err, api.CodeRefused)
+	wantCode(t, err, api.CodeNotFound)
 }
 
 // A sign-up's own organisation is theirs: they own it, can add members to
@@ -398,10 +397,10 @@ func TestASignUpOwnsItsFirstOrganisation(t *testing.T) {
 	if !found {
 		t.Error("neo's organisation is not among the gateway's")
 	}
-	// A tenant an admin issues plain keys into stays private.
+	// So does the first user an admin issues a key into a new tenant.
 	tg.client("ci", "ci", ScopeRead)
-	if kind := sqlValue(t, tg.store, "SELECT kind FROM orgs WHERE key = 'ci'"); kind != orgPersonal {
-		t.Errorf("a plain key's tenant is %q; want personal", kind)
+	if role, ok, _ := tg.store.Store.MemberRole(ctx, "ci", "ci", "ci"); !ok || role != api.RoleOwner {
+		t.Errorf("a plain key's user in its new tenant: %q %v; want owner", role, ok)
 	}
 }
 

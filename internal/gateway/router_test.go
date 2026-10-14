@@ -60,13 +60,23 @@ func TestAnotherUsersSandboxIsNotFound(t *testing.T) {
 	if err != nil || got.ID != sb.ID {
 		t.Fatalf("alice's web resolves to %+v, %v", got, err)
 	}
-	// The admin sees both, and acts on either by id.
+	// The admin sees neither, and reaches neither by id: another user's
+	// sandbox is theirs, the super admin's included.
 	list, err := tg.admin.Sandboxes(ctx)
-	if err != nil || len(list) != 2 {
-		t.Fatalf("admin lists %d, %v", len(list), err)
+	if err != nil || len(list) != 0 {
+		t.Fatalf("admin lists %d, %v; want none", len(list), err)
 	}
-	if _, err := tg.admin.Sandbox(ctx, sb.ID); err != nil {
-		t.Fatalf("admin get: %v", err)
+	_, err = tg.admin.Sandbox(ctx, sb.ID)
+	wantCode(t, err, api.CodeNotFound)
+	_, err = tg.admin.Run(ctx, sb.ID, api.RunRequest{Argv: []string{"true"}})
+	wantCode(t, err, api.CodeNotFound)
+	// What an admin may do is end one, by id only: enforcement, not access.
+	wantCode(t, tg.admin.TerminateSandbox(ctx, "web"), api.CodeNotFound)
+	if err := tg.admin.TerminateSandbox(ctx, sb.ID); err != nil {
+		t.Fatalf("the admin ending alice's sandbox by id: %v", err)
+	}
+	if got, err := alice.Sandbox(ctx, sb.ID); err != nil || got.State != api.StateTerminated {
+		t.Errorf("alice's sandbox after the admin ended it: %+v %v", got.State, err)
 	}
 }
 
@@ -256,9 +266,9 @@ func TestResolve(t *testing.T) {
 	if _, _, err := tg.g.Resolve(ctx, Principal{User: "alice", Scopes: []string{ScopeSSH}, Sandbox: sb.ID}, sb.ID, ScopeSSH); err != nil {
 		t.Fatal(err)
 	}
-	// An admin reaches it by id.
-	if _, _, err := tg.g.Resolve(ctx, Principal{User: "root", Scopes: []string{ScopeAdmin}}, sb.ID, ScopeSSH); err != nil {
-		t.Fatal(err)
+	// An admin does not: it is alice's.
+	if _, _, err := tg.g.Resolve(ctx, Principal{User: "root", Scopes: []string{ScopeAdmin}}, sb.ID, ScopeSSH); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("admin: %v; want not found", err)
 	}
 }
 

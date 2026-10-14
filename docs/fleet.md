@@ -736,6 +736,21 @@ restore ID`); after that it is a revocation for good. Until then the user's
 address and name stay theirs, so an invite cannot take them. `keys revoke`
 and `DELETE` revoke for good at once.
 
+**The super admin sees totals, not users' work.** An admin key acts only on
+its own sandboxes, volumes, snapshots, jobs and services, in organizations
+its user is in, as any key does: other users' are `404`, listed nowhere.
+The one exception is enforcement: it may terminate another user's sandbox
+by its id (`sandbox-cli kill ID`), as when one is left running by a member
+removed from an organization, without seeing what is in it.
+Studio's **Dashboard** (`GET /v1/admin/stats`) shows the gateway in
+totals — users, organizations, sandboxes running and created, memory, CPUs
+and disk given of what the nodes have. To stop a user's work, suspend or
+revoke the user.
+
+**Each new tenant has an owner.** The first user a key or an invite puts
+into a new tenant owns it as an organization, as if they had made it: they
+add members on the Members page. Users keyed in after them join it.
+
 **One kind of account.** Studio's Users screen gives every account the same
 scopes — everything in its own organization (`sandbox:read`, `create`,
 `delete`, `ssh`, `secrets:write`, `org:create`) — so each user is the admin of
@@ -964,8 +979,7 @@ with no nodes: `store status` and `keys list` show what came back.
 ## Checking it works
 
 The conformance suite runs against a gateway as against any endpoint. Give it
-a user's key, not an admin's (an admin sees past the ownership rules the suite
-must work within), holding `sandbox:read`, `sandbox:create`, `sandbox:delete`
+a user's key, holding `sandbox:read`, `sandbox:create`, `sandbox:delete`
 and `sandbox:ssh`, as the gateway's own tests do:
 
 ```sh

@@ -410,10 +410,9 @@ func TestJobsBelongToTheirCreator(t *testing.T) {
 	wo := tg.client("ana", "", ScopeCreate)
 	_, err = wo.Jobs(ctx)
 	wantCode(t, err, api.CodeRefused)
-	// An admin may look.
-	if _, err := tg.admin.Job(ctx, j.ID); err != nil {
-		t.Fatalf("admin: %v", err)
-	}
+	// An admin may not: another user's job is not theirs to see.
+	_, err = tg.admin.Job(ctx, j.ID)
+	wantCode(t, err, api.CodeNotFound)
 }
 
 func TestJobSpecIsChecked(t *testing.T) {

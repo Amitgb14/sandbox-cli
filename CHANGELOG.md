@@ -287,6 +287,19 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **The super admin sees totals, not users' sandboxes.** An admin key
+  lists and acts on only its own sandboxes, volumes, snapshots, jobs and
+  services, in organizations its user is in; another user's are not found.
+  Before, an admin saw and could act on every sandbox, extend a sandbox's
+  lifetime, and reach another tenant's service with `?tenant=`; none of
+  that remains, except terminating a sandbox by its id, to end one a
+  removed member left running. A new `GET /v1/admin/stats`, and Studio's **Dashboard**
+  first in the sidebar, show the gateway in totals: users, organizations,
+  keys, nodes, sandboxes running and created, jobs, services, and memory,
+  CPUs and disk given of what the nodes have.
+- **Every new tenant has an owner.** The first user an API key or invite
+  puts in a new tenant owns it as an organization and can add members;
+  before, only accounts did.
 - **Users make their own API keys.** Under **API keys** in Studio's sidebar,
   with `sandbox-cli api-key create|list|revoke` (`--out FILE` writes the
   secret to a new 0600 file), or `POST`, `GET` and `DELETE /v1/keys`, a user signed in with a password,

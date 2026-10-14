@@ -12,8 +12,8 @@ import { e2eState, gatewayStudio, HOSTED_PORT, type GatewayStudio } from "./stat
  */
 
 const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account", "API keys"];
-const ADMIN = ["Nodes", "Lost sandboxes", "Users", "Members", "Allowlist groups", "Audit", "All organizations"];
-const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/members/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
+const ADMIN = ["Dashboard", "Nodes", "Lost sandboxes", "Users", "Members", "Allowlist groups", "Audit", "All organizations"];
+const ADMIN_ROUTES = ["/admin/dashboard/", "/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/members/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
 
 /** Opens a gateway Studio with its token, once whoami has answered. */
 async function open(page: Page, name: GatewayStudio, user: string) {
@@ -527,7 +527,7 @@ test("an admin downloads an image to the gateway's nodes, and removes it from th
   await expect(row).toHaveCount(0);
 });
 
-test("an admin gives a user a policy, and moves a sandbox's end both ways", async ({ page }) => {
+test("an admin gives a user a policy, and sees their sandboxes only as totals", async ({ page }) => {
   const { gatewayURL } = e2eState();
   const base = await open(page, "gw-admin", "ops");
   await page.goto(`${base}/admin/keys/`);
@@ -552,20 +552,18 @@ test("an admin gives a user a policy, and moves a sandbox's end both ways", asyn
   expect(sb.lifetime_secs).toBe(1800);
   expect((await as("PATCH", `/v1/sandboxes/${sb.id}`, { lifetime_secs: 3600 })).status).toBe(403);
 
-  // The admin's list says whose it is and when it ends.
+  // The super admin does not see it, or reach it by id: it is pia's. The
+  // dashboard counts it, without naming it.
+  const { adminKey } = e2eState();
+  expect((await fetch(`${gatewayURL}/v1/sandboxes/${sb.id}`, { headers: { Authorization: `Bearer ${adminKey}` } })).status).toBe(404);
   await page.goto(`${base}/sandboxes/`);
-  const row = page.getByRole("row").filter({ hasText: "pia-box" });
-  await expect(row.getByRole("cell", { name: "pia", exact: true })).toBeVisible();
-  await expect(row.getByText(/^in (29|30)m/)).toBeVisible();
-
-  // The admin may move it, from the sandbox's page.
-  await page.goto(`${base}/sandbox/?id=${sb.id}`);
-  await expect(page.getByText("Ends")).toBeVisible();
-  await expect(page.getByText("Owner", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Extend lifetime by 15 minutes" }).click();
-  await expect.poll(async () => ((await (await as("GET", `/v1/sandboxes/${sb.id}`)).json()) as { lifetime_secs: number }).lifetime_secs).toBe(2700);
-  await page.getByRole("button", { name: "Shorten lifetime by 15 minutes" }).click();
-  await expect.poll(async () => ((await (await as("GET", `/v1/sandboxes/${sb.id}`)).json()) as { lifetime_secs: number }).lifetime_secs).toBe(1800);
+  await expect(page.locator("main h1")).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "pia-box" })).toHaveCount(0);
+  await nav(page).getByRole("link", { name: "Dashboard", exact: true }).click();
+  await expect(page.locator("main h1")).toHaveText("Dashboard");
+  await expect(page.getByText("Sandboxes running")).toBeVisible();
+  await expect(page.getByTestId("meter-memory")).toContainText(" of ");
+  expect(await page.content()).not.toContain("pia-box");
   // The one node is shared with every other test: give its room back.
   await as("DELETE", `/v1/sandboxes/${sb.id}`);
 });

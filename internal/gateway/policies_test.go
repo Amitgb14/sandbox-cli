@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
@@ -106,14 +105,12 @@ func TestOnlyAnAdminExtendsALifetime(t *testing.T) {
 	_, err = dana.UpdateSandbox(ctx, sb.ID, life(1800))
 	wantCode(t, err, api.CodeRefused)
 
-	got, err = tg.admin.UpdateSandbox(ctx, sb.ID, life(3600))
-	if want := sb.CreatedAt.Add(time.Hour); err != nil || got.LifetimeSecs != 3600 || got.ExpiresAt == nil || !got.ExpiresAt.Equal(want) {
-		t.Fatalf("the admin extending: %d, %v, %v; want 3600 and %v", got.LifetimeSecs, got.ExpiresAt, err, want)
-	}
-	// Past the policy now, by the admin's hand; the owner may still shorten
-	// it, to anything below what it has.
-	if got, err := dana.UpdateSandbox(ctx, sb.ID, life(2400)); err != nil || got.LifetimeSecs != 2400 {
-		t.Errorf("the owner shortening an extended sandbox: %d, %v", got.LifetimeSecs, err)
+	// Nor may the admin: another user's sandbox is not theirs to reach.
+	_, err = tg.admin.UpdateSandbox(ctx, sb.ID, life(3600))
+	wantCode(t, err, api.CodeNotFound)
+	// The owner may still shorten it, to anything below what it has.
+	if got, err := dana.UpdateSandbox(ctx, sb.ID, life(600)); err != nil || got.LifetimeSecs != 600 {
+		t.Errorf("the owner shortening again: %d, %v", got.LifetimeSecs, err)
 	}
 }
 

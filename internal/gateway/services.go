@@ -271,12 +271,10 @@ func (c *serviceCtl) poke() {
 
 // --- handlers -----------------------------------------------------------------------
 
-// tenantOf is the tenant a request names a service in: the caller's own, or
-// for an admin the one ?tenant= names.
-func tenantOf(r *http.Request, p Principal) string {
-	if t, ok := r.URL.Query()["tenant"]; ok && p.Can(ScopeAdmin) && len(t) > 0 {
-		return t[0]
-	}
+// tenantOf is the tenant a request names a service in: the caller's own. An
+// admin's ?tenant= once reached another tenant's; a service is its owner's,
+// as its sandboxes are (mayAct), so it no longer does.
+func tenantOf(_ *http.Request, p Principal) string {
 	return p.Tenant
 }
 

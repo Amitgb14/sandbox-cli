@@ -38,9 +38,10 @@ import (
 //     tenant already in use — by keys, sandboxes, volumes, secrets, jobs,
 //     services — so creating one cannot make its creator a member of a
 //     tenant that already holds someone's work.
-//   - An admin key may select any organisation, or the default tenant, as it
-//     may already act on every sandbox. Scopes never change with the header:
-//     a member's key is no more an admin's in an organisation than outside.
+//   - An admin key selects only organisations its user is in, as anyone's:
+//     the super admin does not act in other users' tenants (mayAct). Scopes
+//     never change with the header: a member's key is no more an admin's in
+//     an organisation than outside.
 //   - Not a member and no such organisation are one answer, 404, so names
 //     cannot be probed.
 //
@@ -453,22 +454,13 @@ func (g *Gateway) selectOrg(w http.ResponseWriter, r *http.Request, p Principal)
 		// operator happened to call "default", by its own.
 		return p, true
 	}
-	allowed := false
-	if p.Can(ScopeAdmin) {
-		// An admin acts on every sandbox already; it may act in any
-		// organisation that exists, or the default tenant.
-		_, exists, err := g.store.Org(ctx, t)
-		if err != nil {
-			g.writeStoreErr(w, err)
-			return Principal{}, false
-		}
-		allowed = t == "" || exists
-	} else {
-		var err error
-		if _, allowed, err = g.store.MemberRole(ctx, t, p.User, p.KeyTenant); err != nil {
-			g.writeStoreErr(w, err)
-			return Principal{}, false
-		}
+	// An admin is held to its memberships as anyone is: acting in an
+	// organisation is a member's, and the super admin is not one of every
+	// organisation (mayAct).
+	_, allowed, err := g.store.MemberRole(ctx, t, p.User, p.KeyTenant)
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return Principal{}, false
 	}
 	if !allowed {
 		// The same answer for an organisation that does not exist and one
@@ -486,16 +478,13 @@ func (g *Gateway) selectOrg(w http.ResponseWriter, r *http.Request, p Principal)
 
 // stillInTenant reports whether a principal chosen with X-Sandbox-Org may
 // still act in its tenant: k is the principal's key as the store holds it
-// now. The key's own tenant always passes; another needs the membership, or
-// an admin key.
+// now. The key's own tenant always passes; another needs the membership,
+// for an admin's key too.
 func stillInTenant(ctx context.Context, st Store, p Principal, k Key) (bool, error) {
 	if k.Bound && !strings.EqualFold(p.Tenant, k.Org) {
 		return false, nil
 	}
 	if p.Tenant == k.Tenant {
-		return true, nil
-	}
-	if (Principal{Scopes: k.Scopes}).Can(ScopeAdmin) {
 		return true, nil
 	}
 	_, ok, err := st.MemberRole(ctx, p.Tenant, k.User, k.Tenant)

@@ -329,12 +329,22 @@ func (g *Gateway) sshInfo() (api.SSHInfo, bool) {
 // --- the router ---------------------------------------------------------------
 
 // mayAct is the ownership rule: a sandbox, volume or snapshot is its user's,
-// within the user's tenant, and an admin's to act on whatever its owner.
+// within the user's tenant, and nobody else's — an admin's included. The
+// super admin runs the gateway (users, nodes, images, audit) and sees its
+// totals (GET /v1/admin/stats), not what is in other users' sandboxes; to
+// stop a user's work they suspend the user.
 func mayAct(p Principal, o Owner) bool {
-	if p.Can(ScopeAdmin) {
-		return true
-	}
 	return p.User != "" && o.User == p.User && o.Tenant == p.Tenant
+}
+
+// mayEnd is the one thing an admin may do to a sandbox not theirs:
+// terminate it, by its id (DELETE, the only route resolved with
+// sandbox:delete). It is enforcement, not access: nothing of what is in the
+// sandbox is shown, it is found by id only, never by name or in a listing,
+// and it is how one left running by a user removed from an organisation, or
+// suspended, is ended.
+func mayEnd(p Principal, scope string) bool {
+	return scope == ScopeDelete && p.Can(ScopeAdmin)
 }
 
 // ownerOf is the store's record, or a tombstone's for a sandbox deleted
@@ -376,7 +386,7 @@ func (g *Gateway) resolve(ctx context.Context, p Principal, ref, scope string) (
 		var err error
 		if o, ok, err = g.ownerOf(ctx, p, ref); err != nil {
 			return "", Owner{}, nil, err
-		} else if !ok || !mayAct(p, o) {
+		} else if !ok || !(mayAct(p, o) || mayEnd(p, scope)) {
 			return "", Owner{}, nil, ErrNotFound
 		}
 		id = ref

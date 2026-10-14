@@ -371,7 +371,8 @@ func (g *Gateway) listHandler(w http.ResponseWriter, r *http.Request, p Principa
 			return
 		}
 	}
-	list, err := g.listSandboxes(r.Context(), p, filters, p.Can(ScopeAdmin))
+	// Every caller's own, an admin's too (mayAct).
+	list, err := g.listSandboxes(r.Context(), p, filters, false)
 	if err != nil {
 		writeRouteErr(w, err, ScopeRead)
 		return

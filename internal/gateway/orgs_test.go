@@ -321,7 +321,8 @@ func TestOrgHeaderChangesNothingForAKeyWithoutMemberships(t *testing.T) {
 			t.Errorf("whoami: %+v %v", w, err)
 		}
 		orgs, err := c.Orgs(ctx)
-		if err != nil || len(orgs) != 1 || orgs[0].Name != "team-c" || !orgs[0].Current || orgs[0].Role != api.RoleMember {
+		// carol is the first user keyed into team-c, so she owns it.
+		if err != nil || len(orgs) != 1 || orgs[0].Name != "team-c" || !orgs[0].Current || orgs[0].Role != api.RoleOwner {
 			t.Errorf("orgs: %+v %v", orgs, err)
 		}
 	}
@@ -344,10 +345,10 @@ func TestOrgHeaderCannotReachAdminEndpoints(t *testing.T) {
 			}
 		}
 	}
-	// An admin may act in any organisation, and lists them.
-	if w, err := tg.admin.WithOrg("aa").Whoami(ctxT(t)); err != nil || w.Org != "aa" {
-		t.Errorf("admin in aa: %+v %v", w, err)
-	}
+	// An admin may not act in an organisation it is not in — what is in it
+	// is its members' — but lists them all.
+	_, err := tg.admin.WithOrg("aa").Whoami(ctxT(t))
+	wantCode(t, err, api.CodeNotFound)
 	all, err := tg.admin.AdminOrgs(ctxT(t))
 	if err != nil || len(all) != 1 || all[0].Name != "aa" || all[0].Members != 1 || all[0].Owners != 1 || all[0].CreatedBy != "alice" ||
 		len(all[0].OwnedBy) != 1 || all[0].OwnedBy[0].User != "alice" || all[0].OwnedBy[0].Tenant != "" {

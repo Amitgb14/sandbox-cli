@@ -94,6 +94,13 @@ func (c *Client) RevokePersonalKey(ctx context.Context, id string) error {
 	return c.json(ctx, http.MethodDelete, "/v1/keys/"+url.PathEscape(id), nil, nil)
 }
 
+// Stats is the gateway's totals for its super admin (admin): counts and
+// sums, never which sandboxes or whose.
+func (c *Client) Stats(ctx context.Context) (GatewayStats, error) {
+	var out GatewayStats
+	return out, c.json(ctx, http.MethodGet, "/v1/admin/stats", nil, &out)
+}
+
 // Keys lists the gateway's API keys, without their secrets (admin).
 func (c *Client) Keys(ctx context.Context) ([]KeyInfo, error) {
 	var out KeyList
