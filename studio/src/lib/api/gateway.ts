@@ -36,7 +36,8 @@ export const gkeys = {
   registryLogins: ["registry-logins"] as const,
   ssh: ["ssh"] as const,
   sshKeys: ["ssh-keys"] as const,
-  personalKeys: ["personal-keys"] as const,
+  /** Per organisation: a personal key is made in, and listed by, the one it acts in. */
+  personalKeys: (org: string) => ["personal-keys", org] as const,
 };
 
 /** ?tenant=T, which an admin uses to name another tenant's service. */
@@ -213,9 +214,9 @@ export function useRemoveSecret() {
 
 // --- personal API keys: a secret comes back once, in the create's answer ------------------
 
-export function usePersonalKeys() {
+export function usePersonalKeys(org: string) {
   return useQuery({
-    queryKey: gkeys.personalKeys,
+    queryKey: gkeys.personalKeys(org),
     queryFn: async () => (await apiFetch<{ keys: PersonalKey[] }>("/v1/keys")).keys ?? [],
     retry: false,
   });
@@ -224,12 +225,12 @@ export function usePersonalKeys() {
 export function useCreatePersonalKey() {
   return useInvalidating(
     (req: { name: string; scopes: string[]; expires_in_secs: number }) => apiFetch<CreatedPersonalKey>("/v1/keys", { method: "POST", json: req }),
-    () => [gkeys.personalKeys],
+    () => [["personal-keys"]],
   );
 }
 
 export function useRevokePersonalKey() {
-  return useInvalidating((id: string) => apiFetch<void>(`/v1/keys/${enc(id)}`, { method: "DELETE" }), () => [gkeys.personalKeys]);
+  return useInvalidating((id: string) => apiFetch<void>(`/v1/keys/${enc(id)}`, { method: "DELETE" }), () => [["personal-keys"]]);
 }
 
 // --- registry logins: a token goes in and never comes back -----------------------------

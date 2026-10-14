@@ -624,6 +624,10 @@ message and link written.
   in already, a team organization, or one another pending invite names,
   rather than putting a stranger beside them. `--tenant NAME` puts the
   account in an existing tenant, `--tenant default` in the default one.
+  An account alone in its tenant **owns** it: it is an organization like
+  one they made, so they add members to it (Members), and it does not
+  count against `--max-orgs-per-user`. A tenant several users share, and
+  one an admin issues plain keys into, stay as they were.
 - **The invite** is a link, `https://studio…/#invite=sgi_…`, shown once and
   stored only as its hash. It works once, for two days (`valid_secs` in the
   API, at most seven), so a leaked email is worth nothing once it was used or
@@ -682,8 +686,16 @@ CLI on another machine — under **API keys** in Studio's sidebar, or with
 a password, that is how a person gets a key at all without asking an admin,
 and without handing their password to a program.
 
+- **One organization.** A key acts only in the organization it was made in
+  — the one selected in Studio, or the CLI context's (`org use`) — and is
+  listed there. Asked for another, it is refused (`403`); its sandboxes,
+  secrets and jobs are that organization's. It stops when its user leaves
+  the organization, and cannot be made in one they are not in, a super
+  admin included.
 - **Less than its maker.** Its scopes are ones its maker holds, never
-  `admin` (a super admin's keys are issued with `keys create`). Its user's
+  `admin` (a super admin's keys are issued with `keys create`). A super
+  admin holds every other scope, so they make keys for their own work like
+  anyone. Its user's
   policy applies to it, as to everything they do: a policy is the user's,
   not a key's.
 - **It always ends**: in an hour to 366 days, and never after the account

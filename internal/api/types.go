@@ -808,6 +808,8 @@ type KeyInfo struct {
 	// named Name.
 	Personal bool   `json:"personal,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// Org is the organization a personal key acts in, and only there.
+	Org string `json:"org,omitempty"`
 }
 
 // CreatedKey is returned once, when a key is issued: Secret is never shown

@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useCreatePersonalKey, usePersonalKeys, useRevokePersonalKey } from "@/lib/api/gateway";
+import { useCurrentOrg } from "@/components/shell/org-switcher";
 import { useCaller } from "@/lib/caller";
 import { formatRelative } from "@/lib/format";
 import type { CreatedPersonalKey } from "@/lib/types";
@@ -29,6 +30,9 @@ const EXPIRIES = [
   { label: "90 days", secs: 90 * DAY },
   { label: "1 year", secs: 365 * DAY },
 ];
+
+/** Every scope a personal key may have: an admin's account holds them all. */
+const KEY_SCOPES = ["sandbox:read", "sandbox:create", "sandbox:delete", "sandbox:ssh", "secrets:write", "org:create"];
 
 /** What each scope lets the key do, in the words the form uses. */
 const SCOPE_HINTS: Record<string, string> = {
@@ -53,9 +57,11 @@ function expired(at?: string): boolean {
  */
 function ApiKeys() {
   const caller = useCaller();
-  const held = caller.kind === "gateway" ? caller.who.scopes.filter((s) => s !== "admin") : [];
+  const scopes0 = caller.kind === "gateway" ? caller.who.scopes : [];
+  const held = scopes0.includes("admin") ? KEY_SCOPES : scopes0.filter((s) => s !== "admin");
   const policy = caller.kind === "gateway" ? caller.who.policy?.name : undefined;
-  const { data, isLoading, error } = usePersonalKeys();
+  const org = useCurrentOrg() ?? "";
+  const { data, isLoading, error } = usePersonalKeys(org);
   const create = useCreatePersonalKey();
   const revoke = useRevokePersonalKey();
   const [name, setName] = useState("");
@@ -67,10 +73,10 @@ function ApiKeys() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="API keys"
-        description="Keys for your programs to act as you: a CI job, a script, the CLI on another machine. Each has the scopes you pick from your own and always expires, never after your account does. Your policy applies to every one, and revoking or suspending your account ends them all."
+        description={`Keys for your programs to act as you in ${org}: a CI job, a script, the CLI on another machine. A key made here works in this organization only, and is listed here; switch organization for another's. Each has the scopes you pick from your own and always expires, never after your account does. Your policy applies to every one, and revoking or suspending your account ends them all.`}
       />
       {held.length === 0 ? (
-        <p className="text-sm text-muted-foreground">This key has no scopes a personal key may have: an admin&apos;s keys are issued on the Users screen.</p>
+        <p className="text-sm text-muted-foreground">This key has no scopes a personal key may have.</p>
       ) : (
         <form
           className="flex flex-col gap-3 rounded-lg border p-4"
@@ -128,7 +134,7 @@ function ApiKeys() {
       {error ? (
         <p className="text-sm text-destructive">{error.message}</p>
       ) : !isLoading && (data ?? []).length === 0 ? (
-        <EmptyState icon={KeyRound} title="No API keys" description="Create one above for a program to act as you." />
+        <EmptyState icon={KeyRound} title={`No API keys in ${org}`} description="Create one above for a program to act as you here." />
       ) : (
         <Table data-testid="personal-keys">
           <TableHeader>

@@ -364,6 +364,8 @@ export interface PersonalKey {
   revoked?: boolean;
   /** The policy its user holds, which every key of theirs is under. */
   policy?: string;
+  /** The organization it acts in, and only there. */
+  org?: string;
 }
 
 /** POST /v1/keys: the one answer with the secret in it. */

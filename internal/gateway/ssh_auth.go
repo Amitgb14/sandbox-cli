@@ -195,6 +195,9 @@ func (g *Gateway) userActiveCached(user, tenant string) (bool, error) {
 // organisation they are a member of through k's tenant. Scopes are the
 // caller's to check.
 func keyActsIn(ctx context.Context, st Store, k Key, tenant string) (bool, error) {
+	if k.Bound && !strings.EqualFold(k.Org, tenant) {
+		return false, nil
+	}
 	if k.Tenant == tenant {
 		return true, nil
 	}

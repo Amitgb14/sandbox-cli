@@ -24,20 +24,20 @@ import (
 // keySelect reads keys as k, with their users (u) and home organisations
 // (h). A where clause names k's columns as k.<column>.
 const keySelect = `SELECT k.id, k.hash, u.name, h.key, k.scopes, k.created, k.revoked, k.expires, k.account,
-	u.email, u.password, u.last_login, k.parent, k.restore_until, k.personal, k.name
-	FROM api_keys k JOIN users u ON u.id = k.user_id JOIN orgs h ON h.id = u.org_id `
+	u.email, u.password, u.last_login, k.parent, k.restore_until, k.personal, k.name, k.org_id IS NOT NULL, b.key
+	FROM api_keys k JOIN users u ON u.id = k.user_id JOIN orgs h ON h.id = u.org_id LEFT JOIN orgs b ON b.id = k.org_id `
 
 func scanKey(sc interface{ Scan(...any) error }) (Key, error) {
 	var k Key
 	var created, expires, lastLogin, restore dbTime
-	var email, password, parent sql.NullString
+	var email, password, parent, boundOrg sql.NullString
 	var account bool
 	err := sc.Scan(&k.ID, &k.Hash, &k.User, &k.Tenant, jsonCol{&k.Scopes}, &created, &k.Revoked, &expires, &account,
-		&email, &password, &lastLogin, &parent, &restore, &k.Personal, &k.Name)
+		&email, &password, &lastLogin, &parent, &restore, &k.Personal, &k.Name, &k.Bound, &boundOrg)
 	if err != nil {
 		return Key{}, err
 	}
-	k.Created, k.Expires, k.Parent = created.T, expires.ptr(), parent.String
+	k.Created, k.Expires, k.Parent, k.Org = created.T, expires.ptr(), parent.String, boundOrg.String
 	if k.Revoked {
 		k.RestoreUntil = restore.ptr()
 	}
@@ -89,9 +89,19 @@ func (q *sqlTx) insertKey(ctx context.Context, k Key) error {
 	if err != nil {
 		return err
 	}
-	var parent any
+	var parent, boundOrg any
 	if k.Parent != "" {
 		parent = k.Parent
+	}
+	if k.Bound {
+		id, ok, err := q.orgID(ctx, k.Org, false)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("organization %q: %w", k.Org, ErrNoSuchKey)
+		}
+		boundOrg = id
 	}
 	account := k.Email != ""
 	if account {
@@ -108,12 +118,37 @@ func (q *sqlTx) insertKey(ctx context.Context, k Key) error {
 			return err
 		}
 	}
-	_, err = q.exec(ctx, `INSERT INTO api_keys (id, hash, user_id, scopes, created, revoked, expires, account, parent, personal, name)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		k.ID, k.Hash, uid, scopes, q.s.t(k.Created), k.Revoked, q.s.tp(k.Expires), account, parent, k.Personal, k.Name)
+	_, err = q.exec(ctx, `INSERT INTO api_keys (id, hash, user_id, scopes, created, revoked, expires, account, parent, personal, name, org_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Hash, uid, scopes, q.s.t(k.Created), k.Revoked, q.s.tp(k.Expires), account, parent, k.Personal, k.Name, boundOrg)
 	if isUnique(err) && account {
 		return ErrEmailTaken
 	}
+	if err != nil || !account {
+		return err
+	}
+	return q.ownFirstOrg(ctx, uid, k.Created)
+}
+
+// ownFirstOrg makes an account's user, uid, the owner of their home tenant
+// when they are the only user in it: a sign-up's own organisation. It
+// becomes a team organisation, as one they had made would be, so they can
+// add members to it. A tenant several users share, the default one, one
+// already a team's, and one an admin issued plain keys into (for programs,
+// not people) are left as they are. Migration 8 did the same to the
+// accounts that existed then.
+func (q *sqlTx) ownFirstOrg(ctx context.Context, uid string, now time.Time) error {
+	r, err := q.exec(ctx, `UPDATE orgs SET kind = ?, display_name = key, created_by = ?
+		WHERE id = (SELECT org_id FROM users WHERE id = ?) AND kind = ? AND key <> '' AND key = lower(key)
+		AND (SELECT COUNT(*) FROM users u WHERE u.org_id = orgs.id) = 1`, orgTeam, uid, uid, orgPersonal)
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
+		return nil
+	}
+	_, err = q.exec(ctx, "INSERT INTO org_members (org_id, user_id, role, added) SELECT org_id, id, ?, ? FROM users WHERE id = ?",
+		api.RoleOwner, q.s.t(now), uid)
 	return err
 }
 

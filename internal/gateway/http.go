@@ -248,7 +248,7 @@ func (g *Gateway) authenticate(r *http.Request) (Principal, bool, error) {
 	if err != nil || !ok {
 		return Principal{}, false, err
 	}
-	return Principal{User: k.User, Tenant: k.Tenant, KeyTenant: k.Tenant, KeyID: k.ID, Scopes: k.Scopes}, true, nil
+	return Principal{User: k.User, Tenant: k.Tenant, KeyTenant: k.Tenant, KeyID: k.ID, Scopes: k.Scopes, Bound: k.Bound, BoundOrg: k.Org}, true, nil
 }
 
 func checkContentType(r *http.Request, raw bool) error {

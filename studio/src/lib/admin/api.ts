@@ -103,6 +103,8 @@ export interface KeyInfo {
   /** A key its user made for themselves (POST /v1/keys), named name; it ends with their account. */
   personal?: boolean;
   name?: string;
+  /** The organization a personal key acts in, and only there. */
+  org?: string;
 }
 
 /** A sign-up link not yet used (docs/fleet.md#accounts); its token is shown once. */

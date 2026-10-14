@@ -25,8 +25,13 @@ import (
 //     to end sooner — so a user an admin stops cannot carry on through a
 //     key they made. A suspension revokes it for good; a restored account
 //     makes its keys again.
+//   - It acts in one organisation, the one it was made in (Key.Bound), and
+//     only while its user may act there: a leaked one exposes that
+//     organisation's work and no other of its user's. It is listed there.
 //   - Its scopes are some of the root's, never admin: an admin's keys are
 //     issued through /v1/admin/keys, where the issuing is an admin's act.
+//     An admin's own account holds every other scope, so a super admin
+//     makes personal keys for their own work like anyone else.
 //   - It always ends, by maxPersonalKeyLife at the latest and never after
 //     its root.
 //   - It manages no keys, and is not its account (AccountOf): a leaked one
@@ -51,6 +56,7 @@ var (
 	ErrTooManyKeys  = fmt.Errorf("at most %d personal keys may be live at once; revoke one first", maxPersonalKeys)
 	ErrKeyOutlives  = errors.New("a personal key cannot outlive the account or key it is made under")
 	ErrScopeNotHeld = errors.New("a personal key can only have scopes you hold")
+	ErrNotInOrg     = errors.New("a personal key is made in an organization you belong to; this one you are not in")
 )
 
 // personalRoot is what personal keys made with key by hang from: by's
@@ -86,7 +92,13 @@ func (q *sqlTx) personalRoot(ctx context.Context, by string, lock bool) (caller,
 	return caller, root, nil
 }
 
-func (s *sqlStore) CreatePersonalKey(ctx context.Context, by, name string, scopes []string, expires time.Time) (string, Key, error) {
+// holds reports whether k may give scope to a personal key: one it was
+// issued, or any but admin for an admin's.
+func holds(k Key, scope string) bool {
+	return slices.Contains(k.Scopes, scope) || (scope != ScopeAdmin && slices.Contains(k.Scopes, ScopeAdmin))
+}
+
+func (s *sqlStore) CreatePersonalKey(ctx context.Context, by, org, name string, scopes []string, expires time.Time) (string, Key, error) {
 	if err := ValidateScopes(scopes); err != nil {
 		return "", Key{}, badKeyRequest{err}
 	}
@@ -107,9 +119,30 @@ func (s *sqlStore) CreatePersonalKey(ctx context.Context, by, name string, scope
 			return err
 		}
 		for _, sc := range scopes {
-			if !slices.Contains(root.Scopes, sc) || !slices.Contains(caller.Scopes, sc) {
+			if !holds(root, sc) || !holds(caller, sc) {
 				return fmt.Errorf("%w: not %s", ErrScopeNotHeld, sc)
 			}
+		}
+		// Its user's own tenant, or an organisation they are in. An admin
+		// may select any organisation, but its key acts as the user, not as
+		// an admin, so it needs a membership like anyone's.
+		if !strings.EqualFold(org, root.Tenant) {
+			_, id, found, err := q.teamOrg(ctx, org)
+			if err != nil {
+				return err
+			}
+			member := false
+			if found {
+				if _, _, member, err = q.memberRole(ctx, id, root.User, root.Tenant); err != nil {
+					return err
+				}
+			}
+			if !member {
+				return ErrNotInOrg
+			}
+			org = strings.ToLower(org)
+		} else {
+			org = root.Tenant
 		}
 		if root.Expires != nil && expires.After(*root.Expires) {
 			return badKeyRequest{fmt.Errorf("%w (it ends %s)", ErrKeyOutlives, root.Expires.Format(time.RFC3339))}
@@ -123,7 +156,8 @@ func (s *sqlStore) CreatePersonalKey(ctx context.Context, by, name string, scope
 			return ErrTooManyKeys
 		}
 		out = Key{ID: newID("key_"), User: root.User, Tenant: root.Tenant, Scopes: slices.Clone(scopes),
-			Hash: hashSecret(secret), Created: now, Expires: &expires, Parent: root.ID, Personal: true, Name: name}
+			Hash: hashSecret(secret), Created: now, Expires: &expires, Parent: root.ID, Personal: true, Name: name,
+			Bound: true, Org: org}
 		return q.insertKey(ctx, out)
 	})
 	if err != nil {
@@ -132,14 +166,19 @@ func (s *sqlStore) CreatePersonalKey(ctx context.Context, by, name string, scope
 	return secret, out, nil
 }
 
-func (s *sqlStore) PersonalKeys(ctx context.Context, by string) ([]Key, error) {
+func (s *sqlStore) PersonalKeys(ctx context.Context, by, org string) ([]Key, error) {
 	var out []Key
 	err := s.read(ctx, func(q *sqlTx) error {
 		_, root, err := q.personalRoot(ctx, by, false)
 		if err != nil {
 			return err
 		}
-		out, err = q.keys(ctx, "WHERE k.parent = ? AND k.personal ORDER BY k.created, k.id", root.ID)
+		if !strings.EqualFold(org, root.Tenant) {
+			org = strings.ToLower(org)
+		} else {
+			org = root.Tenant
+		}
+		out, err = q.keys(ctx, "WHERE k.parent = ? AND k.personal AND b.key = ? ORDER BY k.created, k.id", root.ID, orgKeyOf(org))
 		return err
 	})
 	return out, err
@@ -205,7 +244,7 @@ func personalCaller(w http.ResponseWriter, p Principal) bool {
 // writePersonalErr answers for the refusals of a personal key's store calls.
 func (g *Gateway) writePersonalErr(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrPersonalKey):
+	case errors.Is(err, ErrPersonalKey), errors.Is(err, ErrNotInOrg):
 		writeErr(w, http.StatusForbidden, api.CodeRefused, err.Error())
 	case errors.Is(err, ErrNoSuchKey):
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such key")
@@ -247,7 +286,7 @@ func (g *Gateway) createPersonalKey(w http.ResponseWriter, r *http.Request, p Pr
 			return
 		}
 	}
-	secret, k, err := g.store.CreatePersonalKey(ctx, p.KeyID, req.Name, req.Scopes, time.Now().Add(life))
+	secret, k, err := g.store.CreatePersonalKey(ctx, p.KeyID, p.Tenant, req.Name, req.Scopes, time.Now().Add(life))
 	if err != nil {
 		if errors.Is(err, ErrScopeNotHeld) {
 			writeErr(w, http.StatusForbidden, api.CodeRefused, err.Error())
@@ -256,7 +295,7 @@ func (g *Gateway) createPersonalKey(w http.ResponseWriter, r *http.Request, p Pr
 		g.writePersonalErr(w, err)
 		return
 	}
-	g.logf("personal key %s made by %s for %s", k.ID, p.KeyID, k.User)
+	g.logf("personal key %s made by %s for %s in %s", k.ID, p.KeyID, k.User, wireOrg(k.Org))
 	g.writeKey(w, ctx, http.StatusCreated, k, secret)
 }
 
@@ -266,7 +305,7 @@ func (g *Gateway) listPersonalKeys(w http.ResponseWriter, r *http.Request, p Pri
 	if !personalCaller(w, p) {
 		return
 	}
-	keys, err := g.store.PersonalKeys(ctx, p.KeyID)
+	keys, err := g.store.PersonalKeys(ctx, p.KeyID, p.Tenant)
 	if err != nil {
 		g.writePersonalErr(w, err)
 		return
