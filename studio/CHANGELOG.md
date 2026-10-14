@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Members for the super admin.** Super admin › Members manages any
+  organization's members — add one, remove one, make an owner — picked from
+  every organization on the gateway, without switching into it. Each name
+  on All organizations links there. Users still see their own
+  organization's members only as before.
 - **Volumes are picked from a list in the Playground.** Sandbox options ›
   Volumes lists the volumes that exist, with their size; each picked one
   gets a mount path (starting as `/mnt/NAME`) and a read-only switch. One

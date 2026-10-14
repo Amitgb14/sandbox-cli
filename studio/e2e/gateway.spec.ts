@@ -12,8 +12,8 @@ import { e2eState, gatewayStudio, HOSTED_PORT, type GatewayStudio } from "./stat
  */
 
 const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account"];
-const ADMIN = ["Nodes", "Lost sandboxes", "Users", "Allowlist groups", "Audit", "All organizations"];
-const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
+const ADMIN = ["Nodes", "Lost sandboxes", "Users", "Members", "Allowlist groups", "Audit", "All organizations"];
+const ADMIN_ROUTES = ["/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/members/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
 
 /** Opens a gateway Studio with its token, once whoami has answered. */
 async function open(page: Page, name: GatewayStudio, user: string) {
@@ -446,6 +446,30 @@ test("an admin key sees the admin screens, and no node endpoint", async ({ page 
 
   await page.goto(`${base}/admin/audit/`);
   await expect(page.getByRole("cell", { name: "GET /v1/whoami" }).first()).toBeVisible();
+});
+
+test("the super admin manages any organization's members from the sidebar", async ({ page }) => {
+  const { gatewayURL } = e2eState();
+  const made = await fetch(`${gatewayURL}/v1/orgs`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${e2eState().adminKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "e2e-admin-members" }),
+  });
+  expect([201, 409]).toContain(made.status);
+  const base = await open(page, "gw-admin", "ops");
+  await nav(page).getByRole("link", { name: "Members", exact: true }).click();
+  await expect(page.locator("main h1")).toHaveText("Members");
+  await page.goto(`${base}/admin/orgs/`);
+  await page.getByRole("link", { name: "e2e-admin-members" }).click();
+  await expect(page.getByRole("combobox", { name: "Organization" })).toContainText("e2e-admin-members");
+  await page.getByLabel("Member user").fill("dana");
+  await page.getByLabel("Member tenant").fill("team-a");
+  await page.getByRole("button", { name: "Add member" }).click();
+  const row = page.getByRole("row").filter({ hasText: "dana" });
+  await expect(row).toContainText("member");
+  page.once("dialog", (d) => d.accept());
+  await row.getByRole("button", { name: "Remove" }).click();
+  await expect(row).toHaveCount(0);
 });
 
 test("an admin downloads an image to the gateway's nodes, and removes it from them", async ({ page }) => {

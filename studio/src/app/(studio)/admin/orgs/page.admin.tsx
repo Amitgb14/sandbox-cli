@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Building2 } from "lucide-react";
 import { EmptyState } from "@/components/common/empty-state";
 import { PageHeader } from "@/components/common/page-header";
@@ -40,7 +41,9 @@ function Orgs() {
           <TableBody>
             {rows.map((o) => (
               <TableRow key={o.name}>
-                <TableCell className="font-mono text-sm">{o.name}</TableCell>
+                <TableCell className="font-mono text-sm">
+                  <Link href={`/admin/members/?org=${encodeURIComponent(o.name)}`} className="underline-offset-4 hover:underline">{o.name}</Link>
+                </TableCell>
                 <TableCell className="text-sm">
                   {o.created_by}
                   {o.created_by_tenant ? <span className="text-muted-foreground">@{o.created_by_tenant}</span> : null}
