@@ -287,6 +287,13 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **API keys in the SDKs.** The Python and TypeScript SDKs make, list and
+  revoke the caller's personal API keys on a gateway (`create_api_key`,
+  `api_keys`, `revoke_api_key`; `createAPIKey`, `apiKeys`, `revokeAPIKey`),
+  and build a client from the environment: `Client.from_env()` /
+  `Client.fromEnv()` read `SANDBOX_ENDPOINT`, the key from `SANDBOX_API_KEY`
+  (or `SANDBOX_TOKEN`) and `SANDBOX_ORG`, so a key need not be in a
+  program's source. The SDK README shows snapshots and forks end to end.
 - **`sandbox-cli snapshot-ls` and `snapshot-rm`.** The CLI lists snapshots,
   newest first, with their sandbox, image, kind, size and whether a schedule
   or a request took them, and deletes them by id (`snapshot-rm ID...`; each

@@ -8,9 +8,62 @@ local, self-hosted or cloud — and learn what it offers from `capabilities()`.
 | [`python/`](python/) (`sandboxapi`) | standard library only; unix socket, http(s), private CA | yes: `make test-sdk` runs it against a real `sandboxd` |
 | [`typescript/`](typescript/) (`sandboxapi`) | `fetch`-based: Node 18+, Deno, Bun, browsers; http(s) endpoints | **not yet run**: written to the same contract, no Node in the development environment that wrote it |
 
+## API keys
+
+Every request carries the API key as `Authorization: Bearer <key>`: pass it
+as `token=` (Python) or `{ token }` (TypeScript), or build the client from the
+environment so the key stays out of your code:
+
+```sh
+export SANDBOX_ENDPOINT=https://gateway.example:7443
+export SANDBOX_API_KEY=…            # SANDBOX_TOKEN is read too
+export SANDBOX_ORG=acme             # optional; SANDBOX_CA_FILE too, in Python
+```
+
+```python
+from sandboxapi import Client
+c = Client.from_env()
+```
+
+```ts
+import { Client } from "sandboxapi";
+const c = Client.fromEnv();
+```
+
+On a gateway a user can make personal keys for their scripts, each with some
+of their own scopes, bound to the organization the client acts in, and always
+expiring (an hour to 366 days). The secret is in the answer once and stored
+only as a hash; a personal key cannot make keys itself.
+
+| Python | TypeScript | |
+|---|---|---|
+| `create_api_key(name, scopes, expires_in_secs=30*86400)` | `createAPIKey(name, scopes, expiresInSecs?)` | make one; its `secret` is shown this once |
+| `api_keys()` | `apiKeys()` | your personal keys, without secrets |
+| `revoke_api_key(id)` | `revokeAPIKey(id)` | what it has open ends |
+
+## Calls
+
 Both cover sandboxes, processes (run, background, output streaming, stdin,
 signals), files, suspend/resume and snapshots. Attach and
 tunnels (connection upgrades) are in the Go client and the CLI only, for now.
+
+A snapshot captures a running sandbox — whole, memory and processes too, on
+Firecracker; its files on macOS — and any number of new sandboxes start from
+it. A sandbox started from one takes the snapshot's image and size, and its own
+network policy:
+
+```python
+snap = c.create_snapshot(sb["id"])
+fork = c.create_sandbox(snapshot_id=snap["id"])
+c.snapshots()                     # newest first
+c.delete_snapshot(snap["id"])     # forks keep running
+```
+
+```ts
+const snap = await c.createSnapshot(sb.id);
+const fork = await c.createSandbox({ snapshot_id: snap.id });
+await c.deleteSnapshot(snap.id);
+```
 
 Against a gateway in front of many sandboxd nodes, both also have its
 user-facing calls (a plain sandboxd answers each with `not_found`):
@@ -54,7 +107,7 @@ request, so everything it does acts in that organization; the gateway answers
 | `set_org_member(org, user, role="", tenant="")` | `setOrgMember(org, user, {role?, tenant?})` | owners add a member or change a role |
 | `remove_org_member(org, user, tenant="")` | `removeOrgMember(org, user, tenant?)` | owners; what the member had open there ends at once |
 
-The gateway's admin calls (API keys, nodes, cordon) are in the Go client only;
+The gateway's admin calls (other users' API keys, nodes, cordon) are in the Go client only;
 `admin_orgs()` / `adminOrgs()` lists every organization for an admin key.
 
 Byte fields are bytes (`bytes` / `Uint8Array`); the wire format's base64 is

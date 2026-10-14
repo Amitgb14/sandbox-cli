@@ -157,6 +157,28 @@ export interface Whoami {
   org?: string;
 }
 
+/** A personal API key (GET /v1/keys), without its secret. */
+export interface APIKey {
+  id: string;
+  name?: string;
+  user: string;
+  tenant: string;
+  scopes: string[];
+  created: string;
+  /** When it stops working; personal keys always expire. */
+  expires?: string;
+  revoked?: boolean;
+  personal?: boolean;
+  /** The organization it acts in, and only there. */
+  org?: string;
+  policy?: string;
+}
+
+/** A key just made: `secret` is shown this once and stored only as a hash. */
+export interface CreatedAPIKey extends APIKey {
+  secret: string;
+}
+
 /** One organization the caller may act in (GET /v1/orgs). */
 export interface Org {
   name: string;
@@ -403,6 +425,18 @@ export class Client {
     this.token = opts.token ?? "";
     this.org = opts.org ?? "";
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  /**
+   * A client from the environment (Node, Deno, Bun): SANDBOX_ENDPOINT, the
+   * API key in SANDBOX_API_KEY (or SANDBOX_TOKEN), and optionally SANDBOX_ORG.
+   * The key stays out of the program's source.
+   */
+  static fromEnv(opts: Omit<ClientOptions, "token" | "org"> = {}): Client {
+    const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
+    const endpoint = env.SANDBOX_ENDPOINT;
+    if (!endpoint) throw new Error("SANDBOX_ENDPOINT is not set");
+    return new Client(endpoint, { ...opts, token: env.SANDBOX_API_KEY || env.SANDBOX_TOKEN || "", org: env.SANDBOX_ORG || "" });
   }
 
   /** A client like this one acting in organization `org` ("" for the key's own tenant). */
@@ -656,6 +690,26 @@ export class Client {
 
   async adminOrgs(): Promise<AdminOrg[]> {
     return (await this.json<{ orgs: AdminOrg[] }>("GET", "/v1/admin/orgs")).orgs;
+  }
+
+  /**
+   * Make a personal API key with some of the caller's own scopes, bound to
+   * the organization this client acts in. It always expires: in an hour to
+   * 366 days (default 30). A personal key cannot make keys itself.
+   */
+  createAPIKey(name: string, scopes: string[], expiresInSecs = 30 * 86400): Promise<CreatedAPIKey> {
+    if (scopes.length === 0) return Promise.reject(new Error("a key needs at least one scope"));
+    return this.json("POST", "/v1/keys", { name, scopes, expires_in_secs: expiresInSecs });
+  }
+
+  /** The caller's personal keys, without their secrets. */
+  async apiKeys(): Promise<APIKey[]> {
+    return (await this.json<{ keys: APIKey[] }>("GET", "/v1/keys")).keys;
+  }
+
+  /** Revoke one of the caller's personal keys; what it has open ends. */
+  async revokeAPIKey(id: string): Promise<void> {
+    await this.json("DELETE", "/v1/keys/" + encodeURIComponent(id));
   }
 
   /** Where the gateway's SSH server listens, and the host keys to pin. */

@@ -6,6 +6,7 @@ import base64
 import copy
 import http.client
 import json
+import os
 import socket
 import ssl
 import urllib.parse
@@ -75,6 +76,19 @@ class Client:
         self._ssl = None
         if u.scheme == "https":
             self._ssl = ssl.create_default_context(cafile=ca_file) if ca_file else ssl.create_default_context()
+
+    @classmethod
+    def from_env(cls, timeout: float = 300.0) -> "Client":
+        """A client from the environment: ``SANDBOX_ENDPOINT``, the API key in
+        ``SANDBOX_API_KEY`` (or ``SANDBOX_TOKEN``), and optionally
+        ``SANDBOX_CA_FILE`` and ``SANDBOX_ORG``. The key stays out of the
+        program's source and its argv."""
+        endpoint = os.environ.get("SANDBOX_ENDPOINT", "")
+        if not endpoint:
+            raise ValueError("SANDBOX_ENDPOINT is not set")
+        token = os.environ.get("SANDBOX_API_KEY") or os.environ.get("SANDBOX_TOKEN", "")
+        return cls(endpoint, token=token, ca_file=os.environ.get("SANDBOX_CA_FILE") or None,
+                   timeout=timeout, org=os.environ.get("SANDBOX_ORG", ""))
 
     # --- plumbing -------------------------------------------------------------
 
@@ -353,6 +367,25 @@ class Client:
 
     def admin_orgs(self) -> List[Dict[str, Any]]:
         return self._json("GET", "/v1/admin/orgs")["orgs"]
+
+    def create_api_key(self, name: str, scopes: List[str], expires_in_secs: int = 30 * 86400) -> Dict[str, Any]:
+        """Make a personal API key with some of the caller's own scopes, bound
+        to the organization this client acts in. It always expires: in an
+        hour to 366 days (default 30), never after the key that makes it.
+        The answer's ``secret`` is shown this once and stored only as a hash.
+        A personal key cannot make keys itself."""
+        if not scopes:
+            raise ValueError("a key needs at least one scope")
+        return self._json("POST", "/v1/keys", {"name": name, "scopes": list(scopes),
+                                               "expires_in_secs": expires_in_secs})
+
+    def api_keys(self) -> List[Dict[str, Any]]:
+        """The caller's personal keys, without their secrets."""
+        return self._json("GET", "/v1/keys")["keys"]
+
+    def revoke_api_key(self, key_id: str) -> None:
+        """Revoke one of the caller's personal keys; what it has open ends."""
+        self._json("DELETE", "/v1/keys/" + urllib.parse.quote(key_id, safe=""))
 
     def ssh_info(self) -> Dict[str, Any]:
         """Where the gateway's SSH server listens (``host``, ``port``) and the
