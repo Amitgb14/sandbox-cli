@@ -345,7 +345,91 @@ func newSuspendCmds() []*cobra.Command {
 			return err
 		}),
 		newSnapshotScheduleCmd(),
+		newSnapshotLsCmd(),
+		newSnapshotRmCmd(),
 	}
+}
+
+// newSnapshotLsCmd lists the snapshots this context's key may see, newest
+// first. Sandboxes already started from one do not need it; a snapshot is
+// only what a new fork would start from.
+func newSnapshotLsCmd() *cobra.Command {
+	var ctxFlag string
+	cmd := &cobra.Command{
+		Use:     "snapshot-ls",
+		Aliases: []string{"snapshots"},
+		Short:   "List snapshots, newest first",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			c, _, err := newClient(ctxFlag)
+			if err != nil {
+				return err
+			}
+			list, err := c.Snapshots(cmd.Context())
+			if err != nil {
+				return err
+			}
+			sort.SliceStable(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
+			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tSANDBOX\tIMAGE\tKIND\tSIZE\tTAKEN BY\tCREATED")
+			for _, s := range list {
+				by := "request"
+				if s.Scheduled {
+					by = "schedule"
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", termsafe.Clean(s.ID), termsafe.Clean(s.Sandbox), termsafe.Clean(s.Image),
+					termsafe.Clean(s.Kind), snapshotSize(s.Bytes), by, s.CreatedAt.Local().Format(time.DateTime))
+			}
+			return tw.Flush()
+		},
+	}
+	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
+	return cmd
+}
+
+// newSnapshotRmCmd deletes snapshots by id. Each is tried, so one that is
+// already gone does not keep the rest; the command fails if any was not
+// deleted. Sandboxes started from a snapshot keep running without it.
+func newSnapshotRmCmd() *cobra.Command {
+	var ctxFlag string
+	cmd := &cobra.Command{
+		Use:     "snapshot-rm SNAPSHOT...",
+		Short:   "Delete snapshots; sandboxes already started from them keep running",
+		Example: "  sandbox-cli snapshot-rm snp_0f80da1e250655e9\n  sandbox-cli snapshot-ls",
+		Args:    cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, _, err := newClient(ctxFlag)
+			if err != nil {
+				return err
+			}
+			var failed error
+			for _, id := range args {
+				if err := c.DeleteSnapshot(cmd.Context(), id); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "sandbox-cli: %s: %v\n", termsafe.Clean(id), err)
+					failed = errors.New("not every snapshot was deleted")
+					continue
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "deleted %s\n", termsafe.Clean(id))
+			}
+			return failed
+		},
+	}
+	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
+	return cmd
+}
+
+// snapshotSize is a snapshot's size, rounded: its bytes are not a round
+// number as a sandbox's memory is, and one under a MiB still says it is there.
+func snapshotSize(b int64) string {
+	switch {
+	case b <= 0:
+		return "-"
+	case b < 1<<20:
+		return "<1 MiB"
+	case b < 1<<30:
+		return fmt.Sprintf("%d MiB", b>>20)
+	}
+	return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30))
 }
 
 // newSnapshotScheduleCmd sets a running sandbox's snapshot schedule: one every

@@ -287,6 +287,12 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **`sandbox-cli snapshot-ls` and `snapshot-rm`.** The CLI lists snapshots,
+  newest first, with their sandbox, image, kind, size and whether a schedule
+  or a request took them, and deletes them by id (`snapshot-rm ID...`; each
+  is tried, and the command fails if any was not deleted). Sandboxes already
+  started from a snapshot keep running without it. Both were API- and
+  Studio-only before.
 - **Networked sandboxes can be snapshotted, and forks have a network.** On
   Firecracker every sandbox now has a network namespace of its own, with its
   tap in it and the same guest address in each, joined to the host by a
