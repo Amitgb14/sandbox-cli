@@ -740,8 +740,11 @@ and `DELETE` revoke for good at once.
 its own sandboxes, volumes, snapshots, jobs and services, in organizations
 its user is in, as any key does: other users' are `404`, listed nowhere.
 The one exception is enforcement: it may terminate another user's sandbox
-by its id (`sandbox-cli kill ID`), as when one is left running by a member
-removed from an organization, without seeing what is in it.
+by its id (`sandbox-cli kill ID`), without seeing what is in it. Studio's
+**Left behind** screen lists the ones that need it — still running, but
+whose owner was suspended, revoked, expired or removed from the
+organization, so nobody else can end them — with why, and terminates them
+one by one or all at once; the Dashboard links there when there are any.
 Studio's **Dashboard** (`GET /v1/admin/stats`) shows the gateway in
 totals — users, organizations, sandboxes running and created, memory, CPUs
 and disk given of what the nodes have. To stop a user's work, suspend or

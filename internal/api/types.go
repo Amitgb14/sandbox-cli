@@ -927,6 +927,9 @@ type SandboxStats struct {
 	Created7d   int `json:"created_7d"`
 	Created     int `json:"created"`
 	HistoryDays int `json:"history_days"`
+	// Orphaned are running ones whose owner can no longer act on them
+	// (GET /v1/admin/orphans lists them).
+	Orphaned int `json:"orphaned"`
 }
 
 // JobStats counts jobs: Running now, and Total the gateway keeps.
@@ -945,6 +948,31 @@ type NodeStats struct {
 	Running  int           `json:"running"`
 	Capacity NodeResources `json:"capacity"`
 	Used     NodeResources `json:"used"`
+}
+
+// OrphanSandbox is a running sandbox whose owner can no longer act where it
+// is — suspended, revoked, expired, or removed from its organization — so
+// nobody but an admin, by its id, can end it (GET /v1/admin/orphans).
+type OrphanSandbox struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name,omitempty"`
+	Image     string     `json:"image,omitempty"`
+	State     string     `json:"state,omitempty"`
+	User      string     `json:"user"`
+	Org       string     `json:"org"`
+	Node      string     `json:"node"`
+	CPUs      float64    `json:"cpus"`
+	MemoryMB  int        `json:"memory_mb"`
+	DiskMB    int        `json:"disk_mb"`
+	Recorded  time.Time  `json:"recorded"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// Reason says why its owner cannot act on it.
+	Reason string `json:"reason"`
+}
+
+// OrphanList is GET /v1/admin/orphans.
+type OrphanList struct {
+	Sandboxes []OrphanSandbox `json:"sandboxes"`
 }
 
 // NodeList is GET /v1/admin/nodes.

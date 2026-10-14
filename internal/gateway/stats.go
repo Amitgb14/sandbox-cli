@@ -79,12 +79,17 @@ func (g *Gateway) adminStats(w http.ResponseWriter, r *http.Request, p Principal
 		g.writeStoreErr(w, err)
 		return
 	}
+	orphans, err := g.orphanedSandboxes(r.Context())
+	if err != nil {
+		g.writeStoreErr(w, err)
+		return
+	}
 	out := api.GatewayStats{
 		Time:      time.Now().UTC(),
 		Users:     api.UserStats{Total: c.Users, Accounts: c.Accounts, SignedIn24h: c.SignedIn24h, Suspended: c.Suspended},
 		Orgs:      c.Orgs,
 		Keys:      api.KeyStats{Active: c.Keys, Personal: c.PersonalKeys},
-		Sandboxes: api.SandboxStats{Running: c.Running, Created24h: c.Created24h, Created7d: c.Created7d, Created: c.Created, HistoryDays: int(g.cfg.SandboxHistory / (24 * time.Hour))},
+		Sandboxes: api.SandboxStats{Running: c.Running, Created24h: c.Created24h, Created7d: c.Created7d, Created: c.Created, HistoryDays: int(g.cfg.SandboxHistory / (24 * time.Hour)), Orphaned: len(orphans)},
 		Jobs:      api.JobStats{Running: c.JobsRunning, Total: c.Jobs},
 		Services:  c.Services,
 		Allocated: c.Allocated,

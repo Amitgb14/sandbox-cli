@@ -1,6 +1,7 @@
 "use client";
 
 import { Boxes, Building2, Cpu, HardDrive, KeyRound, ListChecks, MemoryStick, Server, Users, Workflow } from "lucide-react";
+import Link from "next/link";
 import { MetricTile } from "@/components/common/metric-tile";
 import { PageHeader } from "@/components/common/page-header";
 import { Gate } from "@/components/shell/gate";
@@ -38,7 +39,7 @@ function Dashboard() {
       </section>
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Work">
         <MetricTile label="Sandboxes running" icon={Boxes} value={n(s?.sandboxes.running)} loading={isLoading}
-          footer={s ? `${s.nodes.running} on the nodes' own count` : undefined} />
+          footer={s ? (s.sandboxes.orphaned ? <Link href="/admin/orphans" className="text-caution underline-offset-4 hover:underline">{s.sandboxes.orphaned} left behind by removed users</Link> : `${s.nodes.running} on the nodes' own count`) : undefined} />
         <MetricTile label="Sandboxes created" icon={Boxes} value={n(s?.sandboxes.created_24h)} unit="today" loading={isLoading}
           footer={s ? `${s.sandboxes.created_7d} this week · ${s.sandboxes.created} ${s.sandboxes.history_days ? `in ${s.sandboxes.history_days} days` : "in all"}` : undefined}
           hint="Counted from the gateway's records, which keep a terminated sandbox for the history period (--sandbox-history)." />

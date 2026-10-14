@@ -18,6 +18,7 @@ import {
   Settings,
   Terminal,
   Unplug,
+  UserX,
   UserRoundCog,
   Users,
   Workflow,
@@ -73,6 +74,7 @@ const ADMIN_GROUP: NavGroup[] = process.env.NEXT_PUBLIC_STUDIO_ADMIN !== "off"
         items: [
           { title: "Nodes", href: "/admin/nodes", icon: Server, need: "admin", hint: "The nodes behind the gateway: health, capacity, cordon and drain" },
           { title: "Lost sandboxes", href: "/admin/lost", icon: Unplug, need: "admin", hint: "Sandboxes on nodes that stopped answering" },
+          { title: "Left behind", href: "/admin/orphans", icon: UserX, need: "admin", hint: "Sandboxes still running whose owner was suspended, revoked or removed from the organization; terminate them" },
           { title: "Users", href: "/admin/keys", icon: Users, need: "admin", hint: "Every user: their organization, scopes, policy and expiry; invite, renew, revoke and restore" },
           { title: "Members", href: "/admin/members", icon: UserRoundCog, need: "admin", hint: "Any organization's members: add, remove, and make owners" },
           { title: "Allowlist groups", href: "/admin/egress-groups", icon: ListPlus, need: "admin", hint: "Named sets of hosts any user may pick for a sandbox on an allowlist" },

@@ -196,7 +196,7 @@ export interface GatewayStats {
   users: { total: number; accounts: number; signed_in_24h: number; suspended: number };
   orgs: number;
   keys: { active: number; personal: number };
-  sandboxes: { running: number; created_24h: number; created_7d: number; created: number; history_days: number };
+  sandboxes: { running: number; created_24h: number; created_7d: number; created: number; history_days: number; orphaned: number };
   jobs: { running: number; total: number };
   services: number;
   allocated: Resources;
@@ -209,6 +209,43 @@ export function useStats() {
     // The gateway's totals, whatever this browser has selected.
     queryFn: () => apiFetch<GatewayStats>("/v1/admin/stats", { noOrg: true }),
     refetchInterval: 10_000,
+  });
+}
+
+/** GET /v1/admin/orphans: running sandboxes whose owner can no longer act on them. */
+export interface OrphanSandbox {
+  id: string;
+  name?: string;
+  image?: string;
+  state?: string;
+  user: string;
+  org: string;
+  node: string;
+  cpus: number;
+  memory_mb: number;
+  disk_mb: number;
+  recorded: string;
+  expires_at?: string;
+  reason: string;
+}
+
+export function useOrphans() {
+  return useQuery({
+    queryKey: ["admin", "orphans"],
+    queryFn: async () => (await apiFetch<{ sandboxes: OrphanSandbox[] }>("/v1/admin/orphans", { noOrg: true })).sandboxes ?? [],
+    refetchInterval: 15_000,
+  });
+}
+
+/** Ends one by its id: the one thing an admin may do to a sandbox not theirs. */
+export function useEndOrphan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiFetch<void>(`/v1/sandboxes/${enc(id)}`, { method: "DELETE", noOrg: true }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "orphans"] });
+      qc.invalidateQueries({ queryKey: ["admin", "stats"] });
+    },
   });
 }
 
