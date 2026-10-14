@@ -179,7 +179,7 @@ func (g *Gateway) sshAccess(w http.ResponseWriter, r *http.Request, p Principal)
 
 func (g *Gateway) keyInfo(ctx context.Context, k Key) (api.KeyInfo, error) {
 	ki := api.KeyInfo{ID: k.ID, User: k.User, Tenant: k.Tenant, Scopes: k.Scopes, Created: k.Created, Revoked: k.Revoked,
-		Expires: k.Expires, Email: k.Email, LastLogin: k.LastLogin}
+		Expires: k.Expires, Email: k.Email, LastLogin: k.LastLogin, Personal: k.Personal, Name: k.Name}
 	if k.Suspended(time.Now()) {
 		ki.Suspended, ki.RestoreUntil = true, k.RestoreUntil
 	}
@@ -264,8 +264,9 @@ func (g *Gateway) adminListKeys(w http.ResponseWriter, r *http.Request, p Princi
 	}
 	for _, k := range keys {
 		// A sign-in's key is the account's, for a while: the account is
-		// what is listed, renewed and revoked.
-		if k.Parent != "" {
+		// what is listed, renewed and revoked. A personal key is listed: it
+		// is a credential of its own, for as long as a year.
+		if k.Parent != "" && !k.Personal {
 			continue
 		}
 		ki, err := g.keyInfo(ctx, k)

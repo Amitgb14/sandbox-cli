@@ -5,6 +5,7 @@ import {
   Camera,
   CircleUser,
   HardDrive,
+  KeyRound,
   Layers3,
   LayoutTemplate,
   ListChecks,
@@ -156,6 +157,7 @@ export const NAV: NavGroup[] = [
         ? [{ title: "Members", href: "/members", icon: UserRoundCog, need: "gateway", hint: "Who belongs to the current organization; owners add and remove members" } satisfies NavItem]
         : []),
       { title: "Account", href: "/account", icon: CircleUser, need: "gateway", hint: "Who this API key is: user, tenant, organization and scopes" },
+      { title: "API keys", href: "/api-keys", icon: KeyRound, need: "gateway", hint: "Keys you make for your programs to act as you: some of your scopes, an expiry; revoke any" },
       {
         title: "Settings",
         href: "/settings",

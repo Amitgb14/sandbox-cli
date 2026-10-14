@@ -766,6 +766,16 @@ type CreateKeyRequest struct {
 	ExpiresInSecs int `json:"expires_in_secs,omitempty"`
 }
 
+// CreatePersonalKeyRequest is POST /v1/keys: a key the caller makes for
+// themselves, with some of their own scopes (never admin), ending
+// ExpiresInSecs from now — an hour to 366 days, and never after the
+// account or key it is made under. Name tells it apart in a listing.
+type CreatePersonalKeyRequest struct {
+	Name          string   `json:"name"`
+	Scopes        []string `json:"scopes"`
+	ExpiresInSecs int      `json:"expires_in_secs"`
+}
+
 // KeyExpiryRequest is PATCH /v1/admin/keys/{id}: the key stops working
 // ExpiresInSecs from now, never when 0, and at once when negative — what
 // it has open is ended as for a revocation.
@@ -794,6 +804,10 @@ type KeyInfo struct {
 	// it the revocation is for good.
 	Suspended    bool       `json:"suspended,omitempty"`
 	RestoreUntil *time.Time `json:"restore_until,omitempty"`
+	// Personal is a key its user made for themselves (POST /v1/keys),
+	// named Name.
+	Personal bool   `json:"personal,omitempty"`
+	Name     string `json:"name,omitempty"`
 }
 
 // CreatedKey is returned once, when a key is issued: Secret is never shown
@@ -803,7 +817,8 @@ type CreatedKey struct {
 	Secret string `json:"secret"`
 }
 
-// KeyList is GET /v1/admin/keys.
+// KeyList is GET /v1/admin/keys, and GET /v1/keys for the caller's
+// personal keys.
 type KeyList struct {
 	Keys []KeyInfo `json:"keys"`
 }

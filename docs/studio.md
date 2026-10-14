@@ -56,7 +56,7 @@ the browser never sees the key. It is the same Studio either way.
 
 | The key holds | Studio adds |
 |---|---|
-| any scope | **Jobs** (list with search and state and label filters; submit with labels; detail with each run's kept output and files), **Services** (list with search and health filters, detail with replicas, health and rollout), **Secrets** (names only), **SSH** (where to connect, the host key to pin), **Account** (user, tenant, current organisation, key id, scopes), the **organisation switcher** at the top of the sidebar and **Members** (list; add, remove and change roles as an owner) |
+| any scope | **Jobs** (list with search and state and label filters; submit with labels; detail with each run's kept output and files), **Services** (list with search and health filters, detail with replicas, health and rollout), **Secrets** (names only), **SSH** (where to connect, the host key to pin), **Account** (user, tenant, current organisation, key id, scopes), **API keys** (keys you make for your programs: a name, some of your scopes and an expiry; the secret shown once; revoke any — [fleet.md](fleet.md#personal-api-keys)), the **organisation switcher** at the top of the sidebar and **Members** (list; add, remove and change roles as an owner) |
 | `org:create` | **Create organization** in the switcher |
 | `sandbox:create` | the Playground, submitting and cancelling jobs, deploying (a JSON spec) and scaling services, creating volumes, a sandbox's Terminal, Suspend and Snapshot |
 | `sandbox:delete` | terminating sandboxes, deleting volumes and snapshots; with `sandbox:create`, removing a service |

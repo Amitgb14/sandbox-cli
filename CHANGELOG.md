@@ -287,6 +287,16 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **Users make their own API keys.** Under **API keys** in Studio's sidebar,
+  or `POST`, `GET` and `DELETE /v1/keys`, a user signed in with a password,
+  or holding a key, makes keys for their programs: a name, some of their own
+  scopes (never `admin`) and an expiry of an hour to a year, never past their
+  account's. Their policy applies to each. The secret is shown once; they
+  list and revoke their own, at most 20 live. Revoking, suspending or
+  expiring the account, or an admin's password reset, ends them; signing
+  out does not. A personal key manages no keys and cannot change the
+  password. The admin's Users screen lists them (`personal key · NAME`) and
+  revokes them; it cannot suspend one alone.
 - **A gateway's admin manages the nodes' images.** `GET`, `POST` and
   `DELETE /v1/admin/images` (and `sandbox-cli gateway images ls|pull|rm`)
   list the images on every node with where each is, download one to every

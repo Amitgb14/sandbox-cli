@@ -74,6 +74,26 @@ func (c *Client) CreateKey(ctx context.Context, req CreateKeyRequest) (CreatedKe
 	return out, c.json(ctx, http.MethodPost, "/v1/admin/keys", req, &out)
 }
 
+// CreatePersonalKey makes the caller a key of their own, with some of
+// their scopes and an expiry; its secret is in the answer only.
+func (c *Client) CreatePersonalKey(ctx context.Context, req CreatePersonalKeyRequest) (CreatedKey, error) {
+	var out CreatedKey
+	return out, c.json(ctx, http.MethodPost, "/v1/keys", req, &out)
+}
+
+// PersonalKeys lists the keys the caller made for themselves, revoked and
+// expired ones included.
+func (c *Client) PersonalKeys(ctx context.Context) ([]KeyInfo, error) {
+	var out KeyList
+	err := c.json(ctx, http.MethodGet, "/v1/keys", nil, &out)
+	return out.Keys, err
+}
+
+// RevokePersonalKey revokes one of the caller's personal keys.
+func (c *Client) RevokePersonalKey(ctx context.Context, id string) error {
+	return c.json(ctx, http.MethodDelete, "/v1/keys/"+url.PathEscape(id), nil, nil)
+}
+
 // Keys lists the gateway's API keys, without their secrets (admin).
 func (c *Client) Keys(ctx context.Context) ([]KeyInfo, error) {
 	var out KeyList

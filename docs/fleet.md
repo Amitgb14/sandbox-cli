@@ -674,6 +674,34 @@ sandbox-gateway --state-dir … serve … \
 - A send that fails leaves the invite usable: the answer says why
   (`email_error`), and the link is shown to the admin to send by hand.
 
+### Personal API keys
+
+A user makes keys of their own for their programs — a CI job, a script, the
+CLI on another machine — under **API keys** in Studio's sidebar, or with
+`POST /v1/keys` ([api/v1.md](api/v1.md#personal-api-keys)). Signed in with
+a password, that is how a person gets a key at all without asking an admin,
+and without handing their password to a program.
+
+- **Less than its maker.** Its scopes are ones its maker holds, never
+  `admin` (a super admin's keys are issued with `keys create`). Its user's
+  policy applies to it, as to everything they do: a policy is the user's,
+  not a key's.
+- **It always ends**: in an hour to 366 days, and never after the account
+  or key it was made under. An admin shortening that account shortens it
+  too, and renewing it alone cannot take it past the account.
+- **It ends with its account.** Revoking, suspending or expiring the account
+  (or the plain key it was made with) ends it. A suspension ends it for
+  good: **Restore** brings back the account, not its personal keys. An
+  admin's password reset revokes them, since a password taken may have made
+  some; signing out and a change the user makes, knowing the password, do
+  not.
+- **It manages nothing.** A personal key makes, lists and revokes no keys,
+  and is not its account: it cannot change the password. A leaked one is
+  worth what its scopes are, until it expires or is revoked.
+- **At most 20** live at once per account. The secret is shown once; the
+  user lists, and revokes, their own, and the super admin sees every one
+  on the Users screen (`personal key · NAME`) and can revoke it there.
+
 ### Revoking
 
 **Studio's Revoke suspends.** It asks first, then calls

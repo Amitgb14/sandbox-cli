@@ -45,6 +45,13 @@ type Store interface {
 	Keys(ctx context.Context) ([]Key, error)
 	// KeysOfUser is every key whose user is named user, in any tenant.
 	KeysOfUser(ctx context.Context, user string) ([]Key, error)
+	// CreatePersonalKey makes a key for the user of key by, under by's
+	// account or itself, with scopes it holds, ending no later than it;
+	// PersonalKeys lists those made under the same root, and
+	// RevokePersonalKey revokes one of them (keys_personal.go).
+	CreatePersonalKey(ctx context.Context, by, name string, scopes []string, expires time.Time) (string, Key, error)
+	PersonalKeys(ctx context.Context, by string) ([]Key, error)
+	RevokePersonalKey(ctx context.Context, by, id string) (Key, error)
 
 	CreateInvite(ctx context.Context, req api.CreateInviteRequest) (string, inviteRecord, error)
 	CreateResetInvite(ctx context.Context, id string, valid time.Duration) (string, inviteRecord, error)
@@ -54,6 +61,8 @@ type Store interface {
 	InviteByToken(ctx context.Context, token string) (inviteRecord, bool, error)
 	RedeemInvite(ctx context.Context, token, passwordHash string) (Key, error)
 	Account(ctx context.Context, email string) (Key, bool, error)
+	// AccountOf is the account a key is, or signs in to; ok is false for
+	// a key of no account, and for a personal key.
 	AccountOf(ctx context.Context, keyID string) (Key, bool, error)
 	SignIn(ctx context.Context, account string, ttl time.Duration) (string, Key, error)
 	SignOut(ctx context.Context, id string) error
