@@ -81,6 +81,8 @@ func run(args []string) error {
 	network := fl.Bool("network", os.Geteuid() == 0, "firecracker: host-enforced egress (root only)")
 	proxyPort := fl.Int("egress-proxy-port", 0, "firecracker: host TCP port the egress proxy listens on (default 3128)")
 	dnsPort := fl.Int("egress-dns-port", 0, "firecracker: host UDP port the egress resolver listens on (default 7353)")
+	egressOpen := fl.Bool("egress-open", false, "firecracker: offer network mode open — TCP to public addresses, never the host's or private ones — to sandboxes the policy's ceiling allows it (needs --network)")
+	openPort := fl.Int("egress-open-port", 0, "firecracker: host TCP port open egress is forwarded through (default 7354)")
 	keep := fl.Bool("keep-sandboxes", false, "on exit, leave sandboxes running for the next sandboxd on this state directory to take back, so an upgrade stops neither them nor their processes (firecracker)")
 	defaultImage := fl.String("default-image", "", "image for requests that name none (overrides the policy file)")
 	var allowedHosts, insecureRegistries listFlag
@@ -114,10 +116,15 @@ func run(args []string) error {
 			return err
 		}
 	}
-	for name, port := range map[string]int{"--egress-proxy-port": *proxyPort, "--egress-dns-port": *dnsPort} {
+	for name, port := range map[string]int{"--egress-proxy-port": *proxyPort, "--egress-dns-port": *dnsPort, "--egress-open-port": *openPort} {
 		if port < 0 || port > 65535 {
 			return fmt.Errorf("%s %d: not a port", name, port)
 		}
+	}
+	if (*egressOpen || *openPort != 0) && *backendName != "firecracker" {
+		// macOS offers open egress of its own, and the fake none: a flag that
+		// would do nothing is refused rather than ignored.
+		return fmt.Errorf("--egress-open and --egress-open-port are for --backend firecracker")
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "sandboxd: "+format+"\n", a...) }
 
@@ -135,7 +142,7 @@ func run(args []string) error {
 
 	be, err := newBackend(*backendName, backendOptions{
 		stateDir: *stateDir, kernel: *kernel, firecracker: *firecracker, jailer: *jailer,
-		agent: *agent, network: *network, proxyPort: *proxyPort, dnsPort: *dnsPort, keep: *keep,
+		agent: *agent, network: *network, proxyPort: *proxyPort, dnsPort: *dnsPort, egressOpen: *egressOpen, openPort: *openPort, keep: *keep,
 		logf: logf, insecureRegistries: insecureRegistries,
 		container: *containerBin,
 	})
@@ -267,7 +274,8 @@ func run(args []string) error {
 type backendOptions struct {
 	stateDir, kernel, firecracker, jailer, agent string
 	network                                      bool
-	proxyPort, dnsPort                           int // 0: the backend's defaults
+	proxyPort, dnsPort, openPort                 int // 0: the backend's defaults
+	egressOpen                                   bool
 	keep                                         bool
 	logf                                         func(string, ...any)
 	insecureRegistries                           []string

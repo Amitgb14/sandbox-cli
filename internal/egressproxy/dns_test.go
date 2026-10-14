@@ -126,3 +126,73 @@ func TestDNSSurvivesHostileInput(t *testing.T) {
 		_ = d.answer(q, nil) // must not panic
 	}
 }
+
+// An open sandbox is told a name's real addresses, resolved on the host; a
+// denied name is still NXDOMAIN, and an allowlisted sandbox still gets the
+// sinkhole.
+func TestDNSAnswersAnOpenSandboxWithRealAddresses(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	var open bool
+	var resolved []string
+	d := &DNS{
+		MatchFor: func(net.Addr) *Matcher {
+			if open {
+				return NewDenyMatcher([]string{"denied.example"})
+			}
+			return NewMatcher([]string{"github.com"})
+		},
+		Sinkhole: func(net.Addr) net.IP { return net.IPv4(172, 16, 0, 1) },
+		Open:     func(net.Addr) bool { return open },
+		Resolve: func(name string) ([]net.IP, error) {
+			resolved = append(resolved, name)
+			if name == "missing.example" {
+				return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+			}
+			var ips []net.IP
+			for i := 1; i <= 12; i++ {
+				ips = append(ips, net.IPv4(140, 82, 112, byte(i)))
+			}
+			return append(ips, net.ParseIP("2606:4700::1")), nil
+		},
+	}
+	addrs := func(r []byte) []string {
+		var out []string
+		for i := 0; i+4 <= len(r); i++ {
+			// Each answer ends in rdlength 4 and the address; find them by
+			// their fixed shape after the name pointer.
+			if r[i] == 0xC0 && r[i+1] == 0x0C && i+16 <= len(r) {
+				out = append(out, net.IP(r[i+12:i+16]).String())
+				i += 15
+			}
+		}
+		return out
+	}
+	open = true
+	r := d.answer(query(1, "github.com", typeA), &net.UDPAddr{})
+	if got := addrs(r); len(got) != maxAnswers || got[0] != "140.82.112.1" || binary.BigEndian.Uint16(r[6:8]) != maxAnswers {
+		t.Errorf("open: %v", got)
+	}
+	if len(r) > 512 {
+		t.Errorf("a reply of %d bytes", len(r))
+	}
+	if r := d.answer(query(2, "denied.example", typeA), &net.UDPAddr{}); r[3]&0xF != rcodeNX {
+		t.Errorf("a denied name: rcode %d", r[3]&0xF)
+	}
+	if r := d.answer(query(3, "missing.example", typeA), &net.UDPAddr{}); r[3]&0xF != rcodeNX {
+		t.Errorf("a name with no address: rcode %d", r[3]&0xF)
+	}
+	if len(resolved) != 2 {
+		t.Errorf("resolved %v; a denied name must not be", resolved)
+	}
+	open = false
+	if got := addrs(d.answer(query(4, "github.com", typeA), &net.UDPAddr{})); len(got) != 1 || got[0] != "172.16.0.1" {
+		t.Errorf("allowlist: %v", got)
+	}
+	if len(resolved) != 2 {
+		t.Errorf("an allowlisted sandbox's query was forwarded: %v", resolved)
+	}
+}

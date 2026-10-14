@@ -34,8 +34,12 @@ func newFirecracker(o backendOptions) (backend.Backend, error) {
 		Firecracker: bin, Kernel: o.kernel, Agent: agent, StateDir: o.stateDir,
 		Puller: puller, Logf: o.logf, Keep: o.keep,
 	}
+	if o.egressOpen && !o.network {
+		// Asked for and not deliverable: refused, not served as no network.
+		return nil, errors.New("--egress-open needs --network: open egress is enforced on the host")
+	}
 	if o.network {
-		cfg.Network = &fc.Network{ProxyPort: o.proxyPort, DNSPort: o.dnsPort, Logf: o.logf}
+		cfg.Network = &fc.Network{ProxyPort: o.proxyPort, DNSPort: o.dnsPort, Open: o.egressOpen, OpenPort: o.openPort, Logf: o.logf}
 	} else {
 		o.logf("networking off: sandboxes have no network interface")
 	}

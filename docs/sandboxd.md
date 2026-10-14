@@ -48,6 +48,8 @@ sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
 | `--keep-sandboxes` | off | firecracker: on exit, leave sandboxes running, and on start take back the ones an earlier sandboxd on this state directory left, so an upgrade interrupts no VM and no process in one (processes are re-attached under the same numbers). Writes each sandbox's environment values to `<state-dir>/records/` (0600). Needs `KillMode=process` under systemd ([self-hosting.md](self-hosting.md#upgrading-without-stopping-sandboxes)). |
 | `--network` | on as root | firecracker: host-enforced egress (root only). Without it every sandbox has no network ([self-hosting.md](self-hosting.md#how-egress-is-enforced)). |
 | `--egress-proxy-port`, `--egress-dns-port` | 3128, 7353 | firecracker: the host ports the egress proxy (TCP) and resolver (UDP) listen on. Move one only if another program on the host holds it; the guest never sees them ([self-hosting.md](self-hosting.md#how-egress-is-enforced)). |
+| `--egress-open` | off | firecracker: offer network mode `open` — TCP to public addresses on any port, never the host's, private, tailnet or link-local ones — to sandboxes the policy's ceiling allows it. Needs `--network` ([self-hosting.md](self-hosting.md#open-egress)). |
+| `--egress-open-port` | 7354 | firecracker: the host TCP port open egress is forwarded through. |
 | `--container FILE` | `container` | macos: the `container` CLI. |
 
 ### As a node behind a gateway
