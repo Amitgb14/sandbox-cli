@@ -16,7 +16,9 @@ hosted cloud; clients cannot tell which they are talking to beyond
   `CONFIG_VIRTIO_VSOCKETS`, `CONFIG_OVERLAY_FS`, `CONFIG_EXT4_FS`,
   `CONFIG_VIRTIO_BLK` and `CONFIG_VIRTIO_NET`. Firecracker's CI kernel 6.1.155
   has them all, for x86_64 and arm64; Install fetches it.
-- `mkfs.ext4` (e2fsprogs 1.43+), `ip` (iproute2), `nft` (nftables).
+- `mkfs.ext4` (e2fsprogs 1.43+), `ip` (iproute2), `nft` (nftables), and
+  `sysctl` with networking (each sandbox's namespace forwards its guest's
+  packets).
 - **Disk space** where sandboxd keeps its state: `/var/lib/sandboxd` as root,
   `~/.local/share/sandboxd` as a user (the quick try). Images, sandboxes'
   disks, snapshots and volumes are all kept there ([Where it keeps
@@ -789,7 +791,15 @@ its prompt. The hash still matches a known command (`docs/api/v1.md`).
 
 ## How egress is enforced
 
-Each sandbox gets a tap device on its own /30. In nftables table
+Each sandbox has a network namespace of its own, `sbx<n>` (`ip netns list`).
+In it are the VM's tap, `tap0`, and the inside end of a veth pair whose host
+end, `sbx<n>`, sits on the sandbox's own /30. Inside every namespace the guest
+is 10.0.0.2 behind 10.0.0.1, the same for every sandbox, which is what lets a
+snapshot of a networked sandbox be started again in another namespace. The
+namespace's own small table (`ip netns exec sbx<n> nft list ruleset`) lets
+the guest out only to the host, rewritten to its /30 address, and sends its
+DNS to the host's resolver. So on the host each sandbox, a fork among them,
+is one interface and one address, as before namespaces. In nftables table
 `inet sandboxd`:
 
 - the guest's tcp/80 and tcp/443 are redirected to one proxy in sandboxd. It
@@ -798,7 +808,12 @@ Each sandbox gets a tap device on its own /30. In nftables table
 - the guest's DNS is redirected to a resolver in sandboxd. It answers
   allowlisted names with the host's address and refuses every other name. It
   forwards nothing, so DNS is not a way out;
-- everything else from the tap is dropped, and nothing is ever forwarded.
+- everything else from the sandbox's interface is dropped, and nothing is
+  ever forwarded.
+
+A sandbox started before namespaces, and taken back across the upgrade,
+keeps its tap in the host's namespace until it ends; it alone cannot be
+snapshotted.
 
 `deny` wins over `allow`, wildcards included. A policy update on a running
 sandbox is one atomic change in each place.

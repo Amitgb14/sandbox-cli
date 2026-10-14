@@ -42,12 +42,15 @@ const keepFile = "keep.json"
 
 // keepState is keep.json.
 type keepState struct {
-	Spec      backend.Spec `json:"spec"` // Env always empty
-	Tap       int          `json:"tap"`  // tap index, -1 without networking
-	UID       int          `json:"uid"`  // the jail's uid, -1 without the jailer
-	PID       int          `json:"pid"`
-	Start     uint64       `json:"start"` // the VMM's start time, in clock ticks since boot
-	Suspended bool         `json:"suspended"`
+	Spec backend.Spec `json:"spec"` // Env always empty
+	Tap  int          `json:"tap"`  // tap index, -1 without networking
+	// NetNS says the VM has a network namespace of its own (network.go);
+	// false for one started before namespaces, whose tap is in the host's.
+	NetNS     bool   `json:"netns,omitempty"`
+	UID       int    `json:"uid"` // the jail's uid, -1 without the jailer
+	PID       int    `json:"pid"`
+	Start     uint64 `json:"start"` // the VMM's start time, in clock ticks since boot
+	Suspended bool   `json:"suspended"`
 }
 
 // saveKeep writes v's keep.json, when VMs are kept. Called with whatever lock
@@ -62,6 +65,7 @@ func (b *Backend) saveKeep(v *vm) {
 	ks.Spec.Env = nil
 	if v.net != nil {
 		ks.Tap = v.net.idx
+		ks.NetNS = v.net.ns != ""
 		ks.Spec.Network = *v.net.policy.Load()
 	}
 	if b.cfg.Jailer != nil {
@@ -229,6 +233,11 @@ func (b *Backend) checkKept(id, dir string) (candidate, string) {
 		if _, err := os.Stat(filepath.Join("/sys/class/net", fmt.Sprintf("sbx%d", ks.Tap))); err != nil {
 			return candidate{}, "its network device is gone"
 		}
+		if ks.NetNS {
+			if _, err := os.Stat(fmt.Sprintf("/run/netns/sbx%d", ks.Tap)); err != nil {
+				return candidate{}, "its network namespace is gone"
+			}
+		}
 	}
 	v.client = guestClient(v.hostPath("v.sock"))
 	if !ks.Suspended {
@@ -259,6 +268,9 @@ func (b *Backend) removeLeftover(id, dir string) {
 		if data, err := os.ReadFile(filepath.Join(dir, keepFile)); err == nil {
 			var ks keepState
 			if json.Unmarshal(data, &ks) == nil && ks.Tap >= 0 {
+				if ks.NetNS {
+					_ = run("ip", "netns", "del", fmt.Sprintf("sbx%d", ks.Tap))
+				}
 				_ = run("ip", "link", "del", fmt.Sprintf("sbx%d", ks.Tap))
 			}
 		}

@@ -28,11 +28,15 @@ import (
 // 1 GiB guest snapshots in ~230 ms and restores in ~6 ms, with the guest
 // answering ~9 ms after the load starts.
 //
-// A fork with a network is not offered. A snapshot carries the guest's address
-// and its tap's name, so two forks would claim one network identity; giving
-// each its own needs a network namespace per VM, which is a later step. Until
-// then a networked sandbox can be suspended and resumed (it keeps its tap), but
-// not snapshotted — refused, not half-done.
+// A snapshot carries the guest's address and its tap's name. Every VM has a
+// network namespace of its own with the same tap and the same guest address
+// in it (network.go), so a fork is restored into a new namespace, where both
+// are as the snapshot expects, and the host sees it at its own slot's address
+// with its own policy: forks never share a network identity. A VM from
+// before namespaces has its tap and address in the host's namespace, which
+// no fork could have, so it alone is not snapshotted — refused, not
+// half-done. A snapshot without a network gives its forks none: the guest
+// has no network device to restore.
 
 // fcAPI calls the VMM's API over its unix socket.
 func fcAPI(ctx context.Context, sock, method, path string, body any) error {
@@ -183,8 +187,8 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 	if err != nil {
 		return backend.SnapshotInfo{}, err
 	}
-	if v.net != nil {
-		return backend.SnapshotInfo{}, fmt.Errorf("%w: a snapshot of a networked sandbox would give every fork its network identity; snapshot sandboxes with network mode none", backend.ErrUnsupported)
+	if v.net != nil && v.net.ns == "" {
+		return backend.SnapshotInfo{}, fmt.Errorf("%w: this sandbox started before sandboxes had network namespaces, and a snapshot of it would give every fork its network identity; snapshot one started since", backend.ErrUnsupported)
 	}
 	dir := b.snapshotDir(snapshotID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -210,7 +214,7 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 		_ = os.RemoveAll(dir)
 		return backend.SnapshotInfo{}, err
 	}
-	meta, _ := json.Marshal(v.spec)
+	meta, _ := json.Marshal(snapMeta{Spec: v.spec, HasNetwork: v.net != nil})
 	_ = os.WriteFile(filepath.Join(dir, "spec.json"), meta, 0o600)
 	return backend.SnapshotInfo{
 		Kind: api.SnapshotMemory,
@@ -230,13 +234,18 @@ func (b *Backend) DeleteSnapshot(_ context.Context, snapshotID string) error {
 // scratch disk and of the memory file (reflinks where the filesystem shares
 // blocks), restored into a fresh VMM in its own directory.
 func (b *Backend) createFromSnapshot(ctx context.Context, s backend.Spec) (err error) {
-	if s.Network.Mode != "" && s.Network.Mode != "none" {
-		return fmt.Errorf("%w: a sandbox started from a snapshot has no network on this backend", backend.ErrUnsupported)
-	}
 	src := b.snapshotDir(s.FromSnapshot)
-	var orig backend.Spec
-	if data, rerr := os.ReadFile(filepath.Join(src, "spec.json")); rerr != nil || json.Unmarshal(data, &orig) != nil {
+	var meta snapMeta
+	if data, rerr := os.ReadFile(filepath.Join(src, "spec.json")); rerr != nil || json.Unmarshal(data, &meta) != nil {
 		return backend.ErrNotFound
+	}
+	orig := meta.Spec
+	networked := s.Network.Mode != "" && s.Network.Mode != api.NetworkNone
+	switch {
+	case !meta.HasNetwork && networked:
+		return fmt.Errorf("%w: this snapshot is of a sandbox without a network, so a sandbox started from it has none; ask for network mode none", backend.ErrUnsupported)
+	case meta.HasNetwork && b.cfg.Network == nil:
+		return fmt.Errorf("%w: this snapshot is of a networked sandbox, and this sandboxd runs without networking", backend.ErrUnsupported)
 	}
 	v, err := b.newVM(s)
 	if err != nil {
@@ -256,6 +265,14 @@ func (b *Backend) createFromSnapshot(ctx context.Context, s backend.Spec) (err e
 			return err
 		}
 	}
+	// The snapshot's guest has a network device, so the fork has a
+	// namespace of its own for it to find its tap in, with the fork's own
+	// policy: none, if it asked for none.
+	if meta.HasNetwork {
+		if v.net, err = b.cfg.Network.attach(s.ID, s.Network, b.ownerFor(s.ID)); err != nil {
+			return fmt.Errorf("network: %w", err)
+		}
+	}
 	for _, f := range []string{"scratch.ext4", "snap.state", "snap.mem"} {
 		if err = reflinkCopy(filepath.Join(src, f), v.hostPath(f)); err != nil {
 			return err
@@ -273,6 +290,15 @@ func (b *Backend) createFromSnapshot(ctx context.Context, s backend.Spec) (err e
 	b.mu.Unlock()
 	b.saveKeep(v)
 	return nil
+}
+
+// snapMeta is a snapshot's spec.json: the sandbox it was of, and whether it
+// had a network, which its forks then need. A snapshot from before the
+// field was written was of a sandbox without one: networked ones were
+// refused.
+type snapMeta struct {
+	backend.Spec
+	HasNetwork bool `json:"snapshot_network,omitempty"`
 }
 
 // rootfsFor finds an image's root disk again (from the cache), for linking

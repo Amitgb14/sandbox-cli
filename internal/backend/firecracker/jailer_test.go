@@ -5,6 +5,7 @@ package firecracker
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,5 +33,19 @@ func TestCleanupProcessLetsTheJailStartAgain(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, f)); err != nil {
 			t.Errorf("%s, the sandbox's own, was removed: %v", f, err)
 		}
+	}
+}
+
+// A VM with a namespace of its own is started in it: the jailer is told to
+// join it before it execs the VMM, and its own arguments still follow "--".
+func TestJailerJoinsTheNamespace(t *testing.T) {
+	j := &Jailer{Path: "/usr/bin/jailer", ChrootBase: "/srv/jail", UIDBase: 900000}
+	got := strings.Join(j.command("sbx_1", "/usr/bin/firecracker", "/run/netns/sbx3", "--config-file", "vm.json").Args, " ")
+	want := "/usr/bin/jailer --id sbx-1 --exec-file /usr/bin/firecracker --uid 900000 --gid 900000 --chroot-base-dir /srv/jail --netns /run/netns/sbx3 -- --api-sock api.sock --config-file vm.json"
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	if got := strings.Join(j.command("sbx_1", "/usr/bin/firecracker", "").Args, " "); strings.Contains(got, "--netns") {
+		t.Errorf("without a namespace: %s", got)
 	}
 }

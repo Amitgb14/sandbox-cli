@@ -48,6 +48,24 @@ func TestBuildConfigGolden(t *testing.T) {
 	without, _ := json.MarshalIndent(BuildConfig(s, p, "console=ttyS0 ro", nil), "", "  ")
 	golden(t, "vmconfig-network.json", append(with, '\n'))
 	golden(t, "vmconfig-no-network.json", append(without, '\n'))
+	// In a namespace of its own, every VM's device is the same, whatever
+	// its slot: what lets a snapshot be restored into another's.
+	inNS := &tap{name: "sbx7", ns: "sbx7", host: net.IPv4(172, 16, 0, 29).To4(), guest: net.IPv4(172, 16, 0, 30).To4(), mac: "06:00:ac:10:00:1e"}
+	ns, _ := json.MarshalIndent(BuildConfig(s, p, "console=ttyS0 ro", inNS), "", "  ")
+	golden(t, "vmconfig-network-ns.json", append(ns, '\n'))
+	other := &tap{name: "sbx9", ns: "sbx9", host: net.IPv4(172, 16, 0, 37).To4(), guest: net.IPv4(172, 16, 0, 38).To4(), mac: "06:00:ac:10:00:26"}
+	if a, b := BuildConfig(s, p, "", inNS).NetIfaces, BuildConfig(s, p, "", other).NetIfaces; len(a) != 1 || a[0] != b[0] {
+		t.Errorf("two slots' devices differ in a namespace: %+v, %+v", a, b)
+	}
+	if got := strings.Join(inNS.kernelArgs(), " "); got != "ip=10.0.0.2::10.0.0.1:255.255.255.252::eth0:off sbx.dns=10.0.0.1" {
+		t.Errorf("a namespaced guest is told %q", got)
+	}
+}
+
+// Each VM's namespace table, as text: the guest out only to the host, as
+// the slot's address, and its DNS to the host's resolver.
+func TestNSRulesetGolden(t *testing.T) {
+	golden(t, "ns-ruleset.nft", []byte(NSRuleset("172.16.0.29")))
 }
 
 // The host firewall, as text, because that is how it is reviewed.

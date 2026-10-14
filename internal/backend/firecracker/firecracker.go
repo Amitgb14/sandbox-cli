@@ -227,7 +227,7 @@ func New(cfg Config) (*Backend, error) {
 		var taps []keptTap
 		for _, c := range kept {
 			if c.ks.Tap >= 0 {
-				taps = append(taps, keptTap{id: c.v.id, idx: c.ks.Tap, policy: c.ks.Spec.Network})
+				taps = append(taps, keptTap{id: c.v.id, idx: c.ks.Tap, ns: c.ks.NetNS, policy: c.ks.Spec.Network})
 			}
 		}
 		byID, err := cfg.Network.start(taps)
@@ -473,11 +473,22 @@ func (b *Backend) vmm(v *vm, args ...string) error {
 		return err
 	}
 	defer console.Close()
+	// A VM with a namespace of its own runs in it, where its tap is: the
+	// jailer joins it (--netns); without one, ip netns exec does, and execs
+	// the VMM in its place, so the pid is the VMM's.
+	ns := ""
+	if v.net != nil && v.net.ns != "" {
+		ns = v.net.nsPath()
+	}
 	var cmd *exec.Cmd
 	if b.cfg.Jailer != nil {
-		cmd = b.cfg.Jailer.command(v.id, b.cfg.Firecracker, args...)
+		cmd = b.cfg.Jailer.command(v.id, b.cfg.Firecracker, ns, args...)
 	} else {
-		cmd = exec.Command(b.cfg.Firecracker, append([]string{"--api-sock", "api.sock"}, args...)...)
+		argv := append([]string{b.cfg.Firecracker, "--api-sock", "api.sock"}, args...)
+		if ns != "" {
+			argv = append([]string{"ip", "netns", "exec", v.net.ns}, argv...)
+		}
+		cmd = exec.Command(argv[0], argv[1:]...)
 		cmd.Dir = v.dir
 	}
 	cmd.Stdout, cmd.Stderr = console, console
@@ -742,7 +753,9 @@ func BuildConfig(s backend.Spec, p vmPaths, bootArgs string, t *tap) VMConfig {
 	}
 	c.MachineConfig = machineFor(s)
 	if t != nil {
-		c.NetIfaces = []netIface{{IfaceID: "eth0", GuestMAC: t.mac, HostDevName: t.name}}
+		// In the VM's own namespace, the same for every VM (network.go).
+		name, mac := t.device()
+		c.NetIfaces = []netIface{{IfaceID: "eth0", GuestMAC: mac, HostDevName: name}}
 	}
 	// Firecracker's vsock is backed by a unix socket on the host, not by
 	// vhost-vsock, so the guest CID is local to the VM and every VM can use 3.

@@ -287,6 +287,16 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **Networked sandboxes can be snapshotted, and forks have a network.** On
+  Firecracker every sandbox now has a network namespace of its own, with its
+  tap in it and the same guest address in each, joined to the host by a
+  veth on its own /30. So a snapshot of a networked sandbox restores into a
+  new namespace, and each fork gets a network of its own, under the policy
+  it asks for, instead of the snapshot being refused ("a snapshot of a
+  networked sandbox would give every fork its network identity"). Egress is
+  enforced on the host as before. Sandboxes running from before keep their
+  tap in the host's namespace until they end, and cannot be snapshotted.
+  sandboxd with networking now needs `sysctl`.
 - **The super admin sees totals, not users' sandboxes.** An admin key
   lists and acts on only its own sandboxes, volumes, snapshots, jobs and
   services, in organizations its user is in; another user's are not found.
