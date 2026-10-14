@@ -165,6 +165,7 @@ func (g *Gateway) Handler() http.Handler {
 	route("POST /v1/admin/images", false, g.adminInstallImage)
 	route("DELETE /v1/admin/images", false, g.adminRemoveImage)
 	route("GET /v1/admin/lost", false, g.adminLost)
+	route("GET /v1/admin/orphans", false, g.adminOrphans)
 	route("GET /v1/admin/audit", false, g.adminAudit)
 	route("GET /v1/admin/orgs", false, g.adminListOrgs)
 	route("GET /v1/admin/policies", false, g.adminListPolicies)

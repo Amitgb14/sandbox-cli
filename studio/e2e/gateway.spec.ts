@@ -12,8 +12,8 @@ import { e2eState, gatewayStudio, HOSTED_PORT, type GatewayStudio } from "./stat
  */
 
 const TENANT = ["Jobs", "Services", "Secrets", "SSH", "Account", "API keys"];
-const ADMIN = ["Dashboard", "Nodes", "Lost sandboxes", "Users", "Members", "Allowlist groups", "Audit", "All organizations"];
-const ADMIN_ROUTES = ["/admin/dashboard/", "/admin/nodes/", "/admin/lost/", "/admin/keys/", "/admin/members/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
+const ADMIN = ["Dashboard", "Nodes", "Lost sandboxes", "Left behind", "Users", "Members", "Allowlist groups", "Audit", "All organizations"];
+const ADMIN_ROUTES = ["/admin/dashboard/", "/admin/nodes/", "/admin/lost/", "/admin/orphans/", "/admin/keys/", "/admin/members/", "/admin/egress-groups/", "/admin/audit/", "/admin/orgs/"];
 
 /** Opens a gateway Studio with its token, once whoami has answered. */
 async function open(page: Page, name: GatewayStudio, user: string) {
@@ -506,6 +506,30 @@ test("the super admin manages any organization's members from the sidebar", asyn
   page.once("dialog", (d) => d.accept());
   await row.getByRole("button", { name: "Remove" }).click();
   await expect(row).toHaveCount(0);
+});
+
+test("a suspended user's sandbox is left behind, and the super admin terminates it", async ({ page }) => {
+  const { gatewayURL, adminKey } = e2eState();
+  const admin = (method: string, path: string, body?: object) =>
+    fetch(`${gatewayURL}${path}`, { method, headers: { Authorization: `Bearer ${adminKey}`, "Content-Type": "application/json" }, body: body && JSON.stringify(body) });
+  const made = (await (await admin("POST", "/v1/admin/keys", { user: "lb-user", tenant: "lb-user", scopes: ["sandbox:read", "sandbox:create"] })).json()) as { id: string; secret: string };
+  const created = await fetch(`${gatewayURL}/v1/sandboxes`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${made.secret}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "lb-box" }),
+  });
+  expect(created.status).toBe(201);
+  expect((await admin("POST", `/v1/admin/keys/${made.id}/suspend`)).status).toBe(200);
+
+  await open(page, "gw-admin", "ops");
+  await nav(page).getByRole("link", { name: "Left behind", exact: true }).click();
+  await expect(page.locator("main h1")).toHaveText("Left behind");
+  const row = page.getByTestId("orphans").getByRole("row").filter({ hasText: "lb-box" });
+  await expect(row).toContainText("lb-user");
+  await expect(row).toContainText("access ended");
+  page.once("dialog", (d) => d.accept());
+  await row.getByRole("button", { name: "Terminate" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "lb-box" })).toHaveCount(0);
 });
 
 test("an admin downloads an image to the gateway's nodes, and removes it from them", async ({ page }) => {

@@ -297,6 +297,12 @@ in `_old/` as reference, to be ported where this design still wants it.
   first in the sidebar, show the gateway in totals: users, organizations,
   keys, nodes, sandboxes running and created, jobs, services, and memory,
   CPUs and disk given of what the nodes have.
+- **Sandboxes left behind by removed users are listed for the admin.**
+  `GET /v1/admin/orphans`, and Studio's **Left behind** screen, list the
+  running sandboxes whose owner was suspended, revoked, expired or removed
+  from the organization, with why, and terminate them one by one or all
+  at once. They are the only other users' sandboxes the super admin is
+  shown; the Dashboard counts them and links there.
 - **Every new tenant has an owner.** The first user an API key or invite
   puts in a new tenant owns it as an organization and can add members;
   before, only accounts did.

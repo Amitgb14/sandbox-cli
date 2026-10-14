@@ -94,6 +94,14 @@ func (c *Client) RevokePersonalKey(ctx context.Context, id string) error {
 	return c.json(ctx, http.MethodDelete, "/v1/keys/"+url.PathEscape(id), nil, nil)
 }
 
+// Orphans lists running sandboxes whose owner can no longer act on them
+// (admin); TerminateSandbox ends one by its id.
+func (c *Client) Orphans(ctx context.Context) ([]OrphanSandbox, error) {
+	var out OrphanList
+	err := c.json(ctx, http.MethodGet, "/v1/admin/orphans", nil, &out)
+	return out.Sandboxes, err
+}
+
 // Stats is the gateway's totals for its super admin (admin): counts and
 // sums, never which sandboxes or whose.
 func (c *Client) Stats(ctx context.Context) (GatewayStats, error) {
