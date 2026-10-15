@@ -24,8 +24,8 @@ the run's output and exits with the agent's exit code. `job run --wait` waits
 for a whole job and exits 1 unless it succeeded.
 
 An agent runs in its verified headless mode (claude, codex, gemini, opencode,
-cline). Your saved login does not come along — the CLI's run copies it in
-from your machine, and a job has none — so the agent authenticates with an
+cline). Your saved login does not come along — a run's is copied in when it
+starts, from the gateway or your machine, and a job has none — so the agent authenticates with an
 API key you keep as a secret: `ANTHROPIC_API_KEY` for claude, `OPENAI_API_KEY`
 for codex, `GEMINI_API_KEY` for gemini, the provider's for opencode and cline.
 The agent must be in the image or installable from it.

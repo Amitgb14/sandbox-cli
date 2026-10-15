@@ -86,7 +86,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.BoolVarP(&rf.detach, "detach", "d", false, "start, print how to attach, and return")
 	f.BoolVar(&rf.keep, "keep", false, "keep the sandbox when the command ends")
 	f.StringVar(&rf.name, "name", "", "name the sandbox")
-	f.BoolVar(&rf.noPersistAuth, "no-persist-auth", false, "do not restore or save the agent's login")
+	f.BoolVar(&rf.noPersistAuth, "no-persist-auth", false, "do not restore or save the agent's login (here, or on the gateway that keeps it)")
 	f.StringVar(&rf.profile, "profile", "", "dev or prod (prod: no persisted logins)")
 	f.StringVar(&rf.fromSnapshot, "from-snapshot", "", "start from a snapshot (sandbox-cli snapshot) instead of the image")
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
@@ -271,7 +271,14 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	}()
 
 	persist := rs.agent != nil && !rf.noPersistAuth && len(rs.agent.AuthPaths) > 0
+	// On a gateway that keeps agent logins, the login is the gateway's: it
+	// copies it in and saves it back from the sandbox. Otherwise it is this
+	// machine's files, copied in now and back out when the run ends.
+	onGateway := false
 	if persist {
+		onGateway = keepLoginOnGateway(ctx, c, sb.ID, *rs.agent)
+	}
+	if persist && !onGateway {
 		agenthome.RestoreLogin(ctx, c, sb.ID, *rs.agent)
 	}
 
@@ -306,7 +313,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	if rs.after != nil {
 		rs.after(context.Background(), c, sb.ID)
 	}
-	if persist {
+	if persist && !onGateway {
 		agenthome.SaveLogin(context.Background(), c, sb.ID, *rs.agent)
 	}
 	if keep && !rf.detach {
