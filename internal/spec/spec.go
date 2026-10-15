@@ -407,6 +407,12 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 		s.IdleTimeoutSecs = idle
 	}
 
+	action, err := ResolveIdleAction(req.IdleAction)
+	if err != nil {
+		return backend.Spec{}, err
+	}
+	s.IdleAction = action
+
 	// A lifetime may only be shortened by a request: where the operator set
 	// one, a request without one gets it, and one asking for longer is
 	// refused rather than clamped.
@@ -463,6 +469,20 @@ func ResolveEnv(in map[string]string) (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// ResolveIdleAction checks an idle_action, at create or in an update, and
+// returns it as a sandbox records it: "" for terminate, the default, so a
+// sandbox that never asked reads as it always did. Whether the endpoint can
+// suspend is the server's to check, against its backend.
+func ResolveIdleAction(action string) (string, error) {
+	switch action {
+	case "", api.IdleTerminate:
+		return "", nil
+	case api.IdleSuspend:
+		return api.IdleSuspend, nil
+	}
+	return "", invalid("idle_action %q: terminate or suspend", action)
 }
 
 // ResolveIdleUpdate checks a live sandbox's new idle timeout. Unlike at

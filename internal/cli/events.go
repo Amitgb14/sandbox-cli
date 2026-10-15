@@ -101,6 +101,9 @@ func eventDetail(ev api.Event) string {
 		if ev.IdleTimeoutSecs != nil {
 			add("idle %s", idleText(*ev.IdleTimeoutSecs))
 		}
+		if ev.IdleAction != "" {
+			add("on idle %s", termsafe.Clean(ev.IdleAction))
+		}
 	case api.EventProcessStarted:
 		add("pid %d", ev.PID)
 		add("%s", termsafe.Clean(ev.Program))

@@ -100,6 +100,10 @@ function LaunchForm() {
   const [image, setImage] = useState(params.get("image") ?? "");
   const [snapshot, setSnapshot] = useState(params.get("snapshot") ?? "");
   const canSnapshot = !!(info?.capabilities?.capabilities?.memory_snapshot || info?.capabilities?.capabilities?.disk_snapshot);
+  // Suspending when idle, rather than terminating, where the endpoint can.
+  const canSuspend = !!info?.capabilities?.capabilities?.suspend;
+  const [onIdle, setOnIdle] = useState<"terminate" | "suspend">("terminate");
+  const idleAction = canSuspend && onIdle === "suspend" ? ("suspend" as const) : undefined;
   const { data: snapshots } = useSnapshots(canSnapshot);
   const caller = useCaller();
   const callerKind = caller.kind;
@@ -157,6 +161,7 @@ function LaunchForm() {
     ...start,
     ...schedule,
     ...size,
+    idleAction,
     name: name || undefined,
     network: egress.network,
     allow: egress.allow,
@@ -195,6 +200,7 @@ function LaunchForm() {
       req.snapshot_every_secs = schedule.snapshotEverySecs;
       req.snapshot_keep = schedule.snapshotKeep;
     }
+    if (idleAction) req.idle_action = idleAction;
     if (sizeOver) {
       toast.error(`${template!.name}: ${sizeOver}`);
       return;
@@ -525,7 +531,7 @@ function LaunchForm() {
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
             <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
             Sandbox options
-            <span className="ml-auto text-xs font-normal text-muted-foreground">name, labels, volumes</span>
+            <span className="ml-auto text-xs font-normal text-muted-foreground">name, labels, volumes{canSuspend ? ", when idle" : ""}</span>
           </summary>
           <div className="grid gap-4 border-t p-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
@@ -540,6 +546,25 @@ function LaunchForm() {
               <Label>Volumes</Label>
               <VolumePicker mounts={mounts} onChange={setMounts} />
             </div>
+            {canSuspend ? (
+              <div className="flex flex-col gap-2 sm:col-span-2">
+                <Label>When idle</Label>
+                <Select value={onIdle} onValueChange={(v) => setOnIdle(v as "terminate" | "suspend")}>
+                  <SelectTrigger className="w-48" aria-label="When idle">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="terminate">Terminate it</SelectItem>
+                    <SelectItem value="suspend">Suspend it</SelectItem>
+                  </SelectContent>
+                </Select>
+                <span className="text-[11px] text-muted-foreground">
+                  {onIdle === "suspend"
+                    ? "After its idle timeout it is suspended, memory, processes and files kept; the next shell, command or file resumes it."
+                    : "After its idle timeout it is terminated, and everything in it discarded."}
+                </span>
+              </div>
+            ) : null}
           </div>
         </details>
       </div>
@@ -573,6 +598,12 @@ function LaunchForm() {
                   <span className="text-muted-foreground">the server&apos;s default</span>
                 )}
               </dd>
+              {idleAction ? (
+                <>
+                  <dt className="text-muted-foreground">When idle</dt>
+                  <dd className="truncate text-[13px]">suspended, resumed on use</dd>
+                </>
+              ) : null}
               <dt className="text-muted-foreground">Starts in</dt>
               <dd className="truncate font-mono text-[13px]">/sandbox/home</dd>
               <dt className="text-muted-foreground">Runs</dt>

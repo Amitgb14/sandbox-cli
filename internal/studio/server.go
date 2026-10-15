@@ -69,6 +69,9 @@ type LaunchRequest struct {
 	// sandboxd as any client's.
 	SnapshotEverySecs int `json:"snapshot_every_secs,omitempty"`
 	SnapshotKeep      int `json:"snapshot_keep,omitempty"`
+	// IdleAction is the CLI's --on-idle: "suspend" has the server's idle
+	// timeout suspend the sandbox rather than terminate it.
+	IdleAction string `json:"idle_action,omitempty"`
 	// CPUs, MemoryMB and DiskMB size the sandbox — a template's, in the
 	// Playground: the CLI's --cpus, --memory and --disk. Zero is the server's
 	// default; the server's limits bound the rest.

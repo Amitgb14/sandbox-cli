@@ -287,6 +287,26 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **An idle sandbox can sleep instead of being deleted.** `run --on-idle
+  suspend` (and `update --on-idle`, the API's `idle_action: "suspend"`, and
+  "When idle" in Studio's Launch and Edit) has the idle timeout suspend the
+  sandbox — memory, processes and files kept — rather than terminate it.
+  The next command, file, shell, SSH session or tunnel resumes it, in about a
+  second; `sandbox-cli shell` says it is resuming it, and Studio shows it as
+  "Suspended · idle", with Terminal and Files still offered. It needs an
+  endpoint that can suspend (Firecracker), and is refused elsewhere rather
+  than turned back into a delete. A sandbox suspended by hand still waits for
+  `resume`. On Firecracker a resumed guest's clock is now set from the host's,
+  where before it woke as far behind as it had slept (guest agent protocol 4;
+  the base image needs rebuilding for it).
+- **Reading a sandbox no longer keeps it from idling.** Only using it does:
+  a command, a file, a process's output, a tunnel, an update. Getting it,
+  listing, its events and its metrics no longer reset its idle timeout, and
+  neither do the gateway's own reads, which since agent logins were kept
+  (every two minutes) had stopped every sandbox with a kept login from ever
+  idling out. A key with only `sandbox:read` no longer keeps a sandbox up, or
+  wakes one. A client can mark its own bookkeeping the same way with the
+  `Sandbox-Background: 1` header.
 - **`sandbox-cli agent ls` shows the gateway's login.** On a gateway context
   that keeps agent logins it lists, per agent, the login the gateway keeps
   for you (`GATEWAY`, with when it was last saved) — the one a run there

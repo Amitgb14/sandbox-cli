@@ -301,7 +301,7 @@ export function useDeleteSnapshot() {
 /** Renames, relabels or retimes a live sandbox; only what is given changes. */
 export function useUpdateSandbox() {
   return useInvalidating(
-    ({ id, ...req }: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; lifetime_secs?: number }) =>
+    ({ id, ...req }: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; idle_action?: "terminate" | "suspend"; lifetime_secs?: number }) =>
       apiFetch<Sandbox>(sbx(id), { method: "PATCH", json: req }),
     ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes]],
   );

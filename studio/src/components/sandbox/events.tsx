@@ -36,6 +36,7 @@ function detail(e: AuditEvent): string {
       if (e.name) parts.push(`name ${e.name}`);
       if (e.labels) parts.push(Object.entries(e.labels).map(([k, v]) => `${k}=${v}`).join(", "));
       if (e.idle_timeout_secs !== undefined) parts.push(`idle ${e.idle_timeout_secs ? `${Math.round(e.idle_timeout_secs / 60)} min` : "never"}`);
+      if (e.idle_action) parts.push(`on idle ${e.idle_action}`);
       break;
     case "sandbox.network_updated":
       if (e.network) parts.push(`${e.network.mode} ${(e.network.allow ?? []).join(", ")}`);

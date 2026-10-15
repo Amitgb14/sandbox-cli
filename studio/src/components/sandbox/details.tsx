@@ -85,6 +85,9 @@ export function SandboxDetails({
 }) {
   const { data: sb, error, refetch: refetchSandbox } = useSandbox(id);
   const live = !!sb && sb.state !== "terminated";
+  // Running, or suspended for being idle: a shell or a file resumes it, so
+  // what needs the VM is offered as if it were running.
+  const usable = !!sb && (sb.state === "running" || (sb.state === "suspended" && !!sb.idle_suspended));
   const { data: procs } = useProcesses(id, live);
   const { data: info } = useInfo();
   const { data: agentStates } = useAgentStates();
@@ -135,13 +138,13 @@ export function SandboxDetails({
   const started = useRef<string | null>(null);
   useEffect(() => {
     // Wait for the process list, or a terminal already open would be missed.
-    if (startShell && sb?.state === "running" && procs && started.current !== id) {
+    if (startShell && usable && procs && started.current !== id) {
       started.current = id;
       terminal();
     }
     // terminal is recreated every render; the ref is what makes this run once per sandbox.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startShell, sb?.state, procs, id]);
+  }, [startShell, usable, procs, id]);
 
   if (error) return <p className="p-5 text-sm text-destructive">{error.message}</p>;
   if (!sb) return <p className="p-5 text-sm text-muted-foreground">Loading…</p>;
@@ -224,7 +227,7 @@ export function SandboxDetails({
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <StateDot state={sb.state} />
+          <StateDot state={sb.state} idle={sb.idle_suspended} />
           {(() => {
             const a = sb.state === "running" ? agentStates?.find((s) => s.sandbox === id) : undefined;
             return a ? <AgentActivity agent={a} /> : null;
@@ -243,8 +246,8 @@ export function SandboxDetails({
         </div>
         {live ? (
           <div className="flex flex-wrap items-center gap-1.5">
-            {sb.state === "running" && can("sandbox:create") && (
-              <Button size="sm" disabled={openShell.isPending} onClick={terminal}>
+            {usable && can("sandbox:create") && (
+              <Button size="sm" disabled={openShell.isPending} onClick={terminal} title={sb.state === "suspended" ? "Resumes it: it was suspended for being idle" : undefined}>
                 <SquareTerminal className="size-4" />
                 Terminal
               </Button>
@@ -323,7 +326,7 @@ export function SandboxDetails({
           <TabsTrigger value="output" disabled={processes.length === 0}>
             Logs
           </TabsTrigger>
-          <TabsTrigger value="files" disabled={sb.state !== "running"}>
+          <TabsTrigger value="files" disabled={!usable}>
             Files
           </TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
@@ -348,7 +351,7 @@ export function SandboxDetails({
                 {p.pid} · {procName(p)}
               </Button>
             ))}
-            {sb.state === "running" && can("sandbox:create") ? (
+            {usable && can("sandbox:create") ? (
               <Button size="sm" variant="ghost" className="text-xs" disabled={openShell.isPending} onClick={newShell}>
                 <Plus className="size-3.5" />
                 New shell

@@ -18,7 +18,7 @@ import (
 // and — on a running one, where the endpoint can — its network. Only what a
 // flag names changes.
 func newUpdateCmd() *cobra.Command {
-	var ctxFlag, name, network, lifetime string
+	var ctxFlag, name, network, lifetime, onIdle string
 	var labels, unlabel, allow, deny, groups []string
 	var idle time.Duration
 	var noBaseline bool
@@ -28,7 +28,9 @@ func newUpdateCmd() *cobra.Command {
 		Long: "Changes a live sandbox in place; only what a flag names changes.\n\n" +
 			"--label adds or changes a label and --label KEY- (or --unlabel KEY) removes one;\n" +
 			"the others are kept. --idle sets how long it may sit idle before it is\n" +
-			"terminated (0: never, where the server allows that). --lifetime sets when it\n" +
+			"terminated (0: never, where the server allows that), and --on-idle suspend has\n" +
+			"it suspended instead, to be resumed by the next command, file or shell that\n" +
+			"uses it. --lifetime sets when it\n" +
 			"ends, busy or not, counted from its creation: 45m sets it, +15m pushes its end\n" +
 			"out and -10m brings it nearer. Through a gateway only an admin can push it out.\n\n" +
 			"--network changes the network of a running sandbox, as run's flags would set\n" +
@@ -39,6 +41,7 @@ func newUpdateCmd() *cobra.Command {
 		Example: "  sandbox-cli update web --name api\n" +
 			"  sandbox-cli update api --label team=infra --label ticket-\n" +
 			"  sandbox-cli update api --idle 2h\n" +
+			"  sandbox-cli update api --idle 30m --on-idle suspend\n" +
 			"  sandbox-cli update api --lifetime +15m\n" +
 			"  sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline\n" +
 			"  sandbox-cli update api --network allowlist --allow-group go   # through a gateway",
@@ -55,6 +58,9 @@ func newUpdateCmd() *cobra.Command {
 					return fmt.Errorf("--idle %v: whole seconds, not negative", idle)
 				}
 				req.IdleTimeoutSecs = &secs
+			}
+			if f.Changed("on-idle") {
+				req.IdleAction = &onIdle
 			}
 			if (len(allow) > 0 || len(groups) > 0 || noBaseline) && network != api.NetworkAllowlist {
 				return errors.New("--allow, --allow-group and --no-baseline go with --network allowlist")
@@ -100,8 +106,8 @@ func newUpdateCmd() *cobra.Command {
 				}
 				req.Network = n
 			}
-			if req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.Network == nil && req.LifetimeSecs == nil {
-				return errors.New("nothing to change: name a flag (--name, --label, --unlabel, --idle, --lifetime, --network)")
+			if req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.IdleAction == nil && req.Network == nil && req.LifetimeSecs == nil {
+				return errors.New("nothing to change: name a flag (--name, --label, --unlabel, --idle, --on-idle, --lifetime, --network)")
 			}
 			sb, err := c.UpdateSandbox(ctx, args[0], req)
 			if err != nil {
@@ -112,7 +118,7 @@ func newUpdateCmd() *cobra.Command {
 				ends = sb.ExpiresAt.Local().Format(time.RFC3339)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s  name %s  network %s  idle %s  ends %s  labels %s\n", sb.ID,
-				orDash(sb.Name), sb.Network.Mode, idleText(sb.IdleTimeoutSecs), ends, formatLabels(sb.Labels))
+				orDash(sb.Name), sb.Network.Mode, idleWithAction(sb), ends, formatLabels(sb.Labels))
 			return nil
 		},
 	}
@@ -122,6 +128,7 @@ func newUpdateCmd() *cobra.Command {
 	f.StringArrayVar(&labels, "label", nil, "set a label, key=value, or remove one, key- (repeatable)")
 	f.StringArrayVar(&unlabel, "unlabel", nil, "remove a label by key (repeatable)")
 	f.DurationVar(&idle, "idle", 0, "terminate it after this long idle, e.g. 2h (0: never, where allowed)")
+	f.StringVar(&onIdle, "on-idle", "", "what the idle timeout does: terminate, or suspend until something uses it")
 	f.StringVar(&lifetime, "lifetime", "", "when it ends, from its creation: 45m sets it, +15m or -10m moves its end")
 	f.StringVar(&network, "network", "", "none, allowlist or open, applied to the running sandbox")
 	f.StringArrayVar(&allow, "allow", nil, "with --network allowlist: a host it may reach (repeatable)")
@@ -216,6 +223,15 @@ func lifetimeChange(v string, cur int) (int, error) {
 		return 0, fmt.Errorf("--lifetime %s: that ends it before it began; terminate it instead", v)
 	}
 	return secs, nil
+}
+
+// idleWithAction is idleText, followed by "(suspend)" when the idle timeout
+// suspends the sandbox rather than terminating it.
+func idleWithAction(sb api.Sandbox) string {
+	if sb.IdleAction == api.IdleSuspend && sb.IdleTimeoutSecs > 0 {
+		return idleText(sb.IdleTimeoutSecs) + " (suspend)"
+	}
+	return idleText(sb.IdleTimeoutSecs)
 }
 
 func idleText(secs int) string {

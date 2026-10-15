@@ -170,7 +170,7 @@ export default function SandboxesPage() {
           const a = row.original.state === "running" ? agentOf.get(row.original.id) : undefined;
           return (
             <div className="flex flex-col gap-0.5">
-              <StateDot state={row.original.state} />
+              <StateDot state={row.original.state} idle={row.original.idle_suspended} />
               {a ? <AgentActivity agent={a} className="pl-4" /> : null}
             </div>
           );

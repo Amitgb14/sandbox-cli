@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
@@ -77,6 +78,12 @@ func (s *Server) suspend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	rec.transit.Lock()
+	defer rec.transit.Unlock()
+	if rec.snapshot().State != api.StateRunning {
+		writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is not running")
+		return
+	}
 	if busy(rec) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "processes are running; wait for them or signal them first")
 		return
@@ -87,6 +94,7 @@ func (s *Server) suspend(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.mu.Lock()
 	rec.sbx.State = api.StateSuspended
+	rec.sbx.IdleSuspended = false
 	out := rec.sbx
 	rec.mu.Unlock()
 	s.persist(rec)
@@ -105,6 +113,8 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
 		return
 	}
+	rec.transit.Lock()
+	defer rec.transit.Unlock()
 	if rec.snapshot().State != api.StateSuspended {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is not suspended")
 		return
@@ -113,14 +123,89 @@ func (s *Server) resume(w http.ResponseWriter, r *http.Request) {
 		s.backendErr(w, r, err)
 		return
 	}
+	out := s.resumed(rec)
+	s.event(api.Event{Type: api.EventSandboxResumed, Sandbox: out.ID})
+	writeJSON(w, http.StatusOK, out)
+}
+
+// resumed records a resume the backend has made. The caller holds transit.
+func (s *Server) resumed(rec *record) api.Sandbox {
 	rec.mu.Lock()
 	rec.sbx.State = api.StateRunning
+	rec.sbx.IdleSuspended = false
 	rec.lastActive = s.now()
 	out := rec.sbx
 	rec.mu.Unlock()
 	s.persist(rec)
-	s.event(api.Event{Type: api.EventSandboxResumed, Sandbox: out.ID})
-	writeJSON(w, http.StatusOK, out)
+	return out
+}
+
+// errNotRunning is wake's answer for a sandbox that is no longer one it may
+// resume.
+var errNotRunning = errors.New("sandbox is not running")
+
+// wake resumes a sandbox suspended for being idle, for a request that needs
+// its VM (use). Requests that arrive together wait on one resume: the second
+// finds it running. A resume that fails leaves it suspended and the request
+// refused; it is not retried elsewhere or started afresh, which would lose
+// what the suspend kept.
+func (s *Server) wake(ctx context.Context, rec *record) error {
+	rec.transit.Lock()
+	defer rec.transit.Unlock()
+	sb := rec.snapshot()
+	switch {
+	case sb.State == api.StateRunning:
+		return nil
+	case sb.State != api.StateSuspended || !sb.IdleSuspended:
+		// Terminated, or suspended by a request, while it waited.
+		return errNotRunning
+	}
+	sus, ok := s.Backend.(backend.Suspender)
+	if !ok {
+		return errNotRunning
+	}
+	if err := sus.Resume(ctx, sb.ID); err != nil {
+		s.logf("sandbox %s: resuming it for a request: %v", sb.ID, err)
+		return err
+	}
+	out := s.resumed(rec)
+	s.event(api.Event{Type: api.EventSandboxResumed, Sandbox: out.ID, Reason: "request"})
+	return nil
+}
+
+// idleSuspend suspends a sandbox whose idle timeout has run out and whose
+// idle action is suspend. It looks again under transit, since a request may
+// have used the sandbox, or started a process in it, since the reaper looked:
+// that request wins, and the sandbox stays up. A suspend that fails leaves
+// it running, and the idle clock starts again so it is not retried every
+// second; it is never terminated instead, which would lose what was asked
+// to be kept.
+func (s *Server) idleSuspend(rec *record) {
+	sus, ok := s.Backend.(backend.Suspender)
+	if !ok {
+		return
+	}
+	rec.transit.Lock()
+	defer rec.transit.Unlock()
+	now := s.now()
+	rec.mu.Lock()
+	sb, last := rec.sbx, rec.lastActive
+	rec.mu.Unlock()
+	if sb.State != api.StateRunning || sb.IdleAction != api.IdleSuspend || sb.IdleTimeoutSecs <= 0 ||
+		now.Sub(last) < time.Duration(sb.IdleTimeoutSecs)*time.Second || busy(rec) {
+		return
+	}
+	if err := sus.Suspend(context.Background(), sb.ID); err != nil {
+		s.logf("sandbox %s: suspending it for being idle: %v; it stays running", sb.ID, err)
+		rec.touch(now)
+		return
+	}
+	rec.mu.Lock()
+	rec.sbx.State = api.StateSuspended
+	rec.sbx.IdleSuspended = true
+	rec.mu.Unlock()
+	s.persist(rec)
+	s.event(api.Event{Type: api.EventSandboxSuspended, Sandbox: sb.ID, Reason: "idle"})
 }
 
 // resize serves POST /v1/sandboxes/{ref}/resize. The backend restarts the
@@ -136,7 +221,7 @@ func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	rec, ok := s.live(w, r)
+	rec, ok := s.use(w, r)
 	if !ok {
 		return
 	}
@@ -215,7 +300,7 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot snapshot a sandbox")
 		return
 	}
-	rec, ok := s.live(w, r)
+	rec, ok := s.use(w, r)
 	if !ok {
 		return
 	}
@@ -401,7 +486,7 @@ func (s *Server) tunnel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "port: 1-65535")
 		return
 	}
-	rec, ok := s.live(w, r)
+	rec, ok := s.use(w, r)
 	if !ok {
 		return
 	}

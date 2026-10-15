@@ -14,10 +14,16 @@ const STATE: Record<SandboxState, { label: string; dot: string }> = {
  * of them, and the colour is never the only signal. A running sandbox's dot
  * pulses, so what is alive reads at a glance.
  */
-export function StateDot({ state, className }: { state: SandboxState; className?: string }) {
+export function StateDot({ state, idle, className }: { state: SandboxState; idle?: boolean; className?: string }) {
   const s = STATE[state] ?? { label: state, dot: "bg-muted-foreground/40" };
+  // Suspended for being idle (idle_suspended): asleep rather than stopped,
+  // since the next shell, command or file resumes it.
+  const asleep = state === "suspended" && idle;
   return (
-    <span className={cn("inline-flex items-center gap-2 text-sm whitespace-nowrap", className)}>
+    <span
+      className={cn("inline-flex items-center gap-2 text-sm whitespace-nowrap", className)}
+      title={asleep ? "Suspended for being idle: a shell, a command or a file resumes it" : undefined}
+    >
       {/* Running is the one state that is alive: its dot pulses, as every
           live thing in Studio does (and holds still under reduced motion). */}
       {state === "running" ? (
@@ -25,7 +31,7 @@ export function StateDot({ state, className }: { state: SandboxState; className?
       ) : (
         <span aria-hidden className={cn("size-2 shrink-0 rounded-full", s.dot)} />
       )}
-      {s.label}
+      {asleep ? "Suspended · idle" : s.label}
     </span>
   );
 }

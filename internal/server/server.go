@@ -103,7 +103,12 @@ type Server struct {
 }
 
 type record struct {
-	mu         sync.Mutex
+	mu sync.Mutex
+	// transit is held across a suspend or a resume, from the state check to
+	// the record written after, so an idle suspend and the request waking the
+	// sandbox (or two requests waking it) take turns rather than both asking
+	// the backend.
+	transit    sync.Mutex
 	sbx        api.Sandbox
 	env        map[string]string
 	procs      map[int]*procRecord
@@ -116,7 +121,11 @@ type record struct {
 	snapshotting  bool
 }
 
-// touch records activity: any request naming the sandbox keeps it alive.
+// touch records activity, which holds the idle timeout off: a request that
+// uses the sandbox (use, process, an update), never one that only reads this
+// server's records of it, and never a background one (api.HeaderBackground).
+// A gateway reading a sandbox's files every few minutes to save an agent's
+// login was activity once, and its sandboxes never went idle.
 func (r *record) touch(now time.Time) {
 	r.mu.Lock()
 	r.lastActive = now
@@ -301,6 +310,10 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bs.FromSnapshot = req.SnapshotID
+	if bs.IdleAction == api.IdleSuspend && !s.canSuspend() {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot suspend a sandbox, so idle_action suspend cannot be had; leave it out to terminate an idle sandbox")
+		return
+	}
 	// Refused before anything is made, as any control that cannot be
 	// delivered is: a schedule that never takes a snapshot is worse than none.
 	if status, code, msg := s.scheduleRefusal(api.SnapshotSchedule{EverySecs: bs.SnapshotEverySecs, Keep: bs.SnapshotKeep}, bs.Volumes); status != 0 {
@@ -331,6 +344,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			CPUs: bs.CPUs, MemoryMB: bs.MemoryMB, DiskMB: bs.DiskMB,
 			EnvNames: sortedKeys(bs.Env), Network: bs.Network, CreatedAt: created,
 			IdleTimeoutSecs:   bs.IdleTimeoutSecs,
+			IdleAction:        bs.IdleAction,
 			LifetimeSecs:      bs.LifetimeSecs,
 			ExpiresAt:         expires,
 			SnapshotEverySecs: bs.SnapshotEverySecs,
@@ -519,13 +533,28 @@ func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
 
 // lookup resolves a reference — an id, or a name — against this server's own
 // sandboxes. A name prefers the live sandbox, then the newest terminated one, so
-// that deleting by name twice is still idempotent.
+// that deleting by name twice is still idempotent. It is not activity: the
+// handlers that use a sandbox say so (touch).
 func (s *Server) lookup(ref string) (*record, bool) {
-	rec, ok := s.find(ref)
-	if ok {
+	return s.find(ref)
+}
+
+// canSuspend is whether the backend can suspend and resume a sandbox.
+func (s *Server) canSuspend() bool {
+	_, ok := s.Backend.(backend.Suspender)
+	return ok && s.Backend.Capabilities()[api.CapSuspend]
+}
+
+// isBackground is whether r is a client's bookkeeping (api.HeaderBackground).
+func isBackground(r *http.Request) bool {
+	return r.Header.Get(api.HeaderBackground) == "1"
+}
+
+// touchUnlessBackground records r as activity on rec, unless it is background.
+func (s *Server) touchUnlessBackground(r *http.Request, rec *record) {
+	if !isBackground(r) {
 		rec.touch(s.now())
 	}
-	return rec, ok
 }
 
 func (s *Server) find(ref string) (*record, bool) {
@@ -551,8 +580,46 @@ func (s *Server) find(ref string) (*record, bool) {
 	return best, best != nil
 }
 
-// live resolves ref and refuses a terminated sandbox, for every operation that
-// needs a running one.
+// use resolves ref for a request that needs the sandbox's VM — a command, a
+// file, a tunnel, a snapshot — and counts it as activity. A sandbox suspended
+// for being idle is resumed for it first; one suspended by a request is
+// refused, as it always was, until it is resumed. A background request is
+// neither activity nor a reason to resume: it gets what live gives.
+func (s *Server) use(w http.ResponseWriter, r *http.Request) (*record, bool) {
+	if isBackground(r) {
+		return s.live(w, r)
+	}
+	rec, ok := s.lookup(r.PathValue("ref"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
+		return nil, false
+	}
+	rec.touch(s.now())
+	sb := rec.snapshot()
+	switch {
+	case sb.State == api.StateRunning:
+		return rec, true
+	case sb.State == api.StateSuspended && sb.IdleSuspended:
+		if err := s.wake(r.Context(), rec); errors.Is(err, errNotRunning) {
+			writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
+			return nil, false
+		} else if err != nil {
+			s.backendErr(w, r, err)
+			return nil, false
+		}
+		return rec, true
+	case sb.State == api.StateSuspended:
+		writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is suspended; resume it first")
+		return nil, false
+	}
+	writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is not running")
+	return nil, false
+}
+
+// live resolves ref and refuses a sandbox that is not running, for an
+// operation that needs a running one but is not a use of it (a suspend, a
+// snapshot schedule) or is background. It neither counts as activity nor
+// resumes anything.
 func (s *Server) live(w http.ResponseWriter, r *http.Request) (*record, bool) {
 	rec, ok := s.lookup(r.PathValue("ref"))
 	if !ok {
@@ -585,7 +652,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.Network == nil && req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.LifetimeSecs == nil {
+	if req.Network == nil && req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.IdleAction == nil && req.LifetimeSecs == nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "nothing to update")
 		return
 	}
@@ -594,6 +661,8 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
 		return
 	}
+	// Someone changing it is using it: a new idle timeout counts from now.
+	s.touchUnlessBackground(r, rec)
 	switch st := rec.snapshot().State; {
 	case st == api.StateTerminated:
 		writeErr(w, http.StatusConflict, api.CodeConflict, "sandbox is terminated")
@@ -619,6 +688,18 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		var err error
 		if idle, err = spec.ResolveIdleUpdate(*req.IdleTimeoutSecs, s.Policy); err != nil {
 			writeSpecErr(w, err)
+			return
+		}
+	}
+	var action string
+	if req.IdleAction != nil {
+		var err error
+		if action, err = spec.ResolveIdleAction(*req.IdleAction); err != nil {
+			writeSpecErr(w, err)
+			return
+		}
+		if action == api.IdleSuspend && !s.canSuspend() {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot suspend a sandbox, so idle_action suspend cannot be had")
 			return
 		}
 	}
@@ -660,7 +741,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
 	}
 
-	if req.Name != nil || req.Labels != nil || req.IdleTimeoutSecs != nil || req.LifetimeSecs != nil {
+	if req.Name != nil || req.Labels != nil || req.IdleTimeoutSecs != nil || req.IdleAction != nil || req.LifetimeSecs != nil {
 		// The name is checked again and set under the lock create registers
 		// names under, so two renames, or a rename and a create, cannot both
 		// take one name.
@@ -679,6 +760,11 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.IdleTimeoutSecs != nil {
 			rec.sbx.IdleTimeoutSecs = idle
+		}
+		if req.IdleAction != nil {
+			// A sandbox already suspended for being idle keeps waking on use:
+			// the action decides the next idle timeout, not this one.
+			rec.sbx.IdleAction = action
 		}
 		if req.LifetimeSecs != nil {
 			// From creation, as at create, so a change says when it ends and
@@ -700,6 +786,12 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.IdleTimeoutSecs != nil {
 			ev.IdleTimeoutSecs = &after.IdleTimeoutSecs
+		}
+		if req.IdleAction != nil {
+			ev.IdleAction = api.IdleTerminate
+			if after.IdleAction != "" {
+				ev.IdleAction = after.IdleAction
+			}
 		}
 		if req.LifetimeSecs != nil {
 			ev.LifetimeSecs = &after.LifetimeSecs
@@ -786,9 +878,10 @@ func (s *Server) canEnforce(w http.ResponseWriter, p api.NetworkPolicy) bool {
 	return true
 }
 
-// reapIdle terminates sandboxes that have been idle past their timeout: no
-// request has named them and no process is running in them. A running process
-// is activity even with nobody watching — a build left to finish is not idle.
+// reapIdle terminates sandboxes that have been idle past their timeout, or
+// suspends those that asked for it (idle_action suspend): no request has used
+// them (touch) and no process is running in them. A running process is
+// activity even with nobody watching — a build left to finish is not idle.
 //
 // It also ends a sandbox at its lifetime, busy or not, running or suspended:
 // a lifetime is a promise about when the machine gets it back, and a
@@ -807,8 +900,9 @@ func (s *Server) reapIdle() {
 // reapOnce is one pass of reapIdle.
 func (s *Server) reapOnce(now time.Time) {
 	s.mu.Lock()
-	var due []*record
+	var due, sleepy []*record
 	reason := map[*record]string{}
+	canSuspend := s.canSuspend()
 	for _, rec := range s.sandboxes {
 		rec.mu.Lock()
 		idle := rec.sbx.IdleTimeoutSecs
@@ -826,11 +920,23 @@ func (s *Server) reapOnce(now time.Time) {
 		case expired:
 			due, reason[rec] = append(due, rec), "lifetime"
 		case live && idle > 0 && now.Sub(rec.lastActive) >= time.Duration(idle)*time.Second:
-			due, reason[rec] = append(due, rec), "idle"
+			// Suspended where it asked to be and the backend can; anywhere
+			// else the timeout is still a bound on what an idle sandbox holds,
+			// so it is terminated as before. A create asking for suspend is
+			// refused where it cannot be had, so that is only a backend that
+			// lost the capability across a restart.
+			if rec.sbx.IdleAction == api.IdleSuspend && canSuspend {
+				sleepy = append(sleepy, rec)
+			} else {
+				due, reason[rec] = append(due, rec), "idle"
+			}
 		}
 		rec.mu.Unlock()
 	}
 	s.mu.Unlock()
+	for _, rec := range sleepy {
+		s.idleSuspend(rec)
+	}
 	for _, rec := range due {
 		id := rec.snapshot().ID
 		if err := s.Backend.Terminate(context.Background(), id); err != nil {
@@ -944,7 +1050,7 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	rec, ok := s.live(w, r)
+	rec, ok := s.use(w, r)
 	if !ok {
 		return
 	}
@@ -996,7 +1102,7 @@ func (s *Server) startProcess(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	rec, ok := s.live(w, r)
+	rec, ok := s.use(w, r)
 	if !ok {
 		return
 	}
@@ -1034,6 +1140,10 @@ func (s *Server) process(w http.ResponseWriter, r *http.Request) (*record, *proc
 		writeErr(w, http.StatusNotFound, api.CodeNotFound, "no such sandbox")
 		return nil, nil, false
 	}
+	// Watching, attaching to or signalling a process is someone at work in
+	// the sandbox. It never resumes one: a suspended sandbox has no running
+	// process (busy refuses the suspend), so there is nothing to reach.
+	s.touchUnlessBackground(r, rec)
 	pid, err := strconv.Atoi(r.PathValue("pid"))
 	rec.mu.Lock()
 	pr, found := rec.procs[pid]
@@ -1161,7 +1271,7 @@ func (s *Server) filePath(w http.ResponseWriter, r *http.Request) (*record, stri
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 		return nil, "", false
 	}
-	rec, ok := s.live(w, r)
+	rec, ok := s.use(w, r)
 	if !ok {
 		return nil, "", false
 	}

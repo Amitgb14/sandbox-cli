@@ -165,6 +165,9 @@ const AgentLabel = "agent"
 // sandbox with no agent label is not an agent run, and is Unknown rather than
 // read as one.
 func Look(ctx context.Context, c *api.Client, sb api.Sandbox, now time.Time) Report {
+	// Looking is watching, not using: it does not hold the sandbox's idle
+	// timeout off, and does not resume one suspended for being idle.
+	ctx = api.Background(ctx)
 	r := Report{Sandbox: sb.ID, Name: sb.Name, Agent: sb.Labels[AgentLabel], State: Unknown}
 	e := Evidence{SandboxState: sb.State, Now: now}
 	if sb.State == api.StateRunning {

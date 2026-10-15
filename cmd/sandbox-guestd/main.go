@@ -126,6 +126,9 @@ func serve(args []string) error {
 	if *scratchFD > 2 && *scratchDev != "" {
 		s.GrowScratch = scratchGrower(os.NewFile(uintptr(*scratchFD), "scratch"), *scratchDev)
 	}
+	if *root == "/" {
+		s.SetClock = setClock
+	}
 	switch {
 	case *stdio:
 		s.ServeConn(stdioConn{})

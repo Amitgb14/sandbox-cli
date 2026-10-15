@@ -128,6 +128,9 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		req.Header.Set("Content-Type", contentType)
 	}
 	c.setAuth(req)
+	if background(ctx) {
+		req.Header.Set(HeaderBackground, "1")
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err

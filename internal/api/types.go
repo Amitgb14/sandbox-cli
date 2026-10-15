@@ -22,6 +22,23 @@ const (
 	StateTerminated = "terminated"
 )
 
+// What a sandbox does when it has been idle for its idle timeout. Terminate is
+// the default and is reported as an absent idle_action.
+const (
+	IdleTerminate = "terminate"
+	// IdleSuspend suspends it instead (capability suspend), keeping memory,
+	// processes and disk; the next request that needs its VM resumes it.
+	IdleSuspend = "suspend"
+)
+
+// HeaderBackground, set to "1" on a request, marks it as a client's own
+// bookkeeping rather than someone using the sandbox: it does not count as
+// activity, so it does not hold the idle timeout off, and it does not resume
+// a sandbox suspended for being idle (it is refused as not running instead).
+// A gateway sets it on the reads it makes for itself. It can only make a
+// sandbox idle sooner, so nothing checks who sets it.
+const HeaderBackground = "Sandbox-Background"
+
 // Network modes, loosest last. The order is the "tighten, never loosen" rule's
 // whole vocabulary: a request may move left of the server's ceiling, never right.
 const (
@@ -159,8 +176,11 @@ type CreateSandboxRequest struct {
 	Env      map[string]string `json:"env,omitempty"`
 	Network  *NetworkPolicy    `json:"network,omitempty"`
 	// IdleTimeoutSecs terminates the sandbox after this long with no request
-	// touching it and no process running. 0 takes the server's default.
+	// using it and no process running. 0 takes the server's default.
 	IdleTimeoutSecs int `json:"idle_timeout_secs,omitempty"`
+	// IdleAction is what the idle timeout does: "terminate" (the default) or
+	// "suspend", which needs the suspend capability and is refused without it.
+	IdleAction string `json:"idle_action,omitempty"`
 	// LifetimeSecs terminates the sandbox this long after it is created,
 	// whatever it is doing. 0 takes limits.max_lifetime_secs (none where that
 	// is 0); more than that limit is refused.
@@ -259,6 +279,9 @@ type UpdateSandboxRequest struct {
 	// counted from its last activity. Between 1 and limits.max_idle_timeout_secs;
 	// 0, never, only where that limit is 0.
 	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
+	// IdleAction is what the idle timeout does from now on: "terminate" or
+	// "suspend", as at create.
+	IdleAction *string `json:"idle_action,omitempty"`
 	// LifetimeSecs is a new lifetime, counted from creation as at create:
 	// longer extends it, shorter brings its end nearer, and one already
 	// past ends it at once. At least 1, and at most limits.max_lifetime_secs
@@ -282,6 +305,13 @@ type Sandbox struct {
 	CreatedAt time.Time     `json:"created_at"`
 	// IdleTimeoutSecs is in force for this sandbox; 0 means it never idles out.
 	IdleTimeoutSecs int `json:"idle_timeout_secs"`
+	// IdleAction is "suspend" when the idle timeout suspends it; absent, it
+	// terminates it.
+	IdleAction string `json:"idle_action,omitempty"`
+	// IdleSuspended is set while it is suspended because it was idle: the
+	// next request that needs its VM resumes it. A sandbox suspended by a
+	// request stays suspended until it is resumed.
+	IdleSuspended bool `json:"idle_suspended,omitempty"`
 	// LifetimeSecs is how long it may exist, and ExpiresAt when it is
 	// terminated for it, busy or not; both absent when it has no lifetime.
 	LifetimeSecs int        `json:"lifetime_secs,omitempty"`
@@ -351,6 +381,9 @@ type Event struct {
 	Volumes  []VolumeMount  `json:"volumes,omitempty"`
 	// IdleTimeoutSecs is the idle timeout after an update that changed it.
 	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
+	// IdleAction is the idle action after an update that changed it:
+	// "terminate" or "suspend".
+	IdleAction string `json:"idle_action,omitempty"`
 	// LifetimeSecs is the lifetime after an update that changed it.
 	LifetimeSecs *int `json:"lifetime_secs,omitempty"`
 

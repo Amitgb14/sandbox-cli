@@ -214,7 +214,7 @@ func hostedLauncher() studio.Launcher {
 		// A size is only asked for: sandboxd's limits bound it as any request's.
 		cr := api.CreateSandboxRequest{
 			Name: req.Name, Image: req.Image, SnapshotID: req.Snapshot,
-			SnapshotEverySecs: req.SnapshotEverySecs, SnapshotKeep: req.SnapshotKeep,
+			SnapshotEverySecs: req.SnapshotEverySecs, SnapshotKeep: req.SnapshotKeep, IdleAction: req.IdleAction,
 			CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
 			Env: map[string]string{},
 		}
