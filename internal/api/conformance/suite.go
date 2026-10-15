@@ -85,6 +85,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"ALiveSandboxCanBeRenamedRelabelledAndRetimed", testUpdateRecords},
 		{"ImagesAreListedInstalledAndPinned", testImages},
 		{"IdleSandboxIsTerminated", testIdleTimeout},
+		{"AnIdleSandboxCanSleepAndWakeOnUse", testIdleSuspend},
 		{"IdleTimeoutAboveTheLimitIsInvalid", testIdleTimeoutLimit},
 		{"ABusySandboxEndsAtItsLifetime", testLifetime},
 		{"LifetimeAboveTheLimitIsInvalid", testLifetimeLimit},
@@ -789,8 +790,8 @@ func testIdleTimeout(t *testing.T, e *env) {
 	if sb.IdleTimeoutSecs != 2 {
 		t.Fatalf("idle_timeout_secs = %d, want 2", sb.IdleTimeoutSecs)
 	}
-	// Watched through the listing: a GET names the sandbox, and naming it is
-	// activity, which would keep it alive.
+	// Watched through the listing, though reading a sandbox's record is not
+	// activity either (testIdleSuspend watches with GET).
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		list, err := e.c.Sandboxes(ctxT(t))
@@ -805,6 +806,56 @@ func testIdleTimeout(t *testing.T, e *env) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	t.Fatal("an idle sandbox was not terminated")
+}
+
+// idle_action suspend: an idle sandbox is suspended, not terminated, with
+// what it holds; reading its record and a background request leave it
+// asleep, and the next command resumes it. An endpoint that cannot suspend
+// refuses it at create rather than terminating what was asked to be kept.
+func testIdleSuspend(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapSuspend) {
+		_, err := e.c.CreateSandbox(ctx, api.CreateSandboxRequest{IdleAction: api.IdleSuspend})
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	sb := e.newSandbox(t, api.CreateSandboxRequest{IdleTimeoutSecs: 2, IdleAction: api.IdleSuspend})
+	if sb.IdleAction != api.IdleSuspend {
+		t.Fatalf("idle_action = %q, want suspend", sb.IdleAction)
+	}
+	if err := e.c.WriteFile(ctx, sb.ID, "/sandbox/home/kept.txt", []byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got, err := e.c.Sandbox(ctx, sb.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State == api.StateSuspended && got.IdleSuspended {
+			break
+		}
+		if got.State != api.StateRunning || time.Now().After(deadline) {
+			t.Fatalf("an idle sandbox asking to be suspended: %s, idle_suspended %t", got.State, got.IdleSuspended)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	_, err := e.c.ReadFile(api.Background(ctx), sb.ID, "/sandbox/home/kept.txt")
+	wantCode(t, err, api.CodeConflict)
+	if got, err := e.c.Sandbox(ctx, sb.ID); err != nil || got.State != api.StateSuspended {
+		t.Fatalf("after a background read: %+v, %v; want still suspended", got, err)
+	}
+
+	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"echo", "awake"}}); string(res.Stdout) != "awake\n" {
+		t.Fatalf("a command on the sleeping sandbox printed %q", res.Stdout)
+	}
+	got, err := e.c.Sandbox(ctx, sb.ID)
+	if err != nil || got.State != api.StateRunning || got.IdleSuspended {
+		t.Fatalf("after the command: %+v, %v; want running", got, err)
+	}
+	if data, err := e.c.ReadFile(ctx, sb.ID, "/sandbox/home/kept.txt"); err != nil || string(data) != "before" {
+		t.Fatalf("its file after waking: %q, %v", data, err)
+	}
 }
 
 // A lifetime ends a sandbox whatever it is doing: here a process keeps it

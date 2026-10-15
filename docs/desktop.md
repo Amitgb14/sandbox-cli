@@ -76,8 +76,9 @@ the VM is the boundary.
 ## Limits
 
 - **It keeps the sandbox up.** A running process counts as activity, so a
-  sandbox with its desktop running never reaches its idle timeout. Stop the
-  desktop, or terminate the sandbox, when you are done.
+  sandbox with its desktop running never reaches its idle timeout, and is
+  never suspended for it either. Stop the desktop, or terminate the sandbox,
+  when you are done.
 - **Fonts.** The image carries Latin, emoji and the common DejaVu faces. Text in
   other scripts (CJK among them) shows as boxes until a font for it is
   installed in the sandbox.

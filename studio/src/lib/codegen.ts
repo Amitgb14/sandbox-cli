@@ -22,6 +22,8 @@ export interface RunConfig {
   /** A snapshot schedule (--snapshot-every/--snapshot-keep; "snapshot_every_secs"/"snapshot_keep"). */
   snapshotEverySecs?: number;
   snapshotKeep?: number;
+  /** "suspend" has the idle timeout suspend it rather than terminate it (--on-idle; "idle_action"). */
+  idleAction?: "suspend";
   /** A size (--cpus/--memory/--disk; "cpus"/"memory_mb"/"disk_mb"); absent is the server's default. */
   cpus?: number;
   memoryMb?: number;
@@ -63,6 +65,7 @@ function cliFlags(c: Omit<RunConfig, "command" | "defaultAllow">): string[] {
     f.push("--snapshot-every", goDuration(c.snapshotEverySecs));
     if (c.snapshotKeep) f.push("--snapshot-keep", String(c.snapshotKeep));
   }
+  if (c.idleAction) f.push("--on-idle", c.idleAction);
   if (c.cpus) f.push("--cpus", String(c.cpus));
   if (c.memoryMb) f.push("--memory", String(c.memoryMb));
   if (c.diskMb) f.push("--disk", String(c.diskMb));
@@ -96,6 +99,7 @@ function createBody(c: Omit<RunConfig, "command">): Record<string, unknown> {
     body.snapshot_every_secs = c.snapshotEverySecs;
     if (c.snapshotKeep) body.snapshot_keep = c.snapshotKeep;
   }
+  if (c.idleAction) body.idle_action = c.idleAction;
   if (c.cpus) body.cpus = c.cpus;
   if (c.memoryMb) body.memory_mb = c.memoryMb;
   if (c.diskMb) body.disk_mb = c.diskMb;

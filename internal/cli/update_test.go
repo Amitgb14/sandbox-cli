@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
@@ -123,5 +124,48 @@ func TestEditLabels(t *testing.T) {
 	got, _ = editLabels(nil, []string{"range=1-"}, nil)
 	if got["range"] != "1-" {
 		t.Errorf("labels %v", got)
+	}
+}
+
+// --on-idle switches what the idle timeout does, and says so; an endpoint
+// that cannot suspend refuses suspend.
+func TestUpdateOnIdle(t *testing.T) {
+	be := fake.New(api.CapEgressAllowlist, api.CapSuspend)
+	srv := httptest.NewServer((&server.Server{Backend: be, Policy: spec.DefaultPolicyFor(be.Capabilities())}).Handler())
+	defer srv.Close()
+	c, _ := api.NewClient(srv.URL, "")
+	ctx := context.Background()
+	sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{Name: "web", IdleTimeoutSecs: 1800})
+	if err != nil {
+		t.Fatal(err)
+	}
+	useEndpoint(t, srv.URL)
+	out, err := runCLI(t, "update", "web", "--on-idle", "suspend")
+	if err != nil {
+		t.Fatal(err, out)
+	}
+	if got, _ := c.Sandbox(ctx, sb.ID); got.IdleAction != api.IdleSuspend {
+		t.Errorf("idle_action %q, want suspend", got.IdleAction)
+	}
+	if !strings.Contains(out, "idle 30m0s (suspend)") {
+		t.Errorf("output %q does not say it suspends", out)
+	}
+	if out, err := runCLI(t, "update", "web", "--on-idle", "terminate"); err != nil || strings.Contains(out, "(suspend)") {
+		t.Errorf("back to terminate: %q, %v", out, err)
+	}
+	if _, err := runCLI(t, "update", "web", "--on-idle", "nap"); err == nil {
+		t.Error("--on-idle nap was accepted")
+	}
+
+	plain := fake.New(api.CapEgressAllowlist)
+	srv2 := httptest.NewServer((&server.Server{Backend: plain, Policy: spec.DefaultPolicyFor(plain.Capabilities())}).Handler())
+	defer srv2.Close()
+	c2, _ := api.NewClient(srv2.URL, "")
+	if _, err := c2.CreateSandbox(ctx, api.CreateSandboxRequest{Name: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	useEndpoint(t, srv2.URL)
+	if _, err := runCLI(t, "update", "web", "--on-idle", "suspend"); err == nil || !strings.Contains(err.Error(), "cannot suspend") {
+		t.Errorf("suspend where it cannot be had: %v", err)
 	}
 }

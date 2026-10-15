@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Server is the guest agent's side: it runs inside the VM and does what the host
@@ -39,6 +40,9 @@ type Server struct {
 	// once the device is at least min bytes (OpGrowScratch). Nil where there
 	// is none to grow: tests, a guest booted without an overlay.
 	GrowScratch func(min int64) error
+	// SetClock, when set, sets the guest's wall clock (OpSetClock). Nil
+	// where the agent is not the guest's own (tests), which refuses it.
+	SetClock func(time.Time) error
 
 	smu      sync.Mutex
 	sessions map[string]*session // kept processes, by id (session.go)
@@ -99,6 +103,19 @@ func (s *Server) ServeConn(c io.ReadWriteCloser) {
 			reply(c, fail(CodeBadRequest, "grow_scratch: a size in bytes"))
 		default:
 			if err := s.GrowScratch(req.Size); err != nil {
+				reply(c, fail(CodeInternal, err.Error()))
+				return
+			}
+			reply(c, Response{OK: true})
+		}
+	case OpSetClock:
+		switch {
+		case s.SetClock == nil:
+			reply(c, fail(CodeBadRequest, "this guest agent does not set the clock"))
+		case req.Time <= 0:
+			reply(c, fail(CodeBadRequest, "set_clock: a time in nanoseconds since the epoch"))
+		default:
+			if err := s.SetClock(time.Unix(0, req.Time)); err != nil {
 				reply(c, fail(CodeInternal, err.Error()))
 				return
 			}

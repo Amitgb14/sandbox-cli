@@ -208,13 +208,16 @@ export function SandboxOverview({
       <Section title="Lifecycle" aside={edit}>
         <dl className="flex flex-col gap-1.5">
           <Row k="State">
-            <StateDot state={sb.state} />
+            <StateDot state={sb.state} idle={sb.idle_suspended} />
           </Row>
           <Row k="Created">
             <span title={formatDateTime(sb.created_at)}>{formatRelative(sb.created_at)}</span>
           </Row>
           {ownerOf(sb) ? <Row k="Owner"><span className="font-mono text-xs">{ownerOf(sb)}</span></Row> : null}
-          <Row k="Idle auto-stop">{idle(sb.idle_timeout_secs)}</Row>
+          <Row k="Idle auto-stop">
+            {idle(sb.idle_timeout_secs)}
+            {sb.idle_timeout_secs && sb.idle_action === "suspend" ? ", then suspend" : ""}
+          </Row>
           {sb.expires_at && sb.state !== "terminated" ? (
             <Row k="Ends">
               <Countdown at={sb.expires_at} />

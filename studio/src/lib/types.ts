@@ -42,6 +42,10 @@ export interface Sandbox {
   network: NetworkPolicy;
   created_at: string;
   idle_timeout_secs: number;
+  /** "suspend" when the idle timeout suspends it rather than terminating it. */
+  idle_action?: "suspend";
+  /** Suspended for being idle: the next shell, command or file resumes it. */
+  idle_suspended?: boolean;
   /** How long it may exist, busy or not, and when it ends for it; absent when it has no lifetime. */
   lifetime_secs?: number;
   expires_at?: string;
@@ -120,6 +124,7 @@ export interface AuditEvent {
   network?: NetworkPolicy;
   /** After a sandbox.updated that changed it. */
   idle_timeout_secs?: number;
+  idle_action?: "terminate" | "suspend";
   env_names?: string[];
   snapshot?: string;
   volumes?: VolumeMount[];
@@ -274,6 +279,8 @@ export interface LaunchRequest {
   /** A snapshot schedule: one every so many seconds while it runs, the newest kept. */
   snapshot_every_secs?: number;
   snapshot_keep?: number;
+  /** "suspend": the idle timeout suspends it, and the next use resumes it. */
+  idle_action?: "suspend";
 }
 
 export interface LaunchResult {

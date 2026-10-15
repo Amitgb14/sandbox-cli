@@ -36,7 +36,7 @@ import (
 
 // Version is sent in a ping reply, so the host can tell an out-of-date guest
 // agent from a broken one.
-const Version = "3"
+const Version = "4"
 
 // Ops.
 const (
@@ -63,7 +63,17 @@ const (
 	// lengthens the file under a running VM, and the guest's kernel learns
 	// the new size a moment later. Since protocol 3.
 	OpGrowScratch = "grow_scratch"
+	// OpSetClock sets the guest's wall clock to Request.Time. The host asks
+	// after it resumes a VM from a snapshot: the guest's clock stood still
+	// while the VM was not running, and a sandbox suspended for a night would
+	// otherwise wake up a night behind — tokens it thinks are fresh, files
+	// dated in the past. Since protocol 4.
+	OpSetClock = "set_clock"
 )
+
+// SetClockSince is the first protocol Version that has OpSetClock; an
+// older guest keeps the clock it had.
+const SetClockSince = 4
 
 // GrowScratchSince is the first protocol Version that has OpGrowScratch;
 // an older guest is grown by a restart instead.
@@ -94,6 +104,9 @@ type Request struct {
 	Keep    bool   `json:"keep,omitempty"`
 	Session string `json:"session,omitempty"`
 	Offset  int64  `json:"offset,omitempty"`
+	// Time, on a set_clock, is the host's wall clock in nanoseconds since
+	// the Unix epoch.
+	Time int64 `json:"time,omitempty"`
 }
 
 // SessionInfo is one kept process.

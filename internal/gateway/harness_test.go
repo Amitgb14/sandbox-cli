@@ -48,6 +48,9 @@ type testNode struct {
 	mu       sync.Mutex
 	badAuths []string // Authorization headers that were not the node token
 	paths    []string // every request path the node was sent
+	// background holds the method and path of every request the node was
+	// sent marked api.HeaderBackground.
+	background []string
 }
 
 func startNode(t *testing.T, name string, caps ...string) *testNode {
@@ -82,6 +85,9 @@ func startNodeWith(t *testing.T, name string, wrap func(*fake.Backend) backend.B
 		tn.requests.Add(1)
 		tn.mu.Lock()
 		tn.paths = append(tn.paths, r.URL.Path)
+		if r.Header.Get(api.HeaderBackground) == "1" {
+			tn.background = append(tn.background, r.Method+" "+r.URL.Path)
+		}
 		tn.mu.Unlock()
 		if got := r.Header.Get("Authorization"); got != "Bearer "+tn.token {
 			tn.mu.Lock()
@@ -178,6 +184,21 @@ func (tn *testNode) sawPath(s string) bool {
 
 // count is how many live sandboxes the node's backend holds.
 func (tn *testNode) count() int { return tn.be.Count() }
+
+// requestsSince is the method-less paths, and the background ones, the node
+// was sent from mark (a len of its paths) on.
+func (tn *testNode) requestsSince(mark, bgMark int) (paths, background []string) {
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+	return append([]string(nil), tn.paths[mark:]...), append([]string(nil), tn.background[bgMark:]...)
+}
+
+// marks is where requestsSince starts from now.
+func (tn *testNode) marks() (int, int) {
+	tn.mu.Lock()
+	defer tn.mu.Unlock()
+	return len(tn.paths), len(tn.background)
+}
 
 type testGateway struct {
 	t     *testing.T

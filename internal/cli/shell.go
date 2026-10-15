@@ -40,7 +40,10 @@ func connectWith(ctx context.Context, c *api.Client, ref string, argv []string, 
 	if err != nil {
 		return err
 	}
-	if sb.State != api.StateRunning {
+	if sb.State == api.StateSuspended && sb.IdleSuspended {
+		// Suspended for being idle: the shell resumes it, as any use does.
+		fmt.Fprintf(os.Stderr, "sandbox-cli: resuming %s (suspended while idle)\n", termsafe.Clean(ref))
+	} else if sb.State != api.StateRunning {
 		hint := ""
 		if sb.State == api.StateSuspended {
 			hint = " (resume it first: it keeps its memory and processes)"

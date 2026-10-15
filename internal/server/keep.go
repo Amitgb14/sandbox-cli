@@ -206,6 +206,13 @@ func (s *Server) Restore(ctx context.Context) (int, error) {
 		rec.sbx.State = api.StateRunning
 		if k.Suspended {
 			rec.sbx.State = api.StateSuspended
+		} else {
+			// The backend is what says it is asleep; a record saying so of a
+			// running VM is stale, and must not have a request resume it.
+			rec.sbx.IdleSuspended = false
+		}
+		if _, err := spec.ResolveIdleAction(rec.sbx.IdleAction); err != nil {
+			rec.sbx.IdleAction = ""
 		}
 		rec.sbx.Snapshotting = nil // a snapshot in progress ended with the old process
 		rec.procs = map[int]*procRecord{}
