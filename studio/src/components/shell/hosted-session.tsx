@@ -301,6 +301,7 @@ export function SignOutButton() {
       <SidebarMenuItem>
     <SidebarMenuButton
       disabled={busy}
+      tooltip="Sign out"
       onClick={() => {
         setBusy(true);
         signOut()
