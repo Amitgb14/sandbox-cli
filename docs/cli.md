@@ -253,8 +253,23 @@ sandbox-cli agent kilocode [sandbox-flags] [--] [kilocode-args...]
 List the agents, whether each can run unattended, and whether a login is saved.
 
 ```text
-sandbox-cli agent ls
+sandbox-cli agent ls [flags]
 ```
+
+```text
+List the agents, whether each can run unattended, and whether a login is saved.
+
+On a gateway that keeps agent logins, an agent run uses the login the gateway
+keeps for you, and GATEWAY says whether there is one; THIS MACHINE is the login
+saved here, which a first run gives a gateway that keeps none yet. Elsewhere
+the login is this machine's alone.
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `--context string` |  | which endpoint to ask for the logins it keeps |
 
 ### sandbox-cli agent opencode
 

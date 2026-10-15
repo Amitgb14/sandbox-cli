@@ -1,15 +1,21 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
+	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/termsafe"
 )
 
 // Agents are a layer on top of the sandbox, not the sandbox itself, so they
@@ -43,13 +49,24 @@ func newAgentGroupCmd() *cobra.Command {
 }
 
 func newAgentListCmd() *cobra.Command {
-	return &cobra.Command{
+	var ctxFlag string
+	cmd := &cobra.Command{
 		Use:   "ls",
 		Short: "List the agents, whether each can run unattended, and whether a login is saved",
-		Args:  cobra.NoArgs,
+		Long: "List the agents, whether each can run unattended, and whether a login is saved.\n\n" +
+			"On a gateway that keeps agent logins, an agent run uses the login the gateway\n" +
+			"keeps for you, and GATEWAY says whether there is one; THIS MACHINE is the login\n" +
+			"saved here, which a first run gives a gateway that keeps none yet. Elsewhere\n" +
+			"the login is this machine's alone.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			kept, onGateway := gatewayLogins(cmd.Context(), ctxFlag)
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(tw, "AGENT\tUNATTENDED\tLOGIN")
+			if onGateway {
+				fmt.Fprintln(tw, "AGENT\tUNATTENDED\tGATEWAY\tTHIS MACHINE")
+			} else {
+				fmt.Fprintln(tw, "AGENT\tUNATTENDED\tLOGIN")
+			}
 			for _, name := range agents.InteractiveNames() {
 				d, _ := agents.LookupInteractive(name)
 				// Unattended means a verified headless mode: only those agents may
@@ -59,11 +76,65 @@ func newAgentListCmd() *cobra.Command {
 				if _, ok := agents.Lookup(name); ok {
 					unattended = "yes"
 				}
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", name, unattended, loginState(d))
+				if !onGateway {
+					fmt.Fprintf(tw, "%s\t%s\t%s\n", name, unattended, loginState(d))
+					continue
+				}
+				gw := "-"
+				switch {
+				case len(d.AuthPaths) == 0:
+					gw = "not kept"
+				case !kept[name].IsZero():
+					gw = "saved " + kept[name].Local().Format("2006-01-02 15:04")
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", name, unattended, gw, loginState(d))
 			}
 			return tw.Flush()
 		},
 	}
+	cmd.Flags().StringVar(&ctxFlag, "context", "", "which endpoint to ask for the logins it keeps")
+	return cmd
+}
+
+// gatewayLogins is when each agent's login kept on the context's gateway
+// was last saved, and whether the context is a gateway that keeps logins at
+// all. Anything else — a plain sandboxd, a gateway without a secrets key
+// or older than agent logins, an endpoint that does not answer — is false,
+// and ls shows this machine's logins, as a run there uses them. Only an
+// endpoint named with --context that does not answer is worth a word: ls
+// runs offline as often as not.
+func gatewayLogins(ctx context.Context, ctxFlag string) (map[string]time.Time, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	c, name, err := newClient(ctxFlag)
+	if err != nil {
+		if ctxFlag != "" {
+			fmt.Fprintf(os.Stderr, "sandbox-cli: %v; showing this machine's logins\n", err)
+		}
+		return nil, false
+	}
+	gw, err := c.IsGateway(ctx)
+	if err != nil || !gw {
+		if err != nil && ctxFlag != "" {
+			fmt.Fprintf(os.Stderr, "sandbox-cli: context %s: %v; showing this machine's logins\n", termsafe.Clean(name), err)
+		}
+		return nil, false
+	}
+	list, err := c.AgentLogins(ctx)
+	if err != nil {
+		var ae *api.Error
+		if !errors.As(err, &ae) || (ae.Status != http.StatusNotImplemented && ae.Status != http.StatusNotFound) {
+			fmt.Fprintf(os.Stderr, "sandbox-cli: context %s: %v; showing this machine's logins\n", termsafe.Clean(name), err)
+		}
+		return nil, false
+	}
+	// Keyed by name and read only for the agents this CLI knows: nothing
+	// the gateway sends is printed as it came.
+	out := map[string]time.Time{}
+	for _, l := range list {
+		out[l.Agent] = l.Updated
+	}
+	return out, true
 }
 
 // loginState says whether any of an agent's login files has been saved. It
