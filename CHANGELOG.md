@@ -287,6 +287,11 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **A run says when it cannot remove its sandbox.** `run` and the agent
+  wrappers delete their sandbox when the command ends; when that is refused —
+  a gateway key without the `sandbox:delete` scope, say — they used to say
+  nothing and leave it running. They now print the reason and the
+  `sandbox-cli kill` that removes it. The run's exit code is unchanged.
 - **An idle sandbox can sleep instead of being deleted.** `run --on-idle
   suspend` (and `update --on-idle`, the API's `idle_action: "suspend"`, and
   "When idle" in Studio's Launch and Edit) has the idle timeout suspend the

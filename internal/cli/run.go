@@ -268,7 +268,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	keep := rf.keep || rf.detach
 	defer func() {
 		if !keep {
-			_ = c.TerminateSandbox(context.Background(), sb.ID)
+			removeSandbox(c, sb.ID, os.Stderr)
 		}
 	}()
 
@@ -322,6 +322,19 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		fmt.Fprintf(os.Stderr, "sandbox-cli: kept %s (sandbox-cli kill %s)\n", sb.ID, sb.ID)
 	}
 	return code, nil
+}
+
+// removeSandbox deletes a run's sandbox as the run ends, and says so when it
+// cannot. It used to ignore the error, so a key without the sandbox:delete
+// scope left every run's sandbox running with nothing to show for it, until
+// someone listed them; on a gateway, a sandbox never deleted also never has
+// its agent login saved on delete. The run's own exit code is left alone: the
+// command did what it was asked, and the leftover is named so it can be killed.
+func removeSandbox(c *api.Client, sandbox string, w io.Writer) {
+	if err := c.TerminateSandbox(context.Background(), sandbox); err != nil {
+		fmt.Fprintf(w, "sandbox-cli: could not remove %s (%s); it is still running: sandbox-cli kill %s\n",
+			sandbox, termsafe.Clean(err.Error()), sandbox)
+	}
 }
 
 // attach connects the terminal (or stdin/stdout) to a process until it exits.
