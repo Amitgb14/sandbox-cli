@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **Record a desktop.** The Desktop tab's Record button records the screen
+  Studio shows and saves it to your computer as a video (MP4, or WebM where
+  the browser does not make MP4) when you press Stop. It runs in the browser:
+  nothing is started in the sandbox, and it records while the tab shows the
+  desktop, saving what it has when the desktop disconnects or you move away.
 - **The Desktop tab shows a desktop the image started itself.** An image
   that starts its own desktop as it boots (on the desktop's port, 5900) is
   now connected to at once. Before, the tab saw no `sandbox-desktop` process

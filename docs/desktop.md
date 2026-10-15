@@ -87,6 +87,25 @@ runs `Xvnc :2 -rfbport 5902 -localhost -SecurityTypes None` shows up as
 **port 5902**. Keep such a server on the guest's loopback (`-localhost`):
 the tunnel reaches it there, and nothing else needs to.
 
+## Recording
+
+**Record**, beside the screen, records the desktop as Studio shows it and
+saves the video to your computer when you press **Stop** (the button counts
+the time; the screen is outlined in red meanwhile). The file is
+`<sandbox>-<port>-<time>.mp4`, or `.webm` in a browser that does not make
+MP4 (Firefox), at the desktop's own resolution, 15 frames a second.
+
+- **It records in your browser.** Studio takes the screen it is drawing; nothing
+  runs in the sandbox and the video is not stored anywhere but your download.
+  So it records only while that tab is open and showing the desktop: closing
+  the tab, switching to another desktop, or the desktop disconnecting stops
+  it and saves what it has.
+- **The pointer is not in it.** Studio draws the desktop's pointer over the
+  screen, not on it, so the recording shows windows and what is typed, not
+  the mouse moving.
+- A recording is held in the browser's memory until it is saved: an hour of a
+  busy screen is a few hundred megabytes.
+
 ## Limits
 
 - **It keeps the sandbox up.** A running process counts as activity, so a
