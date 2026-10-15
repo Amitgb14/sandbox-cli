@@ -2,6 +2,8 @@ package studio
 
 import (
 	"bufio"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,14 +16,19 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
 
-// vncNode stands in for sandboxd's tunnel endpoint with a VNC server behind
-// it: after the upgrade it sends an RFB banner and echoes what it is sent. It
-// records the port each tunnel asked for, and closes when the bridge does.
+// vncNode stands in for sandboxd's tunnel endpoint: VNC servers on 5900 and
+// 5902 (display :0 and :2), which send an RFB banner and echo what they are
+// sent; an SSH server on 5903, which is not VNC; nothing on any other port.
+// It records the port each tunnel asked for, and closes when the bridge does.
 type vncNode struct {
-	mu     sync.Mutex
-	ports  []string
-	closed chan struct{}
+	mu        sync.Mutex
+	ports     []string
+	closed    chan struct{}
+	closeOnce sync.Once
 }
+
+// vncBanners are what each listening port says first.
+var vncBanners = map[string]string{"5900": "RFB 003.008\n", "5902": "RFB 003.008\n", "5903": "SSH-2.0-OpenSSH_9.6\r\n"}
 
 func (n *vncNode) handler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,19 +46,27 @@ func (n *vncNode) handler(t *testing.T) http.Handler {
 			http.Error(w, "not a tunnel", http.StatusBadRequest)
 			return
 		}
+		port := r.URL.Query().Get("port")
 		n.mu.Lock()
-		n.ports = append(n.ports, r.URL.Query().Get("port"))
+		n.ports = append(n.ports, port)
 		n.mu.Unlock()
+		banner, listening := vncBanners[port]
+		if !listening {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(w, `{"error":{"code":"unavailable","message":"connection refused"}}`)
+			return
+		}
 		conn, brw, err := w.(http.Hijacker).Hijack()
 		if err != nil {
 			t.Error(err)
 			return
 		}
 		defer conn.Close()
-		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + api.TunnelProtocol + "\r\n\r\nRFB 003.008\n")
+		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + api.TunnelProtocol + "\r\n\r\n" + banner)
 		_ = brw.Flush()
 		_, _ = io.Copy(conn, brw.Reader) // echo, until the bridge closes the tunnel
-		close(n.closed)
+		n.closeOnce.Do(func() { close(n.closed) })
 	})
 }
 
@@ -86,8 +101,9 @@ func sendMaskedFrame(t *testing.T, w io.Writer, opcode byte, payload []byte) {
 }
 
 // The desktop bridge carries the VNC stream both ways as binary frames, to
-// the one port a desktop serves on, whatever the page asks for; it needs the
-// token like every /api call; and the browser going away closes the tunnel.
+// display :0's port unless the page names another VNC display port; it needs
+// the token like every /api call; and the browser going away closes the
+// tunnel.
 func TestDesktopBridge(t *testing.T) {
 	node, addr := desktopUnderTest(t)
 
@@ -95,7 +111,7 @@ func TestDesktopBridge(t *testing.T) {
 		t.Errorf("without the token: %d", resp.StatusCode)
 	}
 
-	conn, resp, br := dialWS(t, addr, "/api/ws/desktop?sandbox=sbx_1&port=22&token="+testToken)
+	conn, resp, br := dialWS(t, addr, "/api/ws/desktop?sandbox=sbx_1&token="+testToken)
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("handshake: %d", resp.StatusCode)
 	}
@@ -114,7 +130,7 @@ func TestDesktopBridge(t *testing.T) {
 	ports := append([]string(nil), node.ports...)
 	node.mu.Unlock()
 	if len(ports) != 1 || ports[0] != "5900" {
-		t.Fatalf("tunnel ports %v; want only 5900, never the page's 22", ports)
+		t.Fatalf("tunnel ports %v; want 5900, display :0's, when the page names none", ports)
 	}
 
 	conn.Close()
@@ -167,5 +183,64 @@ func TestDesktopBridgeRefusesAnotherOrigin(t *testing.T) {
 	defer node.mu.Unlock()
 	if len(node.ports) != 0 {
 		t.Fatalf("a tunnel was opened for a foreign origin: %v", node.ports)
+	}
+}
+
+// Another display is reached by its port, but only a VNC display port, and
+// only one that greets as a VNC server: a port outside the range is refused
+// before any tunnel, and one in it that speaks something else (SSH here) is
+// refused before the browser is sent a byte of it.
+func TestDesktopBridgeReachesVNCDisplaysOnly(t *testing.T) {
+	node, addr := desktopUnderTest(t)
+
+	conn, resp, br := dialWS(t, addr, "/api/ws/desktop?sandbox=sbx_1&port=5902&token="+testToken)
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("display :2: %d", resp.StatusCode)
+	}
+	if op, payload := readServerFrame(t, br); op != wsOpBinary || string(payload) != "RFB 003.008\n" {
+		t.Fatalf("display :2's first frame: op %d %q", op, payload)
+	}
+	conn.Close()
+
+	for _, port := range []string{"22", "8080", "5899", "6000", "x"} {
+		if _, resp, _ := dialWS(t, addr, "/api/ws/desktop?sandbox=sbx_1&port="+port+"&token="+testToken); resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("port %s: %d, want 400", port, resp.StatusCode)
+		}
+	}
+	_, resp, _ = dialWS(t, addr, "/api/ws/desktop?sandbox=sbx_1&port=5903&token="+testToken)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("an SSH server on 5903: %d, want 502", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if !strings.Contains(string(body), "does not speak VNC") || strings.Contains(string(body), "SSH-2.0") {
+		t.Fatalf("refusal %q: want it to say why, and nothing of what the port sent", body)
+	}
+
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	for _, p := range node.ports {
+		if p != "5902" && p != "5903" {
+			t.Errorf("a tunnel was opened to %s", p)
+		}
+	}
+}
+
+// /api/desktops lists the displays that answer as VNC servers, :0 to :9,
+// leaving out a port that answers with something else.
+func TestDesktopsListsTheDisplaysThatAnswer(t *testing.T) {
+	_, addr := desktopUnderTest(t)
+	req, _ := http.NewRequest(http.MethodGet, "http://"+addr+"/api/desktops?sandbox=sbx_1", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got Desktops
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d, %v", resp.StatusCode, err)
+	}
+	if fmt.Sprint(got.Ports) != "[5900 5902]" {
+		t.Fatalf("ports %v, want [5900 5902]", got.Ports)
 	}
 }

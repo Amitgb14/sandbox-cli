@@ -226,9 +226,11 @@ export async function followOutput(
 
 /** The WebSocket address of a process's terminal bridge. */
 /** A sandbox's desktop: its VNC stream, bridged by Studio's server (internal/studio/desktop.go). */
-export function desktopURL(sandbox: string): string {
+/** The bridge to a sandbox's desktop on a VNC display port (5900, display :0, unless given). */
+export function desktopURL(sandbox: string, port?: number): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const q = new URLSearchParams({ sandbox });
+  if (port) q.set("port", String(port));
   // Hosted, the session cookie goes with the upgrade; there is no token.
   if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on") q.set("token", getToken());
   const org = currentOrg();

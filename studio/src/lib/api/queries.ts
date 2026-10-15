@@ -365,6 +365,21 @@ export function useOpenShell() {
 /** The command images/desktop provides: a desktop served over VNC on the guest's loopback. */
 export const DESKTOP_COMMAND = "sandbox-desktop";
 
+/**
+ * The desktops a sandbox serves: the VNC display ports, :0 to :9, that answer
+ * as a VNC server (Studio's server: internal/studio/desktop.go). Whoever
+ * started them — Studio, the image as it booted, an agent.
+ */
+export function useDesktops(sandbox: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["desktops", sandbox],
+    queryFn: () => apiFetch<{ ports: number[] }>(`/desktops?sandbox=${encodeURIComponent(sandbox)}`).then((d) => d.ports),
+    enabled,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
 export function useStartDesktop() {
   return useInvalidating(
     ({ id }: { id: string }) =>
