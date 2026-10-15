@@ -22,6 +22,7 @@ import { useInfo } from "@/lib/api/queries";
 import { useCreateOrg, useOrgs } from "@/lib/api/orgs";
 import { can, useCaller } from "@/lib/caller";
 import { MEMBERS, ORG_NAME_HINT, orgName, orgNameProblem, useOrgStore } from "@/lib/org";
+import { cn } from "@/lib/utils";
 import type { Whoami } from "@/lib/types";
 
 /**
@@ -92,7 +93,7 @@ export function OrgSync() {
 }
 
 /** The organisation switcher at the top of the sidebar; nothing on a plain sandboxd. */
-export function OrgSwitcher() {
+export function OrgSwitcher({ compact }: { compact?: boolean }) {
   const caller = useCaller();
   const gateway = caller.kind === "gateway";
   const { data: orgs } = useOrgs(gateway);
@@ -109,11 +110,12 @@ export function OrgSwitcher() {
       <div
         role="group"
         aria-label={`Organization: ${current}`}
+        title={compact ? `Organization: ${current}` : undefined}
         data-testid="org-switcher"
-        className="flex h-9 items-center gap-2 rounded-md border bg-background px-2.5 text-sm"
+        className={cn("flex items-center gap-2 rounded-md border bg-background text-sm", compact ? "size-8 justify-center" : "h-9 px-2.5")}
       >
         <Building2 className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate font-medium">{current}</span>
+        {compact ? null : <span className="min-w-0 flex-1 truncate font-medium">{current}</span>}
       </div>
     );
   }
@@ -125,15 +127,23 @@ export function OrgSwitcher() {
           <button
             type="button"
             aria-label={`Organization: ${current}`}
+            title={compact ? `Organization: ${current}` : undefined}
             data-testid="org-switcher"
-            className="flex h-9 items-center gap-2 rounded-md border bg-background px-2.5 text-left text-sm transition-colors hover:bg-muted/60"
+            className={cn(
+              "flex items-center gap-2 rounded-md border bg-background text-left text-sm transition-colors hover:bg-muted/60",
+              compact ? "size-8 justify-center" : "h-9 px-2.5",
+            )}
           >
             <Building2 className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate font-medium">{current}</span>
-            <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+            {compact ? null : (
+              <>
+                <span className="min-w-0 flex-1 truncate font-medium">{current}</span>
+                <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+              </>
+            )}
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width) min-w-56">
+        <DropdownMenuContent align="start" side={compact ? "right" : "bottom"} className={compact ? "min-w-56" : "w-(--radix-dropdown-menu-trigger-width) min-w-56"}>
           <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Organizations</DropdownMenuLabel>
           {(orgs ?? [{ name: own, role: "member" as const, current: true }]).map((o) => (
             <DropdownMenuItem key={o.name} onSelect={() => o.name !== current && switchOrg(o.name === own ? null : o.name)}>

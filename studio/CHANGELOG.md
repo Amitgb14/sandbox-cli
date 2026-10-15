@@ -15,6 +15,11 @@ of its own: entries land under `Unreleased` and move under the version of
   now connected to at once. Before, the tab saw no `sandbox-desktop` process
   of its own and offered Start desktop, which ran a second one on the same
   display and exited with 1 ("Server is already active for display 1").
+- **The sidebar collapses to its icons.** The button at its top (or its edge,
+  or ⌘B) narrows it to a rail of icons, each screen named in a tooltip, with
+  search, the organisation switcher, sign out and the theme as icons too;
+  this browser keeps it collapsed across reloads. It no longer scrolls
+  sideways: the rules between its groups overhung it by 8px.
 - **Launch from a snapshot, and take one, on Snapshots.** Each snapshot has a
   Launch button that opens the launch page with it chosen (also from a
   sandbox's own snapshot list in its overview), and the page's Take snapshot

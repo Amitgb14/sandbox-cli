@@ -281,3 +281,11 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The sidebar restored collapsed on load (app-sidebar.tsx) takes its width at
+   once, rather than sliding shut in front of the reader. */
+.sidebar-instant [data-slot="sidebar-gap"],
+.sidebar-instant [data-slot="sidebar-container"],
+.sidebar-instant [data-slot="sidebar-inset"] {
+  transition: none !important;
+}
