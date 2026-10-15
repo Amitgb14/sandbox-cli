@@ -78,6 +78,9 @@ type Config struct {
 	// (recheckLive). A revocation through the admin API is acted on at
 	// once; this is the backstop for a store changed some other way.
 	AccessRecheckInterval time.Duration
+	// AgentLoginSaveInterval is how often a sandbox an agent login is kept
+	// from is read for a changed login (default 2m; agent_logins.go).
+	AgentLoginSaveInterval time.Duration
 	// MaxOrgsPerUser is how many organisations one user may make or own
 	// (orgs.go). Each is a tenant with a quota of its own, so this bounds
 	// how far one user can multiply theirs. Zero is unlimited.
@@ -121,6 +124,9 @@ type Gateway struct {
 	claimed map[string]bool // sandbox and volume names being created
 
 	sealer       *sealer // nil without a secrets key
+	// agentLoginMu serialises saving agent logins (agent_logins.go): the
+	// periodic save, a delete's and a forget.
+	agentLoginMu sync.Mutex
 	jobs         *jobManager
 	notifyClient *http.Client
 	services     *serviceCtl
@@ -171,6 +177,9 @@ func New(cfg Config) (*Gateway, error) {
 	}
 	if cfg.AccessRecheckInterval <= 0 {
 		cfg.AccessRecheckInterval = 30 * time.Second
+	}
+	if cfg.AgentLoginSaveInterval <= 0 {
+		cfg.AgentLoginSaveInterval = 2 * time.Minute
 	}
 	var seal *sealer
 	if cfg.SecretsKey != nil {
@@ -225,7 +234,7 @@ func (g *Gateway) Start(ctx context.Context) {
 	g.ctx = ctx
 	g.ctxMu.Unlock()
 	g.nodes.pollAll(ctx)
-	g.wg.Add(5)
+	g.wg.Add(6)
 	go func() { defer g.wg.Done(); g.nodes.run(ctx) }()
 	go func() { defer g.wg.Done(); g.pruneHistory(ctx) }()
 	g.startJobs(ctx)
@@ -244,6 +253,19 @@ func (g *Gateway) Start(ctx context.Context) {
 			case <-t.C:
 				g.revokeOrphanedJobs()
 				g.recheckLive()
+			}
+		}
+	}()
+	go func() {
+		defer g.wg.Done()
+		t := time.NewTicker(g.cfg.AgentLoginSaveInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				g.saveAgentLogins(ctx)
 			}
 		}
 	}()

@@ -10,6 +10,7 @@ import { agentStatus } from "@/components/launch/agent-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useForgetAgentLogin } from "@/lib/api/gateway";
 import { useAgents, useDeleteAgentKey, useSaveAgentKey } from "@/lib/api/queries";
 import { useCan } from "@/lib/caller";
 import { cn } from "@/lib/utils";
@@ -35,7 +36,7 @@ export default function AgentsPage() {
         title="Agents"
         description={
           process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on"
-            ? "The agents with a verified headless mode. Start one interactive from the Playground and log in inside its sandbox; to run one unattended as a job, store its API key under Secrets."
+            ? "The agents with a verified headless mode. Start one interactive from the Playground and log in once inside its sandbox: your login is kept for you, and copied into each console you start after. To run one unattended as a job, store its API key under Secrets."
             : "The agents with a verified headless mode. A login is copied into each sandbox an agent runs in, and back out when it ends: log in once with sandbox-cli agent <name>, start a console from the Playground, or save an API key here."
         }
       />
@@ -142,6 +143,7 @@ function AgentRow({ agent: a, open, onToggle }: { agent: Agent; open: boolean; o
                         ~/{f}
                       </code>
                     ))}
+                    {process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" && a.login === "saved" && can("sandbox:create") && <ForgetLogin agent={a.name} />}
                   </>
                 ) : (
                   <span className="text-muted-foreground">not kept: it logs in with an API key each run</span>
@@ -291,5 +293,29 @@ function KeySource({ set, saved }: { set: boolean; saved: boolean }) {
     >
       {label}
     </span>
+  );
+}
+
+/**
+ * Hosted: forgets the login the gateway keeps for this user, and stops it
+ * being saved from their running sandboxes. The next console asks again.
+ */
+function ForgetLogin({ agent }: { agent: string }) {
+  const forget = useForgetAgentLogin();
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="mt-1.5 h-7 gap-1 px-2 text-xs text-destructive hover:text-destructive"
+      disabled={forget.isPending}
+      onClick={() =>
+        forget.mutate(agent, {
+          onSuccess: () => toast.success(`Forgot your ${agent} login`, { description: "Your next console asks you to log in again." }),
+          onError: (e) => toast.error(e.message),
+        })
+      }
+    >
+      <Trash2 className="size-3.5" aria-hidden /> Forget login
+    </Button>
   );
 }

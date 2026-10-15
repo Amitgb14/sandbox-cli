@@ -13,9 +13,17 @@ type Status = { label: string; tone: "good" | "warn" | "muted"; hint: string };
  * a saved login file may still have expired, which only the agent can tell.
  */
 export function agentStatus(a: Agent): Status {
-  // Hosted: nothing is copied in or forwarded from where Studio runs.
-  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" || a.login === "in sandbox")
-    return { label: "Log in inside", tone: "muted", hint: "Start it interactive and log in in its terminal. For jobs, store its API key under Secrets." };
+  // Hosted: nothing is copied in or forwarded from where Studio runs; the
+  // gateway keeps the user's own login once they have logged in in a console.
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED === "on" || a.login === "in sandbox") {
+    if (a.login === "saved")
+      return { label: "Logged in", tone: "good", hint: "Your login, kept for you by the gateway, is copied into each console you start." };
+    return {
+      label: "Log in inside",
+      tone: "muted",
+      hint: "Start it interactive and log in once in its terminal: your login is kept for your next console. For jobs, store its API key under Secrets.",
+    };
+  }
   const keys = (a.env ?? []).filter((e) => e.set).map((e) => e.name);
   const saved = (a.env ?? []).filter((e) => e.saved && !e.set).map((e) => e.name);
   if (a.login === "saved") return { label: "Logged in", tone: "good", hint: "Its saved login is copied in when a run starts." };

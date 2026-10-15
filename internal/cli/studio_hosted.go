@@ -168,6 +168,11 @@ func gatewayHealthy(ctx context.Context, hc *http.Client, gateway string) error 
 // hand one person's machine — its API keys, its OAuth logins — to every user
 // of the Studio. What remains is what the request names, under the server's
 // policy, which applies to it as to any client's.
+//
+// An agent's login is kept instead by the gateway, for the user whose key
+// launches it (POST /v1/sandboxes/{ref}/agent-login): copied in before the
+// agent starts, and saved back from the sandbox by the gateway as it
+// changes. Studio never holds it.
 func hostedLauncher() studio.Launcher {
 	return func(ctx context.Context, c *api.Client, req studio.LaunchRequest) (studio.LaunchResult, error) {
 		if c == nil {
@@ -249,13 +254,34 @@ func hostedLauncher() studio.Launcher {
 		if err != nil {
 			return studio.LaunchResult{}, err
 		}
+		login := ""
+		if agent != nil && len(agent.AuthPaths) > 0 {
+			login = keepAgentLogin(ctx, c, sb.ID, agent.Name)
+		}
 		p, err := c.StartProcess(ctx, sb.ID, api.RunRequest{Argv: argv, Cwd: agenthome.GuestHome, Tty: tty, Rows: rows, Cols: cols})
 		if err != nil {
 			_ = c.TerminateSandbox(context.WithoutCancel(ctx), sb.ID)
 			return studio.LaunchResult{}, err
 		}
-		return studio.LaunchResult{Sandbox: sb.ID, PID: p.PID}, nil
+		return studio.LaunchResult{Sandbox: sb.ID, PID: p.PID, Login: login}, nil
 	}
+}
+
+// keepAgentLogin has the gateway copy the user's kept login for agent into
+// the sandbox and save it from there: "restored" when one was copied in,
+// "kept" when there was none yet and the one made in the sandbox will be.
+// A gateway that keeps no logins — no secrets key, or one older than agent
+// logins — answers "": the run goes on, and asks for a login as before.
+// Nothing is weakened by that: the login is a convenience, not a control.
+func keepAgentLogin(ctx context.Context, c *api.Client, sandbox, agent string) string {
+	kept, err := c.KeepAgentLogin(ctx, sandbox, agent)
+	if err != nil {
+		return ""
+	}
+	if kept.Restored {
+		return "restored"
+	}
+	return "kept"
 }
 
 // hostedNetwork is the network a hosted run asks for: the built-in defaults
