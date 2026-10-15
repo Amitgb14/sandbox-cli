@@ -33,6 +33,26 @@ function clock(ms: number): string {
   return hh ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
+/**
+ * Calls tick every ms, from a worker's clock: a page in a background browser
+ * tab has its own timers slowed to once a second, and after a few minutes to
+ * once a minute, which made a recording left running there a slideshow. A
+ * worker's timer is not slowed that way. Where a worker cannot be made, the
+ * page's own timer. Returns what stops it.
+ */
+function steadyClock(tick: () => void, ms: number): () => void {
+  try {
+    const src = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${ms});`], { type: "text/javascript" }));
+    const w = new Worker(src);
+    URL.revokeObjectURL(src);
+    w.onmessage = tick;
+    return () => w.terminate();
+  } catch {
+    const t = setInterval(tick, ms);
+    return () => clearInterval(t);
+  }
+}
+
 /** Hands the browser a file to save, as a download of this page. */
 function save(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
@@ -92,7 +112,7 @@ function useRecorder(screen: RefObject<HTMLDivElement | null>, file: string) {
     };
     draw();
     const stream = copy.captureStream(RECORD_FPS);
-    const ticker = setInterval(draw, 1000 / RECORD_FPS);
+    const stopClock = steadyClock(draw, Math.round(1000 / RECORD_FPS));
     const r = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: 2_500_000 } : undefined);
     const chunks: Blob[] = [];
     const began = new Date();
@@ -100,7 +120,7 @@ function useRecorder(screen: RefObject<HTMLDivElement | null>, file: string) {
       if (e.data.size) chunks.push(e.data);
     };
     r.onstop = () => {
-      clearInterval(ticker);
+      stopClock();
       stream.getTracks().forEach((t) => t.stop());
       rec.current = null;
       setSince(null);
@@ -138,7 +158,7 @@ function useRecorder(screen: RefObject<HTMLDivElement | null>, file: string) {
  * sandbox-desktop takes a moment to open its VNC port after it starts, so a
  * first connection refused is retried for a few seconds before giving up.
  */
-function Viewer({ sandbox, pid, port }: { sandbox: string; pid: number; port?: number }) {
+function Viewer({ sandbox, pid, port, onRecording }: { sandbox: string; pid: number; port?: number; onRecording?: (on: boolean) => void }) {
   const screen = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("connecting…");
   const [attempt, setAttempt] = useState(0);
@@ -148,6 +168,12 @@ function Viewer({ sandbox, pid, port }: { sandbox: string; pid: number; port?: n
   // recorder through this, which is always the current one.
   const stopRecording = useRef(recorder.stop);
   stopRecording.current = recorder.stop;
+  // The panel keeps this tab mounted while it records (details.tsx), so
+  // switching to Terminal or Files does not end the recording.
+  const report = useRef(onRecording);
+  report.current = onRecording;
+  useEffect(() => report.current?.(recorder.recording), [recorder.recording]);
+  useEffect(() => () => report.current?.(false), []);
 
   useEffect(() => {
     const el = screen.current;
@@ -253,11 +279,14 @@ export function SandboxDesktop({
   image,
   processes,
   canStart,
+  onRecording,
 }: {
   sandbox: string;
   image: string;
   processes: Process[];
   canStart: boolean;
+  /** Told when a recording starts and ends. */
+  onRecording?: (on: boolean) => void;
 }) {
   const start = useStartDesktop();
   const [missing, setMissing] = useState(false);
@@ -296,7 +325,7 @@ export function SandboxDesktop({
             Rescan
           </Button>
         </div>
-        <Viewer key={port} sandbox={sandbox} pid={running?.pid ?? 0} port={port} />
+        <Viewer key={port} sandbox={sandbox} pid={running?.pid ?? 0} port={port} onRecording={onRecording} />
       </div>
     );
   }

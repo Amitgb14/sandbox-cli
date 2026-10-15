@@ -97,9 +97,11 @@ MP4 (Firefox), at the desktop's own resolution, 15 frames a second.
 
 - **It records in your browser.** Studio takes the screen it is drawing; nothing
   runs in the sandbox and the video is not stored anywhere but your download.
-  So it records only while that tab is open and showing the desktop: closing
-  the tab, switching to another desktop, or the desktop disconnecting stops
-  it and saves what it has.
+  So it records only while that browser tab is open: switching the panel to
+  Terminal, Logs or Files keeps it going (a red dot marks the Desktop tab),
+  and so does leaving the browser tab in the background; closing it, moving
+  to another sandbox or desktop, or the desktop disconnecting stops it and
+  saves what it has.
 - **The pointer is not in it.** Studio draws the desktop's pointer over the
   screen, not on it, so the recording shows windows and what is typed, not
   the mouse moving.

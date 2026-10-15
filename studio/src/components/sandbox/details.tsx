@@ -101,6 +101,9 @@ export function SandboxDetails({
   const [ttyPid, setTtyPid] = useState<number | null>(null);
   const [pid, setPid] = useState<number | null>(null);
   const [tab, setTab] = useState<string | null>(null);
+  // While the desktop is recorded its tab stays mounted, hidden, when another
+  // is chosen: unmounting it ended the recording at the first switch.
+  const [recording, setRecording] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const wideScreen = useMinWidth(variant === "page" ? 1024 : 900);
   const twoPane = wideScreen && (variant === "page" || expanded);
@@ -322,7 +325,12 @@ export function SandboxDetails({
           <TabsTrigger value="terminal" disabled={!tty}>
             Terminal
           </TabsTrigger>
-          {sb.state === "running" && <TabsTrigger value="desktop">Desktop</TabsTrigger>}
+          {sb.state === "running" && (
+            <TabsTrigger value="desktop" title={recording ? "Recording the desktop" : undefined}>
+              {recording ? <span aria-label="recording" className="size-1.5 animate-pulse rounded-full bg-destructive" /> : null}
+              Desktop
+            </TabsTrigger>
+          )}
           <TabsTrigger value="output" disabled={processes.length === 0}>
             Logs
           </TabsTrigger>
@@ -365,8 +373,8 @@ export function SandboxDetails({
           )}
         </TabsContent>
         {sb.state === "running" && (
-          <TabsContent value="desktop" className="mt-0 p-5">
-            <SandboxDesktop sandbox={id} image={sb.image} processes={processes} canStart={can("sandbox:create")} />
+          <TabsContent value="desktop" forceMount={recording || undefined} className="mt-0 p-5 data-[state=inactive]:hidden">
+            <SandboxDesktop sandbox={id} image={sb.image} processes={processes} canStart={can("sandbox:create")} onRecording={setRecording} />
           </TabsContent>
         )}
         <TabsContent value="output" className="mt-0 flex flex-col gap-3 p-5">
