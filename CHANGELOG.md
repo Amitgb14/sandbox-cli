@@ -297,8 +297,8 @@ in `_old/` as reference, to be ported where this design still wants it.
   endpoint that can suspend (Firecracker), and is refused elsewhere rather
   than turned back into a delete. A sandbox suspended by hand still waits for
   `resume`. On Firecracker a resumed guest's clock is now set from the host's,
-  where before it woke as far behind as it had slept (guest agent protocol 4;
-  the base image needs rebuilding for it).
+  where before it woke as far behind as it had slept (guest agent protocol 4:
+  sandboxes made after sandboxd and its `sandbox-guestd` are upgraded).
 - **Reading a sandbox no longer keeps it from idling.** Only using it does:
   a command, a file, a process's output, a tunnel, an update. Getting it,
   listing, its events and its metrics no longer reset its idle timeout, and
