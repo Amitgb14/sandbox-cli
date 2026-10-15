@@ -258,6 +258,16 @@ export function useRemoveRegistryLogin() {
   );
 }
 
+// --- agent logins: the user's own, kept by the gateway; contents never come back -------
+
+/** Forgets the caller's kept login for an agent; the next console asks for it again. */
+export function useForgetAgentLogin() {
+  return useInvalidating(
+    (agent: string) => apiFetch<void>(`/v1/agent-logins/${enc(agent)}`, { method: "DELETE" }),
+    () => [["agents"]],
+  );
+}
+
 // --- SSH -------------------------------------------------------------------------------
 
 /** Where the gateway's SSH server listens; null when it serves none (404). */

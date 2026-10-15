@@ -87,6 +87,10 @@ type LaunchRequest struct {
 type LaunchResult struct {
 	Sandbox string `json:"sandbox"`
 	PID     int    `json:"pid"`
+	// Login is what became of a hosted agent run's login: "restored" (the
+	// gateway copied the user's kept login in), "kept" (none yet; the one
+	// made in the sandbox is saved), or "" (not kept).
+	Login string `json:"login,omitempty"`
 }
 
 // Launcher starts a run; the CLI supplies it. c is the client of the request

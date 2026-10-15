@@ -287,6 +287,17 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **Agent logins kept by the gateway.** An agent console started from hosted
+  Studio no longer asks for a subscription login every time: log in once,
+  and the gateway keeps that login for you — sealed with its
+  `--secrets-key-file`, for you alone, never your organization — copies it
+  into each console you start after, and saves it back as the agent
+  refreshes it (every two minutes, and as the sandbox is deleted). The Agents
+  screen shows it as logged in and can forget it. Any client can ask for the
+  same: `POST /v1/sandboxes/{ref}/agent-login`, `GET /v1/agent-logins`,
+  `DELETE /v1/agent-logins/{agent}`. Only the agent's own login files are
+  read back, and `~/.claude.json` keeps its account keys only, never an MCP
+  server.
 - **Open egress on Linux.** `sandboxd --egress-open` offers network mode
   `open` on Firecracker: with the policy's ceiling at `open`, a sandbox that
   asks for it (`run --network open`, Open in Studio) makes TCP connections to

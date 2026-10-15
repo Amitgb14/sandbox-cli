@@ -89,7 +89,6 @@ func (g *Gateway) Handler() http.Handler {
 		after   afterFunc
 	}{
 		{"GET /v1/sandboxes/{ref}", false, ScopeRead, nil},
-		{"DELETE /v1/sandboxes/{ref}", false, ScopeDelete, g.afterDelete},
 		{"POST /v1/sandboxes/{ref}/run", false, ScopeCreate, nil},
 		{"POST /v1/sandboxes/{ref}/processes", false, ScopeCreate, nil},
 		{"GET /v1/sandboxes/{ref}/processes", false, ScopeRead, nil},
@@ -112,6 +111,12 @@ func (g *Gateway) Handler() http.Handler {
 	} {
 		route(rt.pattern, rt.raw, g.forward(rt.scope, rt.after))
 	}
+	// A delete first saves the sandbox's agent login, if it is kept from:
+	// the last chance to read it (agent_logins.go).
+	route("DELETE /v1/sandboxes/{ref}", false, g.saveLoginBeforeDelete(g.forward(ScopeDelete, g.afterDelete)))
+	route("POST /v1/sandboxes/{ref}/agent-login", false, g.keepAgentLogin)
+	route("GET /v1/agent-logins", false, g.listAgentLogins)
+	route("DELETE /v1/agent-logins/{agent}", false, g.forgetAgentLogin)
 	route("POST /v1/sandboxes/{ref}/ssh-access", false, g.sshAccess)
 	// Not forwarded: the growth is held to the quota and the node's room
 	// first (resize.go).

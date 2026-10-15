@@ -444,7 +444,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now sandbox-gateway
 | `--max-orgs-per-user N` | `10` | most [organisations](organizations.md) one user may create or own; each has a quota of its own, so this bounds how far one user multiplies theirs. 0 is unlimited. |
 | `--poll-interval` | `5s` | how often each node is asked for its status. |
 | `--cors-origin ORIGIN` | | a browser origin allowed to call the API (repeatable). Others are refused. |
-| `--secrets-key-file FILE` | | 32 random bytes, mode 0600, sealing the tenants' secrets and jobs' environments. Without it there are no secrets. |
+| `--secrets-key-file FILE` | | 32 random bytes, mode 0600, sealing the tenants' secrets and jobs' environments, and users' [agent logins](api/v1.md#agent-logins). Without it there are no secrets. |
 | `--notify-allow-private` | off | lets a job's `notify` URL reach loopback, private and link-local addresses (and http to loopback). Off, the gateway posts only to public addresses, checked as it connects. |
 | `--metrics-listen HOST:PORT` | off | Prometheus metrics, on loopback only ([operations.md](operations.md#metrics)). |
 | `--audit-log FILE` | `audit/gateway.jsonl` in `--state-dir` | who did what, as JSONL; `none` keeps no log ([operations.md](operations.md#the-audit-log)). |

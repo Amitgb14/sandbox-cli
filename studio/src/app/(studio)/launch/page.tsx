@@ -221,7 +221,14 @@ function LaunchForm() {
     if (vols.length) req.volumes = vols;
     launch.mutate(req, {
       onSuccess: (res) => {
-        toast.success(`Started ${res.sandbox}`);
+        toast.success(
+          `Started ${res.sandbox}`,
+          res.login === "restored"
+            ? { description: `With your saved ${agent} login.` }
+            : res.login === "kept"
+              ? { description: `Log in once in its console: your ${agent} login is kept for the next one.` }
+              : undefined,
+        );
         router.push(`/sandbox?id=${res.sandbox}`);
       },
       onError: (err) => toast.error(err.message),

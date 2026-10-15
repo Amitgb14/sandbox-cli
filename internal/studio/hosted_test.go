@@ -45,6 +45,9 @@ type testGateway struct {
 	auths   []string // Authorization of each request, in order
 	cookies []string
 	sd      http.Handler
+	// logins are the agent logins the gateway keeps, by user (GET
+	// /v1/agent-logins answers each user's own).
+	logins map[string][]api.AgentLoginInfo
 }
 
 func newTestGateway() *testGateway {
@@ -149,6 +152,13 @@ func (g *testGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/v1/whoami" {
 		writeJSON(w, http.StatusOK, who)
+		return
+	}
+	if r.URL.Path == "/v1/agent-logins" && r.Method == http.MethodGet {
+		g.mu.Lock()
+		list := append([]api.AgentLoginInfo{}, g.logins[who.User]...)
+		g.mu.Unlock()
+		writeJSON(w, http.StatusOK, api.AgentLoginList{Logins: list})
 		return
 	}
 	r.Header.Set("Authorization", "Bearer sandboxd-token")
@@ -582,6 +592,37 @@ func TestHostedAgentsRevealNothingOfTheHost(t *testing.T) {
 	for _, a := range got.Agents {
 		if a.Login != "in sandbox" || len(a.Env) != 0 {
 			t.Errorf("%s: login %q env %v; want nothing of the host", a.Name, a.Login, a.Env)
+		}
+	}
+}
+
+// A login the gateway keeps for the signed-in user shows as saved, for
+// that user and agent only.
+func TestHostedAgentsShowTheUsersKeptLogin(t *testing.T) {
+	e := hostedUnderTest(t)
+	e.gw.logins = map[string][]api.AgentLoginInfo{"alice": {{Agent: "claude", Files: []string{".claude/.credentials.json"}}}}
+	for key, want := range map[string]string{aliceKey: "saved", bobKey: "in sandbox"} {
+		cookie := e.signIn(t, key)
+		req, _ := http.NewRequest("GET", e.st.URL+"/api/agents", nil)
+		req.Header.Set("Cookie", "sbx_studio="+cookie)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct{ Agents []Agent }
+		err = json.NewDecoder(resp.Body).Decode(&got)
+		resp.Body.Close()
+		if err != nil || len(got.Agents) == 0 {
+			t.Fatalf("agents: %v %v", err, got)
+		}
+		for _, a := range got.Agents {
+			w := "in sandbox"
+			if a.Name == "claude" {
+				w = want
+			}
+			if a.Login != w {
+				t.Errorf("%s's %s: login %q, want %q", key[:8], a.Name, a.Login, w)
+			}
 		}
 	}
 }

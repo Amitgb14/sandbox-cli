@@ -108,7 +108,7 @@ func (s *Server) launch(w http.ResponseWriter, r *http.Request) {
 // mode are listed (see launch); `sandbox-cli agent ls` shows the rest.
 type Agent struct {
 	Name  string `json:"name"`
-	Login string `json:"login"` // "saved", "-", or "not kept"
+	Login string `json:"login"` // "saved", "-", "not kept", or (hosted) "in sandbox"
 	// ProviderHost is the agent's API, which an agent run may always reach.
 	ProviderHost string `json:"provider_host,omitempty"`
 	// LoginFiles are what is kept of its login between runs, relative to the
@@ -130,15 +130,32 @@ type AgentEnv struct {
 	Saved bool `json:"saved"`
 }
 
-func (s *Server) agents(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) agents(w http.ResponseWriter, r *http.Request) {
 	out := []Agent{}
+	// Hosted, a login is the user's, kept by the gateway: "saved" when it
+	// keeps one for them. A gateway that keeps none answers an error, and
+	// every agent logs in in its sandbox.
+	kept := map[string]bool{}
+	if s.hosted != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		if list, err := s.clientFor(r).AgentLogins(ctx); err == nil {
+			for _, l := range list {
+				kept[l.Agent] = true
+			}
+		}
+		cancel()
+	}
 	for _, name := range agents.Names() {
 		d, _ := agents.Lookup(name)
 		if s.hosted != nil {
 			// Hosted: the machine Studio runs on is nobody's here. Whether it
 			// holds a login or an API key in its environment is not the
 			// user's business, and neither would be used for them.
-			out = append(out, Agent{Name: name, Login: "in sandbox", ProviderHost: d.ProviderHost, LoginFiles: d.AuthPaths})
+			login := "in sandbox"
+			if kept[name] {
+				login = "saved"
+			}
+			out = append(out, Agent{Name: name, Login: login, ProviderHost: d.ProviderHost, LoginFiles: d.AuthPaths})
 			continue
 		}
 		login := "-"

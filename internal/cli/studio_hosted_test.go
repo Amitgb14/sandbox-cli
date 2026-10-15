@@ -105,6 +105,23 @@ func TestHostedLauncherTakesNothingFromTheHost(t *testing.T) {
 		}
 	}
 	var create api.CreateSandboxRequest
+	// The login is the gateway's to copy in (agent-login), asked for by the
+	// agent's name alone and before the agent starts.
+	keep, start := -1, -1
+	for i, r := range rec.all() {
+		switch {
+		case r.method == http.MethodPost && strings.HasSuffix(r.path, "/agent-login"):
+			keep = i
+			if string(r.body) != `{"agent":"claude"}`+"\n" && string(r.body) != `{"agent":"claude"}` {
+				t.Errorf("agent-login sent %q", r.body)
+			}
+		case r.method == http.MethodPost && strings.HasSuffix(r.path, "/processes"):
+			start = i
+		}
+	}
+	if keep < 0 || start < 0 || keep > start {
+		t.Errorf("agent-login at %d, the agent started at %d: want the login kept first", keep, start)
+	}
 	for _, r := range rec.all() {
 		if strings.Contains(string(r.body), leak) {
 			t.Errorf("%s %s carried a value from the host", r.method, r.path)

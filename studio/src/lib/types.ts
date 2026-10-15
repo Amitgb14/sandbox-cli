@@ -279,6 +279,12 @@ export interface LaunchRequest {
 export interface LaunchResult {
   sandbox: string;
   pid: number;
+  /**
+   * Hosted, an agent run's login: "restored" when the gateway copied the
+   * user's kept login in, "kept" when there was none yet and the one made in
+   * the sandbox will be saved. Absent when it is not kept.
+   */
+  login?: "restored" | "kept";
 }
 
 /** One line of GET /v1/sandboxes/{ref}/processes/{pid}/output. */

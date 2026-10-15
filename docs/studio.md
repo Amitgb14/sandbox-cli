@@ -210,6 +210,7 @@ key at the gateway. Studio keeps no password and no account of its own.
 |---|---|
 | Every call | made with the signed-in user's key, so the gateway's ownership, tenants, quotas and scopes apply exactly as to their own CLI. Studio adds no isolation of its own and needs none. |
 | What it holds | no credential of its own: no context, no key file. It reads nothing of the machine it runs on: no agent logins, no environment, no config. |
+| Agent logins | each user's own, kept by the gateway, never by Studio: an agent console asks the gateway to copy the user's kept login in before the agent starts, and the gateway saves the one made or refreshed in the sandbox ([agent logins](api/v1.md#agent-logins)). Log in once in a console and the next one starts logged in; the Agents screen shows it as logged in and can forget it. The gateway needs `--secrets-key-file`; without it every console asks for a login, as before. |
 | Agents | an interactive agent logs in inside its sandbox; an unattended one runs as a [job](jobs.md), with its API key stored under Secrets. The Playground offers commands and interactive agents. |
 | Studio's settings | the host user's own — saved agent keys, saved templates, egress rules and allowlist groups — are not shown, not applied to hosted launches and cannot be changed: their routes do not exist when hosted. Users get the built-in sizes (micro to xlarge), name hosts to allow themselves or pick the gateway's [allowlist groups](fleet.md#allowlist-groups), which an admin keeps on its own screen, and keep agent keys under Secrets. |
 | Admin keys | refused, unless `--allow-admin` (above), whether by link or by password. |
@@ -221,8 +222,7 @@ URL anywhere but loopback, and a non-loopback `--listen` without a
 certificate. `npm run check:hosted` in `studio/` fails if the hosted build
 carries local Studio's token handling or the editors of the host's settings.
 
-**Not yet:** single sign-on, sessions that survive a restart, an agent's login kept between
-console runs, and counting failed sign-ins per client (behind a proxy every
+**Not yet:** single sign-on, sessions that survive a restart, and counting failed sign-ins per client (behind a proxy every
 request comes from the proxy, so there is one count for everyone).
 
 ## How it is served, and who may use it

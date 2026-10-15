@@ -177,6 +177,19 @@ type Store interface {
 	RegistryLoginsOf(ctx context.Context, tenant string) ([]api.RegistryLoginInfo, error)
 	DeleteRegistryLogin(ctx context.Context, tenant, registry string) error
 
+	// --- agent logins (agent_logins.go): a user's, sealed; never a tenant's ---
+
+	UserOfKey(ctx context.Context, keyID string) (userID string, ok bool, err error)
+	PutAgentLogin(ctx context.Context, userID, agent string, sealed []byte) error
+	AgentLogin(ctx context.Context, userID, agent string) (sealed []byte, ok bool, err error)
+	AgentLoginsOf(ctx context.Context, userID string) ([]agentLoginRow, error)
+	DeleteAgentLogin(ctx context.Context, userID, agent string) error
+	KeepAgentLogin(ctx context.Context, k agentLoginKeep) error
+	AgentLoginKeeps(ctx context.Context) ([]agentLoginKeep, error)
+	AgentLoginKeep(ctx context.Context, sandbox string) (agentLoginKeep, bool, error)
+	SetAgentLoginSeen(ctx context.Context, sandbox, seen string) error
+	DropAgentLoginKeep(ctx context.Context, sandbox string) error
+
 	// --- services (sql_services.go) ---
 
 	Services(ctx context.Context) ([]serviceRecord, error)
