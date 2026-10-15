@@ -37,6 +37,10 @@ export interface Sandbox {
   network: NetworkPolicy;
   created_at: string;
   idle_timeout_secs: number;
+  /** "suspend" when the idle timeout suspends it; absent, it terminates it. */
+  idle_action?: "suspend";
+  /** Suspended for being idle: the next command, file or tunnel resumes it. */
+  idle_suspended?: boolean;
   /** The snapshot schedule, when it has one. */
   snapshot_every_secs?: number;
   snapshot_keep?: number;
@@ -52,6 +56,8 @@ export interface CreateSandboxRequest {
   env?: Record<string, string>;
   network?: NetworkPolicy;
   idle_timeout_secs?: number;
+  /** What the idle timeout does: "terminate" (the default) or "suspend" (capability `suspend`), resumed by the next use. */
+  idle_action?: "terminate" | "suspend";
   snapshot_id?: string;
   /** Snapshot the sandbox this often while it runs, keeping the newest `snapshot_keep` (default 1); within the server's limits. */
   snapshot_every_secs?: number;
@@ -537,12 +543,13 @@ export class Client {
    * Changes a live sandbox; only what is given changes. `name: ""` removes
    * the name; `labels` replaces them whole (`{}` removes them);
    * `idle_timeout_secs` is within `limits.max_idle_timeout_secs`, 0 (never)
-   * only where that is 0. `network` needs a running sandbox and capability
-   * `network_policy_update`. A request with one bad field changes nothing.
+   * only where that is 0; `idle_action` is "terminate" or "suspend". `network`
+   * needs a running sandbox and capability `network_policy_update`. A request
+   * with one bad field changes nothing.
    */
   updateSandbox(
     ref: string,
-    req: { name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; network?: NetworkPolicy },
+    req: { name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; idle_action?: "terminate" | "suspend"; network?: NetworkPolicy },
   ): Promise<Sandbox> {
     return this.json("PATCH", this.sbx(ref), req);
   }

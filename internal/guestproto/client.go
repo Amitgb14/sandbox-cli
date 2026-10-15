@@ -192,6 +192,17 @@ func (c *Client) GrowScratch(ctx context.Context, size int64) error {
 	return err
 }
 
+// SetClock sets the guest's wall clock to t (OpSetClock).
+func (c *Client) SetClock(ctx context.Context, t time.Time) error {
+	cn, done, err := c.open(ctx, Request{Op: OpSetClock, Time: t.UnixNano()})
+	if err != nil {
+		return err
+	}
+	defer done()
+	_, err = cn.response()
+	return err
+}
+
 // List lists a guest directory.
 func (c *Client) List(ctx context.Context, path string) ([]DirEntry, error) {
 	cn, done, err := c.open(ctx, Request{Op: OpList, Path: path})

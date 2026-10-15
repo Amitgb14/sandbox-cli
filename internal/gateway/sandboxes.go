@@ -189,6 +189,12 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 		want.Caps = append(want.Caps, api.CapVolumes)
 	}
 
+	// An idle suspend needs a node that suspends; on one that cannot, the
+	// create is refused there though another could have had it.
+	if req.IdleAction == api.IdleSuspend && g.anyNodeHas(api.CapSuspend) {
+		want.Caps = append(want.Caps, api.CapSuspend)
+	}
+
 	if req.Name != "" {
 		key := "sbx\x00" + p.User + "\x00" + p.Tenant + "\x00" + req.Name
 		if !g.claim(key) {
@@ -480,6 +486,12 @@ func (g *Gateway) forward(scope string, after afterFunc) handlerFunc {
 		// client keeps it (live.go).
 		w, r, done := g.track(w, r, p, scope, id, o.Node)
 		defer done()
+		// A key that may only read does not keep a sandbox up, nor resume
+		// one suspended for being idle: that is spending the machine, which
+		// is create's to do.
+		if !p.Can(ScopeCreate) {
+			r.Header.Set(api.HeaderBackground, "1")
+		}
 		g.proxy(w, r, n, target, modify)
 	}
 }

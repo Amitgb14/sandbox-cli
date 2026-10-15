@@ -379,3 +379,11 @@ func fail(format string, a ...any) {
 		time.Sleep(time.Hour)
 	}
 }
+
+// setClock is OpSetClock: the agent runs as root in the guest, which may set
+// the clock. The guest has no clock source of its own that would correct it
+// after a snapshot restore, so the host's word is the time.
+func setClock(t time.Time) error {
+	tv := syscall.NsecToTimeval(t.UnixNano())
+	return syscall.Settimeofday(&tv)
+}

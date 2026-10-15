@@ -349,10 +349,15 @@ const agentHome = "/sandbox/home"
 
 // saveAgentLogin reads the login back from a sandbox it is kept from, and
 // saves it if it changed. A sandbox that is gone is no longer kept from.
+//
+// Its reads are background (api.Background): the gateway's bookkeeping, not
+// anyone using the sandbox. As activity they held every kept-from sandbox's
+// idle timeout off, every two minutes, for good; and they must not resume
+// one suspended for being idle, whose login was saved while it ran.
 func (g *Gateway) saveAgentLogin(ctx context.Context, k agentLoginKeep) error {
 	g.agentLoginMu.Lock()
 	defer g.agentLoginMu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, agentLoginTimeout)
+	ctx, cancel := context.WithTimeout(api.Background(ctx), agentLoginTimeout)
 	defer cancel()
 	// The keep may have been forgotten, or saved, since it was listed.
 	k, ok, err := g.store.AgentLoginKeep(ctx, k.Sandbox)

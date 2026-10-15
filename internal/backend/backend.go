@@ -36,6 +36,9 @@ type Spec struct {
 	// IdleTimeoutSecs is enforced by the server, not the backend; carried here
 	// so the resolved spec is the whole decision.
 	IdleTimeoutSecs int
+	// IdleAction is api.IdleSuspend when the idle timeout suspends rather
+	// than terminates; "" terminates. The server's, like the timeout.
+	IdleAction string
 	// LifetimeSecs, like IdleTimeoutSecs, is the server's to enforce.
 	LifetimeSecs int
 	// SnapshotEverySecs and SnapshotKeep are the snapshot schedule, kept by

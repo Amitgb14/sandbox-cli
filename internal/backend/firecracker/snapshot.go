@@ -14,12 +14,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
+	"github.com/Amitgb14/sandbox-cli/internal/guestproto"
 	"github.com/Amitgb14/sandbox-cli/internal/image"
 )
 
@@ -173,7 +175,32 @@ func (b *Backend) restore(ctx context.Context, v *vm, state, mem string) error {
 	if err != nil {
 		return err
 	}
-	return b.waitReady(ctx, v)
+	if err := b.waitReady(ctx, v); err != nil {
+		return err
+	}
+	b.setClock(ctx, v)
+	return nil
+}
+
+// setClock gives a restored guest the host's time: its clock stood still
+// while the VM was not running, for a suspend's whole length or since a
+// snapshot was taken. Best effort: a guest agent older than set_clock, or
+// one that cannot set it, keeps running on its old clock, which is what
+// every resume did before, and the failure is logged.
+func (b *Backend) setClock(ctx context.Context, v *vm) {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ver, err := v.client.Ping(cctx)
+	if err != nil {
+		b.cfg.Logf("sandbox %s: setting the guest's clock: %v", v.id, err)
+		return
+	}
+	if n, err := strconv.Atoi(ver); err != nil || n < guestproto.SetClockSince {
+		return
+	}
+	if err := v.client.SetClock(cctx, time.Now()); err != nil {
+		b.cfg.Logf("sandbox %s: setting the guest's clock: %v", v.id, err)
+	}
 }
 
 func (b *Backend) snapshotDir(id string) string {

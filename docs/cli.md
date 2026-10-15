@@ -1577,7 +1577,7 @@ Flags:
 | `-e, --env stringArray` |  | KEY=VALUE, or KEY to forward the host's value (repeatable) |
 | `--fallback stringArray` |  | an agent to try next if this one's provider is down (repeatable; agent wrappers only) |
 | `--from-snapshot string` |  | start from a snapshot (sandbox-cli snapshot) instead of the image |
-| `--idle int` |  | terminate after this many idle seconds (default: the server's) |
+| `--idle int` |  | terminate (or, with --on-idle suspend, suspend) after this many idle seconds (default: the server's) |
 | `--image string` |  | image to run (default: the server's) |
 | `--keep` |  | keep the sandbox when the command ends |
 | `--label stringArray` |  | label the sandbox, key=value (repeatable); shown by list and recorded in its audit events |
@@ -1587,6 +1587,7 @@ Flags:
 | `--network string` |  | none, allowlist or open (default: the server's) |
 | `--no-baseline` |  | an allowlist of only the hosts named with --allow (and an agent's API), without the built-in agents' APIs and registries |
 | `--no-persist-auth` |  | do not restore or save the agent's login (here, or on the gateway that keeps it) |
+| `--on-idle string` |  | what --idle does: terminate (default) or suspend, keeping memory and disk; the next command, file or shell resumes it |
 | `--profile string` |  | dev or prod (prod: no persisted logins) |
 | `--snapshot-every duration` |  | snapshot the sandbox this often while it runs, e.g. 30m (the server sets the shortest allowed) |
 | `--snapshot-keep int` |  | how many scheduled snapshots to keep, newest first (default 1) |
@@ -2127,7 +2128,9 @@ Changes a live sandbox in place; only what a flag names changes.
 
 --label adds or changes a label and --label KEY- (or --unlabel KEY) removes one;
 the others are kept. --idle sets how long it may sit idle before it is
-terminated (0: never, where the server allows that). --lifetime sets when it
+terminated (0: never, where the server allows that), and --on-idle suspend has
+it suspended instead, to be resumed by the next command, file or shell that
+uses it. --lifetime sets when it
 ends, busy or not, counted from its creation: 45m sets it, +15m pushes its end
 out and -10m brings it nearer. Through a gateway only an admin can push it out.
 
@@ -2145,6 +2148,7 @@ Examples:
 sandbox-cli update web --name api
 sandbox-cli update api --label team=infra --label ticket-
 sandbox-cli update api --idle 2h
+sandbox-cli update api --idle 30m --on-idle suspend
 sandbox-cli update api --lifetime +15m
 sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline
 sandbox-cli update api --network allowlist --allow-group go   # through a gateway
@@ -2164,6 +2168,7 @@ Flags:
 | `--name string` |  | rename it ("" removes the name) |
 | `--network string` |  | none, allowlist or open, applied to the running sandbox |
 | `--no-baseline` |  | with --network allowlist: only the hosts named, without the built-in ones |
+| `--on-idle string` |  | what the idle timeout does: terminate, or suspend until something uses it |
 | `--unlabel stringArray` |  | remove a label by key (repeatable) |
 
 ## sandbox-cli version

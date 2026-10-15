@@ -47,6 +47,11 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
   const [name, setName] = useState(sb.name ?? "");
   const [rows, setRows] = useState<[string, string][]>(all.filter(([k]) => !k.startsWith("gateway.")));
   const [idle, setIdle] = useState(sb.idle_timeout_secs);
+  const [onIdle, setOnIdle] = useState<"terminate" | "suspend">(sb.idle_action === "suspend" ? "suspend" : "terminate");
+  const wasOnIdle = sb.idle_action === "suspend" ? "suspend" : "terminate";
+  // Offered where the endpoint can suspend, or to a sandbox that already
+  // suspends, so it can be switched back.
+  const canSuspend = !!info?.capabilities?.capabilities?.suspend || wasOnIdle === "suspend";
 
   const choices = [...new Set([...IDLE.filter((s) => !max || s <= max), ...(max ? [] : [0]), sb.idle_timeout_secs])].sort((a, b) => (a || Infinity) - (b || Infinity));
   const keys = rows.map(([k]) => k.trim());
@@ -55,15 +60,16 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
   const badName = name !== "" && !NAME.test(name);
   const labels = Object.fromEntries([...fixed, ...rows.map(([k, v]) => [k.trim(), v] as [string, string]).filter(([k]) => k)]);
   const labelsChanged = JSON.stringify(Object.entries(labels).sort()) !== JSON.stringify([...all].sort());
-  const changed = name !== (sb.name ?? "") || labelsChanged || idle !== sb.idle_timeout_secs;
+  const changed = name !== (sb.name ?? "") || labelsChanged || idle !== sb.idle_timeout_secs || onIdle !== wasOnIdle;
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (badName || badKey || dupKey || !changed) return;
-    const req: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number } = { id: sb.id };
+    const req: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; idle_action?: "terminate" | "suspend" } = { id: sb.id };
     if (name !== (sb.name ?? "")) req.name = name;
     if (labelsChanged) req.labels = labels;
     if (idle !== sb.idle_timeout_secs) req.idle_timeout_secs = idle;
+    if (onIdle !== wasOnIdle) req.idle_action = onIdle;
     update.mutate(req, {
       onSuccess: () => {
         toast.success(`Saved ${name || sb.id}`);
@@ -77,7 +83,7 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
     <form className="flex flex-col gap-4" onSubmit={submit}>
       <DialogHeader>
         <DialogTitle>Edit {sb.name || sb.id}</DialogTitle>
-        <DialogDescription>Its name, labels and idle timeout. It keeps running; nothing in it changes.</DialogDescription>
+        <DialogDescription>Its name, labels and what happens when it sits idle. It keeps running; nothing in it changes.</DialogDescription>
       </DialogHeader>
 
       <div className="flex flex-col gap-1.5">
@@ -145,9 +151,29 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
           </SelectContent>
         </Select>
         <span className="text-[11px] text-muted-foreground">
-          Terminated after this long with nothing running in it and no request to it{max ? `; this endpoint allows up to ${idleLabel(max)}` : ""}.
+          After this long with nothing running in it and nothing using it{max ? `; this endpoint allows up to ${idleLabel(max)}` : ""}.
         </span>
       </div>
+
+      {canSuspend ? (
+        <div className="flex flex-col gap-1.5">
+          <Label>When idle</Label>
+          <Select value={onIdle} onValueChange={(v) => setOnIdle(v as "terminate" | "suspend")}>
+            <SelectTrigger className="w-48" aria-label="When idle">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="terminate">Terminate it</SelectItem>
+              <SelectItem value="suspend">Suspend it</SelectItem>
+            </SelectContent>
+          </Select>
+          <span className="text-[11px] text-muted-foreground">
+            {onIdle === "suspend"
+              ? "Suspended with its memory, processes and files kept; the next shell, command or file resumes it."
+              : "Terminated, and everything in it discarded."}
+          </span>
+        </div>
+      ) : null}
 
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onDone}>

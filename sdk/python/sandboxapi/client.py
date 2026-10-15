@@ -149,6 +149,7 @@ class Client:
     def create_sandbox(self, *, name: str = "", image: str = "", cpus: float = 0, memory_mb: int = 0,
                        disk_mb: int = 0, env: Optional[Dict[str, str]] = None,
                        network: Optional[Dict[str, Any]] = None, idle_timeout_secs: int = 0,
+                       idle_action: str = "",
                        snapshot_id: str = "",
                        snapshot_every_secs: int = 0, snapshot_keep: int = 0,
                        labels: Optional[Dict[str, str]] = None,
@@ -163,11 +164,14 @@ class Client:
         ``[{"name": ..., "path": ..., "read_only": bool}]`` (capability
         ``volumes``). ``snapshot_every_secs`` snapshots the sandbox that often
         while it runs, keeping the newest ``snapshot_keep`` (default 1), within
-        the server's ``limits``."""
+        the server's ``limits``. ``idle_action`` is what the idle timeout does:
+        ``"terminate"`` (the default) or ``"suspend"`` (capability ``suspend``),
+        which the next command, file or tunnel resumes."""
         req: Dict[str, Any] = {}
         for k, v in (("name", name), ("image", image), ("cpus", cpus), ("memory_mb", memory_mb),
                      ("disk_mb", disk_mb), ("env", env), ("network", network),
-                     ("idle_timeout_secs", idle_timeout_secs), ("snapshot_id", snapshot_id),
+                     ("idle_timeout_secs", idle_timeout_secs), ("idle_action", idle_action),
+                     ("snapshot_id", snapshot_id),
                      ("snapshot_every_secs", snapshot_every_secs), ("snapshot_keep", snapshot_keep),
                      ("labels", labels), ("volumes", volumes)):
             if v:
@@ -212,15 +216,18 @@ class Client:
     def update_sandbox(self, ref: str, *, name: Optional[str] = None,
                        labels: Optional[Dict[str, str]] = None,
                        idle_timeout_secs: Optional[int] = None,
+                       idle_action: Optional[str] = None,
                        network: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Change a live sandbox; only what is passed changes. ``name=""``
         removes the name; ``labels`` replaces them whole (``{}`` removes them);
         ``idle_timeout_secs`` is within ``limits.max_idle_timeout_secs``, 0
-        (never) only where that is 0. ``network`` needs a running sandbox and
+        (never) only where that is 0; ``idle_action`` is ``"terminate"`` or
+        ``"suspend"``. ``network`` needs a running sandbox and
         capability ``network_policy_update``. A request with one bad field
         changes nothing."""
         req: Dict[str, Any] = {}
-        for k, v in (("name", name), ("labels", labels), ("idle_timeout_secs", idle_timeout_secs), ("network", network)):
+        for k, v in (("name", name), ("labels", labels), ("idle_timeout_secs", idle_timeout_secs),
+                     ("idle_action", idle_action), ("network", network)):
             if v is not None:
                 req[k] = v
         return self._json("PATCH", self._sbx(ref), req)
