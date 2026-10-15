@@ -292,6 +292,14 @@ in `_old/` as reference, to be ported where this design still wants it.
   a gateway key without the `sandbox:delete` scope, say — they used to say
   nothing and leave it running. They now print the reason and the
   `sandbox-cli kill` that removes it. The run's exit code is unchanged.
+- **Studio's Desktop tab shows every desktop a sandbox serves.** It looks for
+  a VNC server on ports 5900 to 5909 and offers each one that answers, by
+  port, with Rescan: a desktop the image started as it booted, or a display an
+  agent started to work in (`Xvnc :2 -rfbport 5902 -localhost`), can be
+  watched beside Studio's own. Studio's desktop bridge now reaches any VNC
+  display port, 5900 to 5999, where it reached 5900 alone, and bridges a
+  port only once it has greeted as a VNC server, so a port in the range that
+  serves something else is refused.
 - **An idle sandbox can sleep instead of being deleted.** `run --on-idle
   suspend` (and `update --on-idle`, the API's `idle_action: "suspend"`, and
   "When idle" in Studio's Launch and Edit) has the idle timeout suspend the

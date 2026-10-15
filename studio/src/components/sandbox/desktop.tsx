@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Maximize, MonitorPlay, RotateCw } from "lucide-react";
+import { Maximize, MonitorPlay, RefreshCw, RotateCw } from "lucide-react";
 import { CodeBlock } from "@/components/common/code-block";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { desktopURL } from "@/lib/api/client";
-import { DESKTOP_COMMAND, useStartDesktop } from "@/lib/api/queries";
+import { DESKTOP_COMMAND, useDesktops, useStartDesktop } from "@/lib/api/queries";
 import type { Process } from "@/lib/types";
 
 /** The desktop image beside the base one a sandbox was made from, for the command that makes one. */
@@ -21,7 +22,7 @@ function desktopImage(image: string): string {
  * sandbox-desktop takes a moment to open its VNC port after it starts, so a
  * first connection refused is retried for a few seconds before giving up.
  */
-function Viewer({ sandbox, pid }: { sandbox: string; pid: number }) {
+function Viewer({ sandbox, pid, port }: { sandbox: string; pid: number; port?: number }) {
   const screen = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("connecting…");
   const [attempt, setAttempt] = useState(0);
@@ -37,7 +38,7 @@ function Viewer({ sandbox, pid }: { sandbox: string; pid: number }) {
     const connect = async () => {
       const { default: RFB } = await import("@novnc/novnc");
       if (disposed) return;
-      const r = new RFB(el, desktopURL(sandbox), { shared: true });
+      const r = new RFB(el, desktopURL(sandbox, port), { shared: true });
       rfb = r;
       r.scaleViewport = true;
       r.resizeSession = false;
@@ -64,7 +65,7 @@ function Viewer({ sandbox, pid }: { sandbox: string; pid: number }) {
       clearTimeout(retry);
       rfb?.disconnect();
     };
-  }, [sandbox, pid, attempt]);
+  }, [sandbox, pid, port, attempt]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -87,48 +88,17 @@ function Viewer({ sandbox, pid }: { sandbox: string; pid: number }) {
 }
 
 /**
- * Whether a VNC server already answers on the sandbox's desktop port: an RFB
- * server speaks first ("RFB 003.008"), so any bytes back within a moment say
- * one is there. null while still asking. Asked again when `again` changes.
- */
-function useDesktopAnswers(sandbox: string, ask: boolean, again: unknown): boolean | null {
-  const [answers, setAnswers] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!ask) return;
-    setAnswers(null);
-    let done = false;
-    const finish = (yes: boolean) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      ws.close();
-      setAnswers(yes);
-    };
-    const ws = new WebSocket(desktopURL(sandbox));
-    ws.binaryType = "arraybuffer";
-    ws.onmessage = () => finish(true);
-    ws.onerror = () => finish(false);
-    ws.onclose = () => finish(false);
-    const timer = setTimeout(() => finish(false), 3000);
-    return () => {
-      done = true;
-      clearTimeout(timer);
-      ws.close();
-    };
-  }, [sandbox, ask, again]);
-  return answers;
-}
-
-/**
  * A sandbox's desktop: a screen with a terminal and a browser, when its image
  * has one (images/desktop). Started here as a background process, so it
  * outlives the tab and is listed with the others; stopping that process stops
  * the desktop.
  *
- * An image may start its desktop itself, as it boots: then no process of the
- * sandbox's list is it, but its VNC port answers, and that is what is shown.
- * Offering Start there ran a second desktop on the same display, which
- * exited at once with 1 ("Server is already active for display 1").
+ * An image may start its desktop itself, as it boots, and an agent may start
+ * displays of its own to work in: no process of the sandbox's list is them,
+ * but their VNC ports answer. Every display that does, :0 to :9, is offered,
+ * to switch between. Offering Start where one already ran started a second
+ * desktop on a taken display, which exited at once with 1 ("Server is
+ * already active for display 1").
  */
 export function SandboxDesktop({
   sandbox,
@@ -146,13 +116,43 @@ export function SandboxDesktop({
   const mine = processes.filter((p) => p.argv[0] === DESKTOP_COMMAND);
   const running = mine.find((p) => p.state === "running");
   const last = mine[mine.length - 1];
-  // Asked again after each start that ended, so a desktop that came up some
-  // other way meanwhile is found.
-  const answers = useDesktopAnswers(sandbox, !running, `${mine.length}:${last?.state ?? ""}`);
+  const desktops = useDesktops(sandbox, true);
+  const [picked, setPicked] = useState<number | null>(null);
+  // The one started here serves display :0, so it counts even before its
+  // port is up; the others are whatever answered.
+  const ports = [...new Set([...(running ? [5900] : []), ...(desktops.data ?? [])])].sort((a, b) => a - b);
+  const port = picked !== null && ports.includes(picked) ? picked : ports[0];
 
-  if (running) return <Viewer sandbox={sandbox} pid={running.pid} />;
-  if (answers) return <Viewer sandbox={sandbox} pid={0} />;
-  if (answers === null) return <p className="text-sm text-muted-foreground">Looking for a desktop in this sandbox…</p>;
+  if (port !== undefined) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Desktop">
+          {ports.map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="radio"
+              aria-checked={p === port}
+              onClick={() => setPicked(p)}
+              className={cn(
+                "rounded-md border px-2 py-0.5 font-mono text-xs transition-colors",
+                p === port ? "border-primary bg-primary/10 text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+              title={`The desktop served over VNC on port ${p}`}
+            >
+              port {p}
+            </button>
+          ))}
+          <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={desktops.isFetching} onClick={() => void desktops.refetch()}>
+            <RefreshCw className={cn("size-3.5", desktops.isFetching && "animate-spin")} />
+            Rescan
+          </Button>
+        </div>
+        <Viewer key={port} sandbox={sandbox} pid={running?.pid ?? 0} port={port} />
+      </div>
+    );
+  }
+  if (desktops.isPending) return <p className="text-sm text-muted-foreground">Looking for a desktop in this sandbox…</p>;
 
   if (missing) {
     return (

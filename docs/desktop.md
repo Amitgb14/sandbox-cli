@@ -33,7 +33,7 @@ release. It is the base image plus a screen, so everything in the base image
 Studio tab (noVNC, Studio's own code)
    │  WebSocket /api/ws/desktop, binary frames
 Studio's server (sandbox-cli studio)
-   │  the API's tunnel, to port 5900 only
+   │  the API's tunnel, to a VNC display port only (5900–5999)
 sandboxd ─── the guest's own loopback ─── x11vnc ─── Xvfb :1 ─── openbox, xterm, chromium
 ```
 
@@ -51,9 +51,12 @@ and draws the screen itself:
   sandbox serves is shown as a web page on Studio's address, where it could
   run beside Studio's token — which is why this is not a general port
   forward in the browser.
-- **One port.** Studio's server bridges the desktop's port and no other,
-  whatever a page asks for. It takes Studio's token and refuses another
-  origin, like every Studio call.
+- **VNC display ports, and VNC only.** Studio's server bridges the VNC
+  display ports, 5900 to 5999, and no other port, whatever a page asks for;
+  and it bridges one only after the guest's first bytes are a VNC server's
+  greeting (`RFB 003.008`). A port in the range that answers with anything
+  else is refused before the browser is sent a byte of it. It takes Studio's
+  token and refuses another origin, like every Studio call.
 - **No new way in.** The VNC server listens on the guest's loopback, which only
   the API's tunnel reaches — so only a caller allowed to use the sandbox.
   X11 forwarding stays refused: the guest never draws on your machine's
@@ -71,7 +74,18 @@ the VM is the boundary.
 | Variable | Default | |
 |---|---|---|
 | `SANDBOX_DESKTOP_SIZE` | `1280x800x24` | the screen: width x height x depth |
-| `SANDBOX_DESKTOP_PORT` | `5900` | the VNC port; Studio's tab reaches 5900 only |
+| `SANDBOX_DESKTOP_PORT` | `5900` | the VNC port; Studio's tab finds a desktop on 5900 to 5909 |
+
+## More than one desktop
+
+The Desktop tab shows every desktop the sandbox serves, not only the one it
+started: it looks for a VNC server on each of ports 5900 to 5909 (X displays
+`:0` to `:9` by convention) and offers each one that answers, by port, with
+**Rescan** to look again. So a desktop the image starts as it boots, or a
+display an agent starts to work in, can be watched beside it — an agent that
+runs `Xvnc :2 -rfbport 5902 -localhost -SecurityTypes None` shows up as
+**port 5902**. Keep such a server on the guest's loopback (`-localhost`):
+the tunnel reaches it there, and nothing else needs to.
 
 ## Limits
 

@@ -202,6 +202,7 @@ func (s *Server) hostedHandler() http.Handler {
 	api("/api/v1/", s.proxy())
 	api("GET /api/ws/attach", s.attach)
 	api("GET /api/ws/desktop", s.desktop)
+	api("GET /api/desktops", s.desktops)
 	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
 	api("GET /api/agents", s.agents)
