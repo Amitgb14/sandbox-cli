@@ -287,6 +287,14 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **`sandbox-cli` uses the gateway's kept agent login too.** On a gateway
+  context, an agent run asks the gateway for your login instead of this
+  machine's `~/.config/sandbox/agents/<name>`, and leaves saving it to the
+  gateway: one login for Studio and the CLI, on any machine. The first run
+  against a gateway that keeps none for you yet gives it this machine's, so
+  nobody logs in again. A plain sandboxd, and a gateway without a secrets
+  key, keep using this machine's login; `--no-persist-auth` still turns it
+  off.
 - **Agent logins kept by the gateway.** An agent console started from hosted
   Studio no longer asks for a subscription login every time: log in once,
   and the gateway keeps that login for you — sealed with its
