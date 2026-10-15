@@ -16,7 +16,7 @@ Those are different promises, and only the first is one this tool can make.
 |---|---|---|
 | `secrets:` in your own config | a host file, a host command, or a host env var, resolved per run on the machine running the CLI | an environment variable |
 | `--env NAME` / an agent's `EnvAllow` | your shell's environment, forwarded only if set | an environment variable |
-| the agent's own login | on a gateway that keeps agent logins, the one it keeps for you, sealed ([api/v1.md](api/v1.md#agent-logins)); elsewhere the files saved at `~/.config/sandbox/agents/<name>`. Copied in when a run starts | a file the agent reads |
+| the agent's own login | on a gateway that keeps agent logins, the one it keeps for you, sealed ([api/v1.md](../api/v1.md#agent-logins)); elsewhere the files saved at `~/.config/sandbox/agents/<name>`. Copied in when a run starts | a file the agent reads |
 
 The third is the one most people forget, and it is usually the most valuable: on
 the default auth path it is an **OAuth refresh token**, not an API key. It is
