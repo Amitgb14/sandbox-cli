@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **The Desktop tab shows a desktop the image started itself.** An image
+  that starts its own desktop as it boots (on the desktop's port, 5900) is
+  now connected to at once. Before, the tab saw no `sandbox-desktop` process
+  of its own and offered Start desktop, which ran a second one on the same
+  display and exited with 1 ("Server is already active for display 1").
 - **Launch from a snapshot, and take one, on Snapshots.** Each snapshot has a
   Launch button that opens the launch page with it chosen (also from a
   sandbox's own snapshot list in its overview), and the page's Take snapshot

@@ -87,10 +87,48 @@ function Viewer({ sandbox, pid }: { sandbox: string; pid: number }) {
 }
 
 /**
+ * Whether a VNC server already answers on the sandbox's desktop port: an RFB
+ * server speaks first ("RFB 003.008"), so any bytes back within a moment say
+ * one is there. null while still asking. Asked again when `again` changes.
+ */
+function useDesktopAnswers(sandbox: string, ask: boolean, again: unknown): boolean | null {
+  const [answers, setAnswers] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!ask) return;
+    setAnswers(null);
+    let done = false;
+    const finish = (yes: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      ws.close();
+      setAnswers(yes);
+    };
+    const ws = new WebSocket(desktopURL(sandbox));
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = () => finish(true);
+    ws.onerror = () => finish(false);
+    ws.onclose = () => finish(false);
+    const timer = setTimeout(() => finish(false), 3000);
+    return () => {
+      done = true;
+      clearTimeout(timer);
+      ws.close();
+    };
+  }, [sandbox, ask, again]);
+  return answers;
+}
+
+/**
  * A sandbox's desktop: a screen with a terminal and a browser, when its image
  * has one (images/desktop). Started here as a background process, so it
  * outlives the tab and is listed with the others; stopping that process stops
  * the desktop.
+ *
+ * An image may start its desktop itself, as it boots: then no process of the
+ * sandbox's list is it, but its VNC port answers, and that is what is shown.
+ * Offering Start there ran a second desktop on the same display, which
+ * exited at once with 1 ("Server is already active for display 1").
  */
 export function SandboxDesktop({
   sandbox,
@@ -108,8 +146,13 @@ export function SandboxDesktop({
   const mine = processes.filter((p) => p.argv[0] === DESKTOP_COMMAND);
   const running = mine.find((p) => p.state === "running");
   const last = mine[mine.length - 1];
+  // Asked again after each start that ended, so a desktop that came up some
+  // other way meanwhile is found.
+  const answers = useDesktopAnswers(sandbox, !running, `${mine.length}:${last?.state ?? ""}`);
 
   if (running) return <Viewer sandbox={sandbox} pid={running.pid} />;
+  if (answers) return <Viewer sandbox={sandbox} pid={0} />;
+  if (answers === null) return <p className="text-sm text-muted-foreground">Looking for a desktop in this sandbox…</p>;
 
   if (missing) {
     return (
