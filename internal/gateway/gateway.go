@@ -123,7 +123,7 @@ type Gateway struct {
 	claimMu sync.Mutex
 	claimed map[string]bool // sandbox and volume names being created
 
-	sealer       *sealer // nil without a secrets key
+	sealer *sealer // nil without a secrets key
 	// agentLoginMu serialises saving agent logins (agent_logins.go): the
 	// periodic save, a delete's and a forget.
 	agentLoginMu sync.Mutex
