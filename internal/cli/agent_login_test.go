@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
@@ -57,7 +58,92 @@ func loginGateway(t *testing.T, key bool) (gw, node *api.Client) {
 	}
 	gw = api.NewClientWithHTTP(gs.URL, secret, gs.Client())
 	node = api.NewClientWithHTTP(ns.URL, nodeToken, ns.Client())
+	// And the CLI's current context, for a command run against it.
+	keyFile := filepath.Join(t.TempDir(), "ana.key")
+	if err := os.WriteFile(keyFile, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cf := contextFile{Current: "gw", Contexts: map[string]endpointContext{
+		"gw":   {Endpoint: gs.URL, TokenFile: keyFile},
+		"dead": {Endpoint: "http://127.0.0.1:1", TokenFile: keyFile},
+	}}
+	if err := cf.save(); err != nil {
+		t.Fatal(err)
+	}
 	return gw, node
+}
+
+// agentRow is the cells of agent's row in `agent ls`.
+func agentRow(t *testing.T, out, agent string) []string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) > 0 && f[0] == agent {
+			return f
+		}
+	}
+	t.Fatalf("no %s row in:\n%s", agent, out)
+	return nil
+}
+
+// On a gateway that keeps logins, `agent ls` shows the gateway's, which a
+// run there uses, beside this machine's; elsewhere this machine's alone.
+func TestAgentLsShowsTheGatewaysLogin(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("SANDBOX_CONTEXT", "")
+	ctx := context.Background()
+	d, _ := agents.LookupInteractive("claude")
+	saveLocalLogin(t, d, `{"from":"this machine"}`)
+	gw, _ := loginGateway(t, true)
+
+	out, err := runCLI(t, "agent", "ls")
+	if err != nil {
+		t.Fatal(err, out)
+	}
+	if !strings.Contains(out, "GATEWAY") || !strings.Contains(out, "THIS MACHINE") {
+		t.Fatalf("no gateway column:\n%s", out)
+	}
+	if row := agentRow(t, out, "claude"); strings.Join(row[2:], " ") != "- saved" {
+		t.Fatalf("before the gateway keeps one: %v", row)
+	}
+
+	// A run gives the gateway this machine's login, saved as it ends.
+	sb, err := gw.CreateSandbox(ctx, api.CreateSandboxRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !keepLoginOnGateway(ctx, gw, sb.ID, d) {
+		t.Fatal("not kept")
+	}
+	if err := gw.TerminateSandbox(ctx, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = runCLI(t, "agent", "ls")
+	if row := agentRow(t, out, "claude"); len(row) != 6 || row[2] != "saved" || row[5] != "saved" {
+		t.Fatalf("after: %v\n%s", row, out)
+	}
+	if row := agentRow(t, out, "codex"); row[2] != "-" {
+		t.Fatalf("codex, never kept: %v", row)
+	}
+
+	// An endpoint that does not answer leaves this machine's, and says so.
+	out, err = runCLI(t, "agent", "ls", "--context", "dead")
+	if err != nil || strings.Contains(out, "GATEWAY") {
+		t.Fatalf("an unreachable gateway: %v\n%s", err, out)
+	}
+	if row := agentRow(t, out, "claude"); row[2] != "saved" {
+		t.Fatalf("this machine's login: %v", row)
+	}
+}
+
+// A gateway that keeps no logins shows this machine's, which runs there use.
+func TestAgentLsOnAGatewayWithoutLogins(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("SANDBOX_CONTEXT", "")
+	loginGateway(t, false)
+	out, err := runCLI(t, "agent", "ls")
+	if err != nil || strings.Contains(out, "GATEWAY") || !strings.Contains(out, "LOGIN") {
+		t.Fatalf("%v\n%s", err, out)
+	}
 }
 
 // saveLocalLogin writes this machine's saved claude login.

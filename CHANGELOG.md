@@ -287,6 +287,12 @@ in `_old/` as reference, to be ported where this design still wants it.
   process runs);
   Studio's Resize resizes in place where the
   endpoint can, and still copies the sandbox where it cannot (macOS).
+- **`sandbox-cli agent ls` shows the gateway's login.** On a gateway context
+  that keeps agent logins it lists, per agent, the login the gateway keeps
+  for you (`GATEWAY`, with when it was last saved) — the one a run there
+  uses — beside the one saved on this machine (`THIS MACHINE`). Elsewhere,
+  or when the endpoint does not answer, it lists this machine's as before;
+  `--context` picks the endpoint.
 - **`sandbox-cli` uses the gateway's kept agent login too.** On a gateway
   context, an agent run asks the gateway for your login instead of this
   machine's `~/.config/sandbox/agents/<name>`, and leaves saving it to the

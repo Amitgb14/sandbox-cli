@@ -154,7 +154,7 @@ its login is restored into the sandbox and saved again afterwards, and its own
 environment variables are forwarded when set.
 
 ```sh
-sandbox-cli agent ls                                  # the agents, and whose login is saved
+sandbox-cli agent ls                                  # the agents, and whose login is saved (here, or on the gateway)
 sandbox-cli agent claude                              # Claude Code in a fresh VM
 sandbox-cli agent claude --network none -- --resume   # sandbox flags first, then the agent's
 sandbox-cli agent codex --detach -- exec "fix the failing test"
