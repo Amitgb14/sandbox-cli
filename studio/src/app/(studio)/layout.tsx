@@ -5,6 +5,7 @@ import { CommandPalette } from "@/components/shell/command-palette";
 import { GlobalShortcuts } from "@/components/shell/global-shortcuts";
 import { OrgScope, OrgSync } from "@/components/shell/org-switcher";
 import { HostedSignIn } from "@/components/shell/hosted-session";
+import { RecordingsProvider } from "@/components/sandbox/recordings";
 
 /**
  * The sidebar is the only chrome. On a phone, where it is a drawer, a slim
@@ -15,6 +16,8 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
   return (
     <HostedSignIn>
     <SidebarProvider>
+    {/* Above the pages, so a desktop recording goes on from page to page. */}
+    <RecordingsProvider>
       <OrgSync />
       {/* Everything below is remounted when the organisation changes, so
           nothing of the previous one survives in a component's state. */}
@@ -34,6 +37,7 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
       <CommandPalette />
       <GlobalShortcuts />
       </OrgScope>
+    </RecordingsProvider>
     </SidebarProvider>
     </HostedSignIn>
   );

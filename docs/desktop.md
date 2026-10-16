@@ -89,19 +89,23 @@ the tunnel reaches it there, and nothing else needs to.
 
 ## Recording
 
-**Record**, beside the screen, records the desktop as Studio shows it and
-saves the video to your computer when you press **Stop** (the button counts
-the time; the screen is outlined in red meanwhile). The file is
-`<sandbox>-<port>-<time>.mp4`, or `.webm` in a browser that does not make
-MP4 (Firefox), at the desktop's own resolution, 15 frames a second.
+**Record**, beside the screen, records the desktop and saves the video to
+your computer when you press **Stop** (the button counts the time; the screen
+is outlined in red meanwhile). The file is `<sandbox>-<port>-<time>.mp4`, or
+`.webm` in a browser that does not make MP4 (Firefox), at the desktop's own
+resolution, 15 frames a second.
 
-- **It records in your browser.** Studio takes the screen it is drawing; nothing
-  runs in the sandbox and the video is not stored anywhere but your download.
-  So it records only while that browser tab is open: switching the panel to
-  Terminal, Logs or Files keeps it going (a red dot marks the Desktop tab),
-  and so does leaving the browser tab in the background; closing it, moving
-  to another sandbox or desktop, or the desktop disconnecting stops it and
-  saves what it has.
+- **It records in your browser.** Studio opens a second, view-only connection
+  to the desktop and records the screen it draws there; nothing runs in the
+  sandbox and the video is not stored anywhere but your download.
+- **It goes on while you use the rest of Studio.** Another tab of the panel,
+  another sandbox or another page of the sidebar: a bar in the bottom right
+  corner of every page shows what is being recorded and for how long, with
+  its own **Stop**, and a red dot marks the sandbox's Desktop tab. It keeps
+  its frame rate in a browser tab left in the background.
+- **It ends at Stop, or when the desktop goes away,** and saves what it has
+  either way. Closing or reloading Studio's page loses it: the browser asks
+  you to confirm that first.
 - **The pointer is not in it.** Studio draws the desktop's pointer over the
   screen, not on it, so the recording shows windows and what is typed, not
   the mouse moving.

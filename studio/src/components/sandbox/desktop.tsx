@@ -1,153 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState, type RefObject } from "react";
-import { toast } from "sonner";
+import { useEffect, useRef, useState } from "react";
 import { Circle, Maximize, MonitorPlay, RefreshCw, RotateCw, Square } from "lucide-react";
 import { CodeBlock } from "@/components/common/code-block";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { desktopURL } from "@/lib/api/client";
 import { DESKTOP_COMMAND, useDesktops, useStartDesktop } from "@/lib/api/queries";
+import { clock, recordingKey, useRecordings } from "@/components/sandbox/recordings";
 import type { Process } from "@/lib/types";
 
 /** The desktop image beside the base one a sandbox was made from, for the command that makes one. */
 function desktopImage(image: string): string {
   return /sandbox-base(?=:|@|$)/.test(image) ? image.replace(/sandbox-base(?=:|@|$)/, "sandbox-desktop") : "ghcr.io/<owner>/sandbox-desktop:edge";
-}
-
-/**
- * Recording formats, best first; the browser uses the first it can make. MP4
- * first, where the browser makes it, since more players open it (QuickTime
- * does not open WebM); otherwise WebM.
- */
-const RECORD_TYPES = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
-
-/** Frames a second a recording is taken at: enough for a desktop, and small. */
-const RECORD_FPS = 15;
-
-function clock(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const hh = Math.floor(s / 3600);
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
-  const ss = String(s % 60).padStart(2, "0");
-  return hh ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
-}
-
-/**
- * Calls tick every ms, from a worker's clock: a page in a background browser
- * tab has its own timers slowed to once a second, and after a few minutes to
- * once a minute, which made a recording left running there a slideshow. A
- * worker's timer is not slowed that way. Where a worker cannot be made, the
- * page's own timer. Returns what stops it.
- */
-function steadyClock(tick: () => void, ms: number): () => void {
-  try {
-    const src = URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${ms});`], { type: "text/javascript" }));
-    const w = new Worker(src);
-    URL.revokeObjectURL(src);
-    w.onmessage = tick;
-    return () => w.terminate();
-  } catch {
-    const t = setInterval(tick, ms);
-    return () => clearInterval(t);
-  }
-}
-
-/** Hands the browser a file to save, as a download of this page. */
-function save(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
-/**
- * Records the desktop as Studio shows it: the canvas noVNC draws the screen
- * on, taken by the browser's own MediaRecorder at the desktop's resolution,
- * and saved to this computer as a video when it stops. Nothing runs in the
- * sandbox and nothing is stored anywhere else; it records only what this tab
- * is showing, while it shows it. It stops, and saves what it has, when the
- * desktop disconnects or the tab moves to another desktop or page.
- */
-function useRecorder(screen: RefObject<HTMLDivElement | null>, file: string) {
-  const rec = useRef<MediaRecorder | null>(null);
-  const [since, setSince] = useState<number | null>(null);
-  const [now, setNow] = useState(0);
-
-  const stop = () => {
-    if (rec.current && rec.current.state !== "inactive") rec.current.stop();
-  };
-  const start = () => {
-    const canvas = screen.current?.querySelector("canvas");
-    if (!canvas || typeof MediaRecorder === "undefined" || typeof canvas.captureStream !== "function") {
-      toast.error("This browser cannot record the screen.");
-      return;
-    }
-    const mimeType = RECORD_TYPES.find((t) => MediaRecorder.isTypeSupported(t));
-    // Frames on a clock, not on change. A canvas stream sends a frame only
-    // when its canvas is drawn on, so a desktop sitting still recorded as a
-    // single frame with no length, and a recording ended at its last change
-    // rather than at Stop; asking for frames (requestFrame) did not help
-    // where nothing had been drawn. So the screen is copied onto a canvas of
-    // the recording's own on every tick: each copy is a draw, and a frame,
-    // whether or not the desktop changed. It follows the desktop's size.
-    const copy = document.createElement("canvas");
-    copy.width = canvas.width;
-    copy.height = canvas.height;
-    const pen = copy.getContext("2d");
-    if (!pen) {
-      toast.error("This browser cannot record the screen.");
-      return;
-    }
-    const draw = () => {
-      if (copy.width !== canvas.width || copy.height !== canvas.height) {
-        copy.width = canvas.width;
-        copy.height = canvas.height;
-      }
-      pen.drawImage(canvas, 0, 0);
-    };
-    draw();
-    const stream = copy.captureStream(RECORD_FPS);
-    const stopClock = steadyClock(draw, Math.round(1000 / RECORD_FPS));
-    const r = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: 2_500_000 } : undefined);
-    const chunks: Blob[] = [];
-    const began = new Date();
-    r.ondataavailable = (e) => {
-      if (e.data.size) chunks.push(e.data);
-    };
-    r.onstop = () => {
-      stopClock();
-      stream.getTracks().forEach((t) => t.stop());
-      rec.current = null;
-      setSince(null);
-      if (!chunks.length) return;
-      const type = r.mimeType || mimeType || "video/webm";
-      const ext = type.startsWith("video/mp4") ? "mp4" : "webm";
-      const stamp = began.toISOString().slice(0, 19).replace(/[:T]/g, "-");
-      save(new Blob(chunks, { type }), `${file}-${stamp}.${ext}`);
-      toast.success("Recording saved", { description: `${clock(Date.now() - began.getTime())} of the desktop, downloaded as .${ext}` });
-    };
-    // In one-second pieces, so what was recorded survives a stop the
-    // recorder did not see coming (the desktop going away).
-    r.start(1000);
-    rec.current = r;
-    setSince(began.getTime());
-    setNow(began.getTime());
-  };
-
-  useEffect(() => {
-    if (since === null) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [since]);
-  // Leaving the desktop ends the recording and saves it, rather than losing it.
-  useEffect(() => () => stop(), []);
-
-  return { recording: since !== null, elapsed: since === null ? 0 : now - since, start, stop };
 }
 
 /**
@@ -158,22 +23,16 @@ function useRecorder(screen: RefObject<HTMLDivElement | null>, file: string) {
  * sandbox-desktop takes a moment to open its VNC port after it starts, so a
  * first connection refused is retried for a few seconds before giving up.
  */
-function Viewer({ sandbox, pid, port, onRecording }: { sandbox: string; pid: number; port?: number; onRecording?: (on: boolean) => void }) {
+function Viewer({ sandbox, pid, port }: { sandbox: string; pid: number; port: number }) {
   const screen = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("connecting…");
   const [attempt, setAttempt] = useState(0);
   const [live, setLive] = useState(false);
-  const recorder = useRecorder(screen, `${sandbox}${port ? `-${port}` : ""}`);
-  // The disconnect handler is set up once per connection; it reaches the
-  // recorder through this, which is always the current one.
-  const stopRecording = useRef(recorder.stop);
-  stopRecording.current = recorder.stop;
-  // The panel keeps this tab mounted while it records (details.tsx), so
-  // switching to Terminal or Files does not end the recording.
-  const report = useRef(onRecording);
-  report.current = onRecording;
-  useEffect(() => report.current?.(recorder.recording), [recorder.recording]);
-  useEffect(() => () => report.current?.(false), []);
+  // Recordings are the layout's (recordings.tsx), on a connection of their
+  // own, so one goes on when this screen goes: another tab, another page.
+  const recordings = useRecordings();
+  const key = recordingKey(sandbox, port);
+  const recording = recordings.list.find((r) => r.key === key);
 
   useEffect(() => {
     const el = screen.current;
@@ -198,8 +57,6 @@ function Viewer({ sandbox, pid, port, onRecording }: { sandbox: string; pid: num
         setStatus("connected — closing this tab leaves the desktop running");
       });
       r.addEventListener("disconnect", () => {
-        // The canvas goes with the connection: a recording of it ends here.
-        stopRecording.current();
         setLive(false);
         if (disposed) return;
         if (!connected && tries < 15) {
@@ -224,10 +81,16 @@ function Viewer({ sandbox, pid, port, onRecording }: { sandbox: string; pid: num
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">{status}</p>
         <div className="flex items-center gap-1">
-          {recorder.recording ? (
-            <Button variant="destructive" size="sm" className="h-7 gap-1.5 text-xs" onClick={recorder.stop}>
+          {recording ? (
+            <Button variant="destructive" size="sm" className="h-7 gap-1.5 text-xs" disabled={recording.since === null} onClick={() => recordings.stop(key)}>
               <Square className="size-3 fill-current" />
-              Stop · <span className="font-mono tabular-nums">{clock(recorder.elapsed)}</span>
+              {recording.since === null ? (
+                "Starting…"
+              ) : (
+                <>
+                  Stop · <span className="font-mono tabular-nums">{clock(Math.max(0, recordings.now - recording.since))}</span>
+                </>
+              )}
             </Button>
           ) : (
             <Button
@@ -235,8 +98,8 @@ function Viewer({ sandbox, pid, port, onRecording }: { sandbox: string; pid: num
               size="sm"
               className="h-7 text-xs"
               disabled={!live}
-              title="Record this desktop as it is shown here, and save the video to this computer when you stop"
-              onClick={recorder.start}
+              title="Record this desktop, and save the video to this computer when you stop. It keeps recording while you use the rest of Studio."
+              onClick={() => recordings.start(sandbox, port)}
             >
               <Circle className="size-3 fill-destructive text-destructive" />
               Record
@@ -255,7 +118,7 @@ function Viewer({ sandbox, pid, port, onRecording }: { sandbox: string; pid: num
       <div
         ref={screen}
         data-testid="desktop-screen"
-        className={cn("h-[32rem] overflow-hidden rounded-md border bg-[#0b0b0c]", recorder.recording && "border-destructive/60 ring-1 ring-destructive/30")}
+        className={cn("h-[32rem] overflow-hidden rounded-md border bg-[#0b0b0c]", recording && "border-destructive/60 ring-1 ring-destructive/30")}
       />
     </div>
   );
@@ -274,20 +137,7 @@ function Viewer({ sandbox, pid, port, onRecording }: { sandbox: string; pid: num
  * desktop on a taken display, which exited at once with 1 ("Server is
  * already active for display 1").
  */
-export function SandboxDesktop({
-  sandbox,
-  image,
-  processes,
-  canStart,
-  onRecording,
-}: {
-  sandbox: string;
-  image: string;
-  processes: Process[];
-  canStart: boolean;
-  /** Told when a recording starts and ends. */
-  onRecording?: (on: boolean) => void;
-}) {
+export function SandboxDesktop({ sandbox, image, processes, canStart }: { sandbox: string; image: string; processes: Process[]; canStart: boolean }) {
   const start = useStartDesktop();
   const [missing, setMissing] = useState(false);
   const mine = processes.filter((p) => p.argv[0] === DESKTOP_COMMAND);
@@ -325,7 +175,7 @@ export function SandboxDesktop({
             Rescan
           </Button>
         </div>
-        <Viewer key={port} sandbox={sandbox} pid={running?.pid ?? 0} port={port} onRecording={onRecording} />
+        <Viewer key={port} sandbox={sandbox} pid={running?.pid ?? 0} port={port} />
       </div>
     );
   }
@@ -335,8 +185,8 @@ export function SandboxDesktop({
     return (
       <div className="flex flex-col gap-3 text-sm">
         <p className="text-muted-foreground">
-          This sandbox&apos;s image has no desktop: <span className="font-mono">{DESKTOP_COMMAND}</span> is not in it. A sandbox made from the desktop
-          image has one, with a terminal and a browser:
+          This sandbox&apos;s image has no desktop: <span className="font-mono">{DESKTOP_COMMAND}</span> is not in it. A sandbox made from the desktop image has
+          one, with a terminal and a browser:
         </p>
         {(() => {
           const cmd = `sandbox-cli run --keep --name desktop --image ${desktopImage(image)} --memory 2048 -- true`;
