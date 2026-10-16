@@ -10,6 +10,10 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **A desktop recording carries on in another tab.** Switching the sandbox's
+  panel to Terminal, Logs or Files no longer ends it (a red dot on the
+  Desktop tab says it is still recording), and it keeps its frame rate in a
+  browser tab left in the background.
 - **Record a desktop.** The Desktop tab's Record button records the screen
   Studio shows and saves it to your computer as a video (MP4, or WebM where
   the browser does not make MP4) when you press Stop. It runs in the browser:
