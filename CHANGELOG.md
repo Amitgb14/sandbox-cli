@@ -131,6 +131,15 @@ in `_old/` as reference, to be ported where this design still wants it.
   unattended agent or an agent's console, use a real terminal, and watch
   output, files and events. `sandbox-studio-api`,
   `studio.sh`, the Studio docker images and the compose file are gone.
+- **Studio talks to an agentos sandbox's agent.** A sandbox whose image
+  carries `/etc/agentos/manifest.json` (an agentos image: a desktop with an
+  agent that works it) gets an **Agent** tab: give the agent a task, follow
+  its plan and tool calls, answer what it asks in a mode that asks first, and
+  watch it on the Desktop tab. Studio's server reads the manifest
+  (`GET /api/agentos`) and bridges a WebSocket to the agent's process over the
+  Agent Client Protocol (`/api/ws/acp`): stdout only, one JSON-RPC message a
+  line, its stderr apart as a log. The manifest is checked, as anything from
+  the guest is; a sandbox without one has no Agent tab.
 - **A config key this version does not read is refused,** naming what
   replaced it (`security:` → the VM boundary and sandboxd's policy, `mounts:` and
   `cache:` → a volume, …), and so is a typo. A beta.15

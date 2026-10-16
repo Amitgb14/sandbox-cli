@@ -7,9 +7,10 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "@/lib/api/client";
+import { ApiError, apiFetch } from "@/lib/api/client";
 import type {
   Agent,
+  AgentOS,
   AgentState,
   AuditEvent,
   DirEntry,
@@ -376,6 +377,25 @@ export function useDesktops(sandbox: string, enabled: boolean) {
     queryFn: () => apiFetch<{ ports: number[] }>(`/desktops?sandbox=${encodeURIComponent(sandbox)}`).then((d) => d.ports),
     enabled,
     staleTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * An agentos sandbox's manifest (GET /api/agentos), or null for a sandbox
+ * without one: what decides whether its Agent tab is shown.
+ */
+export function useAgentOS(sandbox: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["agentos", sandbox],
+    queryFn: () =>
+      apiFetch<AgentOS>(`/agentos?sandbox=${encodeURIComponent(sandbox)}`).catch((e) => {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }),
+    enabled,
+    retry: false,
+    staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
 }

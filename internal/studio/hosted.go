@@ -203,6 +203,8 @@ func (s *Server) hostedHandler() http.Handler {
 	api("GET /api/ws/attach", s.attach)
 	api("GET /api/ws/desktop", s.desktop)
 	api("GET /api/desktops", s.desktops)
+	api("GET /api/ws/acp", s.acp)
+	api("GET /api/agentos", s.agentos)
 	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
 	api("GET /api/agents", s.agents)

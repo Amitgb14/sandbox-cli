@@ -30,7 +30,7 @@ Studio keeps.
 | Screen | What it does |
 |---|---|
 | **Sandboxes** (home) | Every sandbox on the endpoint — started from Studio, the CLI or an SDK — each with what its agent is doing (working, waiting for you, idle) where it runs one, under a strip of how many are running and the vCPU, memory and disk given to them, against the machine's capacity where the endpoint reports it (a plain sandboxd does; a gateway gives totals). Searched, filtered by state, sorted, paged; each row shows what the sandbox was given — a click there opens its CPU and memory over the last hour, where the endpoint measures them —, a terminal button and a menu (open, open as a page, copy the id, suspend, terminate); select several to terminate them at once. Terminating, from the list or a sandbox's panel, opens a dialog listing what goes and asks for the sandbox's name (or `terminate N` for several) to be typed first. With none yet, a first-run panel with the code to start one. |
-| **A sandbox** | A click on a row opens it in a panel beside the list: its up and down buttons step through the list, and it widens to two panes or opens as a page of its own (`/sandbox?id=`). Its overview — id, image, network, resources, lifecycle, labels, environment names, volumes, processes —; a real terminal (Terminal goes back to the shell open there, or starts one as `sandbox-cli shell` does; the tab lists every process with a terminal, an agent's console included, to attach to, and New shell starts another); a Desktop tab, where the sandbox's image has one ([desktop.md](desktop.md)): its screen, with a terminal and a browser, to see and use; its processes' logs from the first byte; its files; and its audit events. Wide, the overview stays beside the other tabs. A live sandbox is edited from its overview: name, labels and idle auto-stop in one dialog; a sandbox with a lifetime counts down to its end, with −15m to bring it nearer and, for an admin key or a plain sandboxd's token, +15m to push it out; its network (none, an allowlist from the groups and hosts, or open) where the endpoint can change a running sandbox's; and Resize: on Firecracker the same sandbox at its new size — a larger disk alone is grown live (Grow disk), its processes running on; new vCPUs or memory restart it (Resize and restart), keeping its files, volumes and network —; on macOS, where a running VM's size is fixed, a copy at a template's size — its files, name, labels and network come across, its processes, memory and environment do not. |
+| **A sandbox** | A click on a row opens it in a panel beside the list: its up and down buttons step through the list, and it widens to two panes or opens as a page of its own (`/sandbox?id=`). Its overview — id, image, network, resources, lifecycle, labels, environment names, volumes, processes —; a real terminal (Terminal goes back to the shell open there, or starts one as `sandbox-cli shell` does; the tab lists every process with a terminal, an agent's console included, to attach to, and New shell starts another); a Desktop tab, where the sandbox's image has one ([desktop.md](desktop.md)): its screen, with a terminal and a browser, to see and use; an Agent tab, where the image is an agentos one (see below); its processes' logs from the first byte; its files; and its audit events. Wide, the overview stays beside the other tabs. A live sandbox is edited from its overview: name, labels and idle auto-stop in one dialog; a sandbox with a lifetime counts down to its end, with −15m to bring it nearer and, for an admin key or a plain sandboxd's token, +15m to push it out; its network (none, an allowlist from the groups and hosts, or open) where the endpoint can change a running sandbox's; and Resize: on Firecracker the same sandbox at its new size — a larger disk alone is grown live (Grow disk), its processes running on; new vCPUs or memory restart it (Resize and restart), keeping its files, volumes and network —; on macOS, where a running VM's size is fixed, a copy at a template's size — its files, name, labels and network come across, its processes, memory and environment do not. |
 | **Playground** | A command, an agent run unattended, or an agent's interactive console, in a fresh sandbox that starts in its own home directory, from the server's image, one you name (suggested: those the machine has built, those its sandboxes run, the desktop image) or a snapshot where the backend takes them, with a snapshot schedule if asked for, at a size from Templates — with the same config, profile, network policy, labels, volumes and agent login a `sandbox-cli run` would get. Beside the form, the same run written as CLI, curl, Python and TypeScript, to repeat it from a script. |
 | **Snapshots** | Sandboxes captured to start new ones from — whole (memory, processes and disk) where the backend can, their files only where it cannot capture more (macOS) — with their kind and size; Launch starts a new sandbox from one (the launch page, with it chosen), Take snapshot captures one of your running sandboxes, and Delete removes one. A running sandbox's panel takes one with Snapshot, and its overview's Snapshots section sets a schedule — every so often, the newest few kept, within the server's limits — and lists that sandbox's snapshots, scheduled or manual. |
 | **Agents** | The agents Studio runs, each with a verified headless mode, one row each: whose login is saved, which API keys are set or saved, and the API it reaches. Open a row to add, change or remove an API key for any variable the agent reads. A key is write-only: it is kept in `~/.config/sandbox/agent-keys.json` (yours only, 0600), never shown again, and used by an agent run — Studio's or the CLI's — when the environment does not set that variable; the environment's value wins. |
@@ -38,6 +38,36 @@ Studio keeps.
 | **Images** | On a plain sandboxd: the images sandboxes start from, each with its state, size, how many sandboxes use it and when it was installed; Download image installs one ahead of the first sandbox that wants it, with its progress; Start opens the Playground with it; Remove frees one nothing uses (the default and pooled images are locked); a failed download shows why, with Retry and Clear. Through a gateway: for an admin key, the same for every node at once, with which nodes have each image; for any other key, what the nodes have built, read-only. |
 | **Volumes** | Named volumes and where each is mounted. |
 | **Settings** | The context, what its endpoint can deliver, allowlist groups and deny rules. A group is a named set of hosts — go, npm, an internal registry — edited in place; the Playground's Network step offers none, open, or an allowlist made of the groups you pick (those marked default are picked to start with, and are what a launch on an endpoint whose default is an allowlist gets), plus one-off hosts, with or without the built-in agents' APIs and registries (`--no-baseline`). An agent run always reaches its own API. Deny rules, each with a switch, apply to every launch with a network. The endpoint's policy still decides — a host it does not let a request add is refused at launch — and the Playground's code shows it all as `--allow`, `--deny` and `--no-baseline`. Kept in `~/.config/sandbox/studio.json`; for rules every `sandbox-cli` run gets, use `network.allow` in `~/.config/sandbox/config.yaml`. |
+
+## An agentos sandbox's agent
+
+An agentos image is a desktop image with an agent that works the desktop —
+screenshots, mouse, keyboard, a browser — reached over the Agent Client
+Protocol (ACP). It says so in `/etc/agentos/manifest.json`: the agents it
+offers, the command that speaks ACP for each, its desktop and where the agent
+saves files. Studio reads that file, never the image's name, and shows the
+**Agent** tab only for a running sandbox that has one; the tab opens first.
+
+Start the sandbox with the agent's login, the way the CLI does, then use the
+tab:
+
+```sh
+sandbox-cli agent claude --image ghcr.io/<owner>/sandbox-agentos:edge \
+  --keep --name os --network open -- --version
+```
+
+**Start** opens a session: Studio's server starts the manifest's command in
+the sandbox's home and bridges it to the page (`/api/ws/acp`). Give a task;
+the tab shows the agent's plan, each tool call (open one for its output and
+any screenshot), and its replies. The mode menu switches to one that asks
+before each tool call, and the question appears with its options; **Stop**
+ends the turn, **End session** the agent's process. Leaving the tab keeps the
+session, so the Desktop tab shows the agent at work; closing the page ends it.
+
+What the agent sends is the guest's: the server checks the manifest's fields
+and passes only JSON messages on, and the page shows them as text — images
+only as PNG, JPEG or WebP. The page offers the agent no files or terminals of
+its own: it works with the sandbox's.
 
 ## A plain sandboxd, or a gateway
 

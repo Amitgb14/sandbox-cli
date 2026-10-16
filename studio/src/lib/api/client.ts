@@ -238,6 +238,19 @@ export function desktopURL(sandbox: string, port?: number): string {
   return `${proto}//${window.location.host}/api/ws/desktop?${q.toString()}`;
 }
 
+/**
+ * The bridge to an ACP session with one of an agentos sandbox's agents
+ * (internal/studio/agentos.go): a new agent process per connection.
+ */
+export function acpURL(sandbox: string, agent: string): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const q = new URLSearchParams({ sandbox, agent });
+  if (process.env.NEXT_PUBLIC_STUDIO_HOSTED !== "on") q.set("token", getToken());
+  const org = currentOrg();
+  if (org) q.set("org", org);
+  return `${proto}//${window.location.host}/api/ws/acp?${q.toString()}`;
+}
+
 export function attachURL(sandbox: string, pid?: number): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const q = new URLSearchParams({ sandbox });

@@ -10,6 +10,10 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **An Agent tab for agentos sandboxes**: a prompt, the agent's plan and tool
+  calls (with what it saw), its questions to answer, its mode, Stop, and its
+  log. Moving to the Desktop tab to watch it does not end the session. See
+  the main [CHANGELOG.md](../CHANGELOG.md).
 - **A desktop recording carries on while you use the rest of Studio.**
   Another tab of the panel or another page of the sidebar no longer ends it:
   it records over a view-only connection of its own, a bar in the bottom right
