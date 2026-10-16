@@ -5,6 +5,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { Camera, ChevronDown, ChevronUp, ExternalLink, Maximize2, Minimize2, Plus, SquareTerminal, Trash2, X } from "lucide-react";
 import { CopyButton } from "@/components/common/copy-button";
+import { SandboxAgent } from "@/components/sandbox/agent";
 import { SandboxDesktop } from "@/components/sandbox/desktop";
 import { useRecordings } from "@/components/sandbox/recordings";
 import { SandboxEvents } from "@/components/sandbox/events";
@@ -20,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMinWidth } from "@/hooks/use-min-width";
 import { useCan } from "@/lib/caller";
-import { SHELL_ARGV, useAgentStates, useInfo, useKill, useOpenShell, useProcesses, useSandbox, useSnapshot, useSuspend } from "@/lib/api/queries";
+import { SHELL_ARGV, useAgentOS, useAgentStates, useInfo, useKill, useOpenShell, useProcesses, useSandbox, useSnapshot, useSuspend } from "@/lib/api/queries";
 import type { Process } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -92,6 +93,8 @@ export function SandboxDetails({
   const { data: procs } = useProcesses(id, live);
   const { data: info } = useInfo();
   const { data: agentStates } = useAgentStates();
+  // An agentos image says so in a manifest; only then is there an Agent tab.
+  const { data: agentos } = useAgentOS(id, sb?.state === "running");
   const caps = info?.capabilities?.capabilities ?? {};
   const can = useCan();
   const kill = useKill();
@@ -171,8 +174,9 @@ export function SandboxDetails({
       })
       .catch((e: Error) => toast.error(e.message));
 
-  const fallback = tty ? "terminal" : processes.length ? "output" : "events";
-  const current = tab ?? (twoPane ? fallback : tty ? "terminal" : "overview");
+  // An agentos sandbox opens on its agent: that is what it is for.
+  const fallback = sb.state === "running" && agentos ? "agent" : tty ? "terminal" : processes.length ? "output" : "events";
+  const current = tab ?? (twoPane || fallback === "agent" ? fallback : tty ? "terminal" : "overview");
   const value = twoPane && current === "overview" ? fallback : current;
 
   const Title = variant === "page" ? "h1" : "h2";
@@ -325,6 +329,7 @@ export function SandboxDetails({
           <TabsTrigger value="terminal" disabled={!tty}>
             Terminal
           </TabsTrigger>
+          {sb.state === "running" && agentos ? <TabsTrigger value="agent">Agent</TabsTrigger> : null}
           {sb.state === "running" && (
             <TabsTrigger value="desktop" title={recording ? "Recording the desktop" : undefined}>
               {recording ? <span aria-label="recording" className="size-1.5 animate-pulse rounded-full bg-destructive" /> : null}
@@ -372,6 +377,11 @@ export function SandboxDetails({
             <p className="text-sm text-muted-foreground">No process here has a terminal. Start a shell with Terminal above.</p>
           )}
         </TabsContent>
+        {sb.state === "running" && agentos ? (
+          <TabsContent value="agent" className="mt-0 p-5">
+            <SandboxAgent sandbox={id} image={sb.image} manifest={agentos} canStart={can("sandbox:create")} />
+          </TabsContent>
+        ) : null}
         {sb.state === "running" && (
           <TabsContent value="desktop" className="mt-0 p-5">
             <SandboxDesktop sandbox={id} image={sb.image} processes={processes} canStart={can("sandbox:create")} />

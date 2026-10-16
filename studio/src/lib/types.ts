@@ -314,6 +314,26 @@ export interface AgentState {
   why: string;
 }
 
+/**
+ * An agentos image's manifest, as Studio's server checked it
+ * (GET /api/agentos; internal/studio/agentos.go): the agents it offers over
+ * the Agent Client Protocol, its desktop, and where its agent saves files.
+ */
+export interface AgentOS {
+  contract: number;
+  agents: AgentOSAgent[];
+  desktop: { vncPort: number; start: string[] | null };
+  outputDir: string;
+}
+
+export interface AgentOSAgent {
+  id: string;
+  name: string;
+  acp: string[];
+  login: string;
+  defaultMode: string;
+}
+
 // --- a gateway's own endpoints (internal/api/gateway.go, jobs_types.go,
 // services_types.go; docs/api/v1.md "Gateway"). A plain sandboxd answers each
 // 404. The admin-only shapes are in lib/admin, which a build without admin

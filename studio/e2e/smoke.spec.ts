@@ -229,6 +229,45 @@ test("the Desktop tab explains a sandbox whose image has no desktop", async ({ p
   await api(`/v1/sandboxes/${sb.id}`, "DELETE");
 });
 
+test("an agentos sandbox opens on its Agent tab, and one without a manifest has none", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown, headers: Record<string, string> = {}) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}`, ...headers } });
+  const plain = await (await api("/v1/sandboxes", "POST", { name: "plain-box" })).json();
+  const os = await (await api("/v1/sandboxes", "POST", { name: "agentos-box" })).json();
+  // What an agentos image carries (sandbox-images, images/agentos). The fake
+  // backend runs builtins only, so its agentos-acp is "no such command".
+  const manifest = {
+    contract: 1,
+    agents: [{ id: "claude", name: "Claude Code", acp: ["agentos-acp"], login: "claude", defaultMode: "bypassPermissions" }],
+    desktop: { vncPort: 5900, start: ["sandbox-desktop"] },
+    outputDir: "~/agentos-output",
+  };
+  const put = await api(`/v1/sandboxes/${os.id}/files?path=/etc/agentos/manifest.json`, "PUT", JSON.stringify(manifest), {
+    "Content-Type": "application/octet-stream",
+  });
+  expect(put.ok()).toBeTruthy();
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  await page.getByRole("row").filter({ hasText: "plain-box" }).getByText("plain-box").click();
+  let panel = page.getByRole("dialog");
+  await expect(panel.getByRole("tab", { name: "Events" })).toBeVisible();
+  await expect(panel.getByRole("tab", { name: "Agent" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("row").filter({ hasText: "agentos-box" }).getByText("agentos-box").click();
+  panel = page.getByRole("dialog");
+  await expect(panel.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
+  await expect(panel.getByText("sandbox-cli agent claude --image", { exact: false })).toBeVisible();
+  await panel.getByRole("button", { name: "Start Claude Code" }).click();
+  await expect(panel.getByText("the connection to the agent failed")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "New session" })).toBeVisible();
+
+  await api(`/v1/sandboxes/${plain.id}`, "DELETE");
+  await api(`/v1/sandboxes/${os.id}`, "DELETE");
+});
+
 test("a snapshot being taken shows how far it has got, in the panel and the list", async ({ page, request }) => {
   const api = (path: string, method = "GET", data?: unknown) =>
     request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });
