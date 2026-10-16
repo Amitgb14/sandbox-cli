@@ -98,6 +98,11 @@ func run(args []string) error {
 	fl.IntVar(&node.diskMB, "capacity-disk-mb", 0, "disk offered to sandboxes, MiB (default: the size of the state directory's filesystem)")
 	fl.StringVar(&node.clientCA, "client-ca", "", "CA (PEM) whose certificates alone may connect; needs --tls-cert (mutual TLS, for a node behind a gateway)")
 	metricsListen := fl.String("metrics-listen", "", "loopback host:port to serve Prometheus metrics on, without a credential; off when empty")
+	var otlp metrics.OTLPConfig
+	fl.StringVar(&otlp.Endpoint, "otlp-endpoint", "", "an OTLP/HTTP collector to push metrics to (https, or http on loopback); off when empty")
+	fl.DurationVar(&otlp.Interval, "otlp-interval", metrics.DefaultOTLPInterval, "how often metrics are pushed to --otlp-endpoint")
+	fl.StringVar(&otlp.HeadersFile, "otlp-headers-file", "", `a file (mode 0600) of "Name: value" headers sent with every push, for a collector's credential`)
+	fl.StringVar(&otlp.CAFile, "otlp-ca", "", "CA (PEM) to verify --otlp-endpoint with instead of the system's")
 	showVersion := fl.Bool("version", false, "print the version and exit")
 	if err := fl.Parse(args); err != nil {
 		return err
@@ -115,6 +120,13 @@ func run(args []string) error {
 		if err := metrics.CheckAddr(*metricsListen); err != nil {
 			return err
 		}
+	}
+	if otlp.Endpoint != "" {
+		if _, err := metrics.CheckOTLPEndpoint(otlp.Endpoint); err != nil {
+			return err
+		}
+	} else if otlp.HeadersFile != "" || otlp.CAFile != "" {
+		return errors.New("--otlp-headers-file and --otlp-ca need --otlp-endpoint")
 	}
 	for name, port := range map[string]int{"--egress-proxy-port": *proxyPort, "--egress-dns-port": *dnsPort, "--egress-open-port": *openPort} {
 		if port < 0 || port > 65535 {
@@ -251,6 +263,18 @@ func run(args []string) error {
 		go func() { errc <- fmt.Errorf("metrics: %w", msrv.Serve(mln)) }()
 		logf("serving metrics on http://%s/metrics", mln.Addr())
 	}
+	stopExport := func() {}
+	if otlp.Endpoint != "" {
+		otlp.Service, otlp.Version, otlp.Instance, otlp.Logf = "sandboxd", version.Version, instanceID(node.id), logf
+		exp, err := metrics.NewExporter(otlp, apiSrv.WriteMetrics)
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		stopExport = exp.Start(context.Background())
+		defer stopExport()
+		logf("pushing metrics to %s every %v", exp.URL(), exp.Interval())
+	}
 	go func() { errc <- srv.Serve(ln) }()
 	select {
 	case err := <-errc:
@@ -260,6 +284,8 @@ func run(args []string) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	err = srv.Shutdown(shutdown)
+	// The last push, while the backend is still there to report on.
+	stopExport()
 	if *keep {
 		keeper.Detach()
 		logf("left the sandboxes running for the next sandboxd")
@@ -322,6 +348,16 @@ func newBackend(name string, o backendOptions) (backend.Backend, error) {
 
 // readToken reads the token file, refusing one other users can read: a token
 // that any account on the machine can see protects nothing from those accounts.
+// instanceID names this sandboxd in what it pushes: its node id behind a
+// gateway, else the machine's name.
+func instanceID(nodeID string) string {
+	if nodeID != "" {
+		return nodeID
+	}
+	h, _ := os.Hostname()
+	return h
+}
+
 func readToken(path string) (string, error) {
 	if path == "" {
 		return "", nil

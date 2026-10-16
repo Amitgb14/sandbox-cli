@@ -654,6 +654,8 @@ sandboxes by state, processes running, pool sizes by image, capacity and
 free, cordon, and creates by status with a latency histogram. It has no
 credential, so `sandboxd` refuses any address but loopback; put a proxy with
 its own authentication in front if the scraper is elsewhere.
+`--otlp-endpoint URL` pushes them to an OpenTelemetry collector instead
+([operations.md](operations.md#pushing-to-an-opentelemetry-collector)).
 
 ### Upgrading nodes behind a gateway
 

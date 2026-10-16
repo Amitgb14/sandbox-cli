@@ -208,6 +208,7 @@ type serveOptions struct {
 	pollInterval                                      time.Duration
 	corsOrigins                                       []string
 	metricsListen, auditLog                           string
+	otlp                                              metrics.OTLPConfig
 	nodeLostAfter                                     time.Duration
 	// metricsReady, when set, is told the metrics address (tests).
 	metricsReady            func(string)
@@ -258,6 +259,10 @@ func newServe(state *string) *cobra.Command {
 	f.DurationVar(&o.pollInterval, "poll-interval", 5*time.Second, "how often each node is asked for its status")
 	f.StringArrayVar(&o.corsOrigins, "cors-origin", nil, "a browser origin allowed to call the API (repeatable)")
 	f.StringVar(&o.metricsListen, "metrics-listen", "", "loopback host:port to serve Prometheus metrics on, without a credential; off when empty")
+	f.StringVar(&o.otlp.Endpoint, "otlp-endpoint", "", "an OTLP/HTTP collector to push metrics to (https, or http on loopback); off when empty")
+	f.DurationVar(&o.otlp.Interval, "otlp-interval", metrics.DefaultOTLPInterval, "how often metrics are pushed to --otlp-endpoint")
+	f.StringVar(&o.otlp.HeadersFile, "otlp-headers-file", "", `a file (mode 0600) of "Name: value" headers sent with every push, for a collector's credential`)
+	f.StringVar(&o.otlp.CAFile, "otlp-ca", "", "CA (PEM) to verify --otlp-endpoint with instead of the system's")
 	f.StringVar(&o.auditLog, "audit-log", "", `who did what, as JSONL (default: audit/gateway.jsonl beside the state file; "none" keeps no log)`)
 	f.DurationVar(&o.nodeLostAfter, "node-lost-after", 5*time.Minute, "how long a node may not answer before its sandboxes are reported lost and stop counting against quotas")
 	f.StringVar(&o.secretsKeyFile, "secrets-key-file", "", "32 random bytes (mode 0600) sealing secrets and jobs' environments; without it there are no secrets")
@@ -285,6 +290,15 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 	}
 	if (o.tlsCert == "") != (o.tlsKey == "") {
 		return errors.New("--tls-cert and --tls-key go together")
+	}
+	// Checked before the standby wait, so a mistyped flag is said now and
+	// not when this gateway takes over.
+	if o.otlp.Endpoint != "" {
+		if _, err := metrics.CheckOTLPEndpoint(o.otlp.Endpoint); err != nil {
+			return err
+		}
+	} else if o.otlp.HeadersFile != "" || o.otlp.CAFile != "" {
+		return errors.New("--otlp-headers-file and --otlp-ca need --otlp-endpoint")
 	}
 	static, err := loadNodeConfig(o.nodeConfig)
 	if err != nil {
@@ -354,6 +368,16 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 	if err != nil {
 		return err
 	}
+	var exporter *metrics.Exporter
+	if o.otlp.Endpoint != "" {
+		// A standby gateway pushes nothing: only the one serving reaches
+		// here, so a collector sees one gateway's numbers, not two.
+		host, _ := os.Hostname()
+		o.otlp.Service, o.otlp.Version, o.otlp.Instance, o.otlp.Logf = "sandbox-gateway", version.Version, host, logf
+		if exporter, err = metrics.NewExporter(o.otlp, g.WriteMetrics); err != nil {
+			return err
+		}
+	}
 	var metricsLn net.Listener
 	if o.metricsListen != "" {
 		if metricsLn, err = metrics.Listen(o.metricsListen); err != nil {
@@ -416,6 +440,12 @@ func serve(ctx context.Context, statePath string, o serveOptions, logf func(stri
 
 	g.Start(ctx)
 	defer g.Close()
+	if exporter != nil {
+		// Deferred after g.Close, so it runs first: the last push reads
+		// the store and the node pool.
+		defer exporter.Start(context.Background())()
+		logf("pushing metrics to %s every %v", exporter.URL(), exporter.Interval())
+	}
 	srv := &http.Server{
 		Handler: g.Handler(),
 		// Output streams and attached terminals are long-lived; no write timeout.

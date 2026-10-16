@@ -1,5 +1,6 @@
 // Package metrics writes the Prometheus text exposition format by hand, for
-// sandboxd's and sandbox-gateway's GET /metrics.
+// sandboxd's and sandbox-gateway's GET /metrics, and pushes the same series
+// to an OpenTelemetry collector over OTLP/HTTP (otlp.go).
 //
 // It is the standard library and nothing else: the format is a few lines of
 // text, and a client library would be the repository's first dependency
@@ -30,10 +31,14 @@ import (
 const ContentType = "text/plain; version=0.0.4; charset=utf-8"
 
 // Writer writes one exposition. The first error sticks and is returned by Err.
+//
+// A Writer made by the OTLP exporter writes no text: it records the same
+// families into a snapshot, so a server's one write function serves both.
 type Writer struct {
 	w    io.Writer
 	err  error
 	seen map[string]bool
+	snap *snapshot
 }
 
 // NewWriter returns a Writer on w.
@@ -54,11 +59,19 @@ func (w *Writer) Family(name, typ, help string) {
 		return
 	}
 	w.seen[name] = true
+	if w.snap != nil {
+		w.snap.family(name, typ, help)
+		return
+	}
 	w.printf("# HELP %s %s\n# TYPE %s %s\n", name, escapeHelp(help), name, typ)
 }
 
 // Sample writes one sample. labels are name, value pairs.
 func (w *Writer) Sample(name string, value float64, labels ...string) {
+	if w.snap != nil {
+		w.snap.sample(name, value, labels)
+		return
+	}
 	w.printf("%s%s %s\n", name, labelString(labels), formatValue(value))
 }
 
@@ -217,6 +230,10 @@ func (h *Histogram) Write(w *Writer, name, help string) {
 	w.Family(name, "histogram", help)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if w.snap != nil {
+		w.snap.histogram(name, h.bounds, h.counts, h.n, h.sum)
+		return
+	}
 	for i, b := range h.bounds {
 		w.Sample(name+"_bucket", float64(h.counts[i]), "le", formatValue(b))
 	}

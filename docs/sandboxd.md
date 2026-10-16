@@ -31,6 +31,7 @@ sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
 | `--policy FILE` | the built-in policy | the operator policy ([below](#the-policy-file)). |
 | `--audit-log FILE` | `<state-dir>/audit/events.jsonl` | every sandbox's events, as JSONL; `none` keeps no log ([self-hosting.md](self-hosting.md#the-audit-log)). |
 | `--metrics-listen HOST:PORT` | off | Prometheus metrics at `/metrics`, on loopback only ([below](#metrics)). |
+| `--otlp-endpoint URL` | off | push the same metrics to an OpenTelemetry collector over OTLP/HTTP; with `--otlp-interval`, `--otlp-headers-file` and `--otlp-ca` ([operations.md](operations.md#pushing-to-an-opentelemetry-collector)). |
 | `--version` | | print the version and exit. |
 
 ### The backend
@@ -164,6 +165,10 @@ free, cordon, and creates by status with a latency histogram. It has no
 credential, so `sandboxd` refuses any address but loopback; put a proxy with
 its own authentication in front if the scraper is elsewhere. The names are
 listed in [operations.md](operations.md#metrics).
+
+`--otlp-endpoint URL` pushes the same series to an OpenTelemetry collector
+instead, over https or to a collector on loopback
+([operations.md](operations.md#pushing-to-an-opentelemetry-collector)).
 
 ## Files
 

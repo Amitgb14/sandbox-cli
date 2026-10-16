@@ -72,10 +72,10 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 
 // MetricsHandler serves GET /metrics in the Prometheus text format.
 func (s *Server) MetricsHandler() http.Handler {
-	return metrics.Handler(s.writeMetrics)
+	return metrics.Handler(s.WriteMetrics)
 }
 
-func (s *Server) writeMetrics(w *metrics.Writer) {
+func (s *Server) WriteMetrics(w *metrics.Writer) {
 	st := s.nodeStatus()
 	s.mu.Lock()
 	recs := make([]*record, 0, len(s.sandboxes))

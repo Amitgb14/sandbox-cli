@@ -447,6 +447,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now sandbox-gateway
 | `--secrets-key-file FILE` | | 32 random bytes, mode 0600, sealing the tenants' secrets and jobs' environments, and users' [agent logins](api/v1.md#agent-logins). Without it there are no secrets. |
 | `--notify-allow-private` | off | lets a job's `notify` URL reach loopback, private and link-local addresses (and http to loopback). Off, the gateway posts only to public addresses, checked as it connects. |
 | `--metrics-listen HOST:PORT` | off | Prometheus metrics, on loopback only ([operations.md](operations.md#metrics)). |
+| `--otlp-endpoint URL` | off | push the same metrics to an OpenTelemetry collector; with `--otlp-interval`, `--otlp-headers-file` and `--otlp-ca` ([operations.md](operations.md#pushing-to-an-opentelemetry-collector)). |
 | `--audit-log FILE` | `audit/gateway.jsonl` in `--state-dir` | who did what, as JSONL; `none` keeps no log ([operations.md](operations.md#the-audit-log)). |
 | `--node-lost-after` | `5m` | how long a node may not answer before its sandboxes are reported lost and stop counting against quotas ([operations.md](operations.md#node-loss-and-lost-sandboxes)). |
 | `--jobs-dir DIR` | `jobs/` in `--state-dir` | where jobs' runs keep output and files ([jobs.md](jobs.md)). |

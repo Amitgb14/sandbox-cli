@@ -89,9 +89,9 @@ func (s *SSHMetrics) authFailed() {
 func (g *Gateway) SSHMetrics() *SSHMetrics { return &SSHMetrics{m: g.metrics} }
 
 // MetricsHandler serves GET /metrics in the Prometheus text format.
-func (g *Gateway) MetricsHandler() http.Handler { return metrics.Handler(g.writeMetrics) }
+func (g *Gateway) MetricsHandler() http.Handler { return metrics.Handler(g.WriteMetrics) }
 
-func (g *Gateway) writeMetrics(w *metrics.Writer) {
+func (g *Gateway) WriteMetrics(w *metrics.Writer) {
 	m := g.metrics
 	m.requests.Write(w, "sandbox_gateway_http_requests_total", "API requests, by route pattern and response status.")
 	m.created.Write(w, "sandbox_gateway_sandboxes_created_total", "Sandboxes created through the gateway.")

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
@@ -74,5 +75,45 @@ func TestNodeMetricsPools(t *testing.T) {
 	img := s.Policy.DefaultImage
 	if !strings.Contains(got, `sandboxd_pool_target{image="`+img+`"} 2`) {
 		t.Errorf("pool target missing:\n%s", got)
+	}
+}
+
+// The OTLP export is the same write function as the scrape: what one says,
+// the other pushes.
+func TestNodeMetricsOverOTLP(t *testing.T) {
+	c, _, s := nodeServer(t, "n1", 0)
+	if _, err := c.CreateSandbox(context.Background(), api.CreateSandboxRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 1)
+	col := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		b, _ := io.ReadAll(zr)
+		got <- string(b)
+	}))
+	defer col.Close()
+	e, err := metrics.NewExporter(metrics.OTLPConfig{Endpoint: col.URL, Service: "sandboxd", Instance: "n1"}, s.WriteMetrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Export(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	body := <-got
+	for _, want := range []string{
+		`"name":"sandboxd_sandboxes"`,
+		`{"key":"state","value":{"stringValue":"running"}}`,
+		`"name":"sandboxd_creates_total"`,
+		`"name":"sandboxd_create_seconds","description":"Time to create a sandbox, successful creates only.","histogram"`,
+		`"name":"sandboxd_capacity_cpus"`,
+		`{"key":"service.instance.id","value":{"stringValue":"n1"}}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s in\n%s", want, body)
+		}
 	}
 }

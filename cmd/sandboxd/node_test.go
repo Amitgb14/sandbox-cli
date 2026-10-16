@@ -70,6 +70,20 @@ func TestRunRefusesABadNodeID(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("--metrics-listen off loopback: %v", err)
 	}
+	// Pushed metrics leave the machine only over https, and a credential
+	// for the collector comes from a file, not the arguments.
+	err = run([]string{"--backend", "fake", "--otlp-endpoint", "http://collector.example:4318", "--listen", "unix://" + filepath.Join(t.TempDir(), "s.sock")})
+	if err == nil || !strings.Contains(err.Error(), "--otlp-endpoint") {
+		t.Fatalf("--otlp-endpoint over plain HTTP: %v", err)
+	}
+	err = run([]string{"--backend", "fake", "--otlp-endpoint", "ftp://u:p@collector.example", "--listen", "unix://" + filepath.Join(t.TempDir(), "s.sock")})
+	if err == nil || strings.Contains(err.Error(), "u:p") {
+		t.Fatalf("--otlp-endpoint with a password: %v", err)
+	}
+	err = run([]string{"--backend", "fake", "--otlp-ca", "ca.pem", "--listen", "unix://" + filepath.Join(t.TempDir(), "s.sock")})
+	if err == nil || !strings.Contains(err.Error(), "need --otlp-endpoint") {
+		t.Fatalf("--otlp-ca alone: %v", err)
+	}
 	err = run([]string{"--backend", "fake", "--egress-dns-port", "70000", "--listen", "unix://" + filepath.Join(t.TempDir(), "s.sock")})
 	if err == nil || !strings.Contains(err.Error(), "--egress-dns-port") {
 		t.Fatalf("--egress-dns-port out of range: %v", err)

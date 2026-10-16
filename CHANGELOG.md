@@ -424,6 +424,16 @@ in `_old/` as reference, to be ported where this design still wants it.
 
 **Added:**
 
+- **Metrics can be pushed to an OpenTelemetry collector.** `sandboxd
+  --otlp-endpoint URL` and `sandbox-gateway serve --otlp-endpoint URL` push
+  the same series `--metrics-listen` serves, by the same names, as OTLP/HTTP
+  (JSON, gzipped) every `--otlp-interval` (60s) and once more on the way out.
+  A URL with no path gets `/v1/metrics`. The push leaves the machine only
+  over https; plain http is accepted only to loopback, for a collector agent
+  on the same host. A collector's credential goes in `--otlp-headers-file`
+  (`Name: value` lines, mode 0600), never in the URL or the arguments;
+  `--otlp-ca` verifies a collector with a private CA. Redirects are not
+  followed. A standby gateway pushes nothing until it takes over.
 - `sandboxd`, its API (`docs/api/v1.md`), and a conformance suite that
   defines it.
 - `attach` with a real terminal, and `doctor` against any endpoint.

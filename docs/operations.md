@@ -25,6 +25,37 @@ The endpoint has no credential, so each refuses any address but loopback;
 put a proxy with its own authentication in front if the scraper is elsewhere.
 No label carries a user, a tenant or a sandbox's name.
 
+### Pushing to an OpenTelemetry collector
+
+Instead of being scraped, or as well, each can push the same series to an
+OpenTelemetry collector, or anything else that accepts OTLP over HTTP:
+
+```sh
+sudo -u sandbox-gateway sandbox-gateway serve … --otlp-endpoint http://127.0.0.1:4318
+sudo sandboxd … --otlp-endpoint https://otel.example.com:4318 \
+  --otlp-headers-file /etc/sandboxd/otlp-headers --otlp-ca /etc/sandboxd/otel-ca.pem
+```
+
+| Flag | Default | |
+|---|---|---|
+| `--otlp-endpoint URL` | off | the collector. A URL with no path gets `/v1/metrics`. `https`, or `http` to a loopback address only: what the push carries is the operator's, and it leaves the machine encrypted or not at all. A user, a password or a query in the URL is refused. |
+| `--otlp-interval` | `60s` | how often to push; at least `1s`. |
+| `--otlp-headers-file FILE` | | headers sent with every push, one `Name: value` per line (`#` comments), for the collector's credential. Mode 0600; nothing in it is logged. |
+| `--otlp-ca FILE` | the system's roots | a CA (PEM) to verify an https collector with. |
+
+The push is OTLP/HTTP with the JSON encoding, gzipped. Names are the ones in
+the tables below, so a dashboard built on a scrape reads the push too.
+Counters are cumulative sums starting when the process did, gauges are
+gauges, and a create-latency histogram keeps its buckets. The resource says
+`service.name` (`sandboxd` or `sandbox-gateway`), `service.version` and
+`service.instance.id`: a node's `--node-id`, or the machine's name.
+
+A push that fails is logged once, with the status, and again when one
+succeeds; nothing is retried in between, as the next push carries the same
+cumulative totals. A redirect is a failure and is not followed. The last push
+is made as the process stops. A standby gateway pushes nothing until it takes
+over, so a collector sees one gateway at a time.
+
 | On the gateway | |
 |---|---|
 | `sandbox_gateway_http_requests_total` | requests by route and status |
