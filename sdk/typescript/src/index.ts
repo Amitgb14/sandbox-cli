@@ -45,6 +45,35 @@ export interface Sandbox {
   snapshot_every_secs?: number;
   snapshot_keep?: number;
   labels?: Record<string, string>;
+  /** Where its usage is pushed, and how that is going. */
+  metrics_export?: MetricsExportStatus;
+}
+
+/**
+ * Push a sandbox's CPU, memory, network and disk, as the host measures them,
+ * to your OTLP/HTTP collector (capability `metrics_export`). The endpoint is
+ * https on a public address; one with no path gets /v1/metrics.
+ */
+export interface MetricsExport {
+  /** In an update, "" stops the export. */
+  endpoint: string;
+  /** How often to push; 0 is 60, and at least `limits.min_metrics_export_secs`. */
+  interval_secs?: number;
+  /** Sent with every push; values are never returned. */
+  headers?: Record<string, string>;
+  /** Through a gateway: header name to the name of one of your secrets. */
+  header_secrets?: Record<string, string>;
+}
+
+export interface MetricsExportStatus {
+  endpoint: string;
+  interval_secs: number;
+  /** Names only: values are never returned. */
+  header_names?: string[];
+  last_push_at?: string;
+  /** Why the last push failed, and since when pushes have; absent once one succeeds. */
+  last_error?: string;
+  failing_since?: string;
 }
 
 export interface CreateSandboxRequest {
@@ -66,6 +95,7 @@ export interface CreateSandboxRequest {
   labels?: Record<string, string>;
   /** Named volumes to mount (capability `volumes`); one live sandbox at a time. */
   volumes?: VolumeMount[];
+  metrics_export?: MetricsExport;
 }
 
 export interface VolumeMount {
@@ -544,12 +574,13 @@ export class Client {
    * the name; `labels` replaces them whole (`{}` removes them);
    * `idle_timeout_secs` is within `limits.max_idle_timeout_secs`, 0 (never)
    * only where that is 0; `idle_action` is "terminate" or "suspend". `network`
-   * needs a running sandbox and capability `network_policy_update`. A request
-   * with one bad field changes nothing.
+   * needs a running sandbox and capability `network_policy_update`.
+   * `metrics_export` replaces the export whole, headers included;
+   * `{ endpoint: "" }` stops it. A request with one bad field changes nothing.
    */
   updateSandbox(
     ref: string,
-    req: { name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; idle_action?: "terminate" | "suspend"; network?: NetworkPolicy },
+    req: { name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; idle_action?: "terminate" | "suspend"; network?: NetworkPolicy; metrics_export?: MetricsExport },
   ): Promise<Sandbox> {
     return this.json("PATCH", this.sbx(ref), req);
   }

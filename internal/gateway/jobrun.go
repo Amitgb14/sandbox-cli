@@ -22,6 +22,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/publicnet"
 )
 
 // The job controller. One goroutine per unfinished job hands its runs out
@@ -863,16 +864,9 @@ func newNotifyClient(allowPrivate bool) *http.Client {
 	}
 }
 
-// cgnat is the shared address space (RFC 6598), private in all but name.
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
-
-// publicAddr reports whether ip is an address on the public internet: not
-// loopback, private, link-local (169.254.169.254 among them), shared,
-// unspecified or multicast.
-func publicAddr(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !cgnat.Contains(ip)
-}
+// publicAddr reports whether ip is an address on the public internet
+// (publicnet.Addr).
+func publicAddr(ip netip.Addr) bool { return publicnet.Addr(ip) }
 
 // notify posts n to the job's notify URL: three tries at most, a failure
 // logged and dropped. What is sent is the job's id and name and states —

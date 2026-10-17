@@ -90,6 +90,7 @@ func (s *Server) sampleMetrics(ctx context.Context) {
 		}
 		rec.mu.Unlock()
 	}
+	s.pushExports(now)
 }
 
 // add records one reading. The CPU share is the CPU time used since the last

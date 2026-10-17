@@ -107,6 +107,11 @@ func (g *Gateway) updateHandler(w http.ResponseWriter, r *http.Request, p Princi
 		return
 	}
 
+	if f := g.resolveExportSecrets(ctx, p, req.MetricsExport); f != nil {
+		f.write(w)
+		return
+	}
+
 	sb, err := n.client.UpdateSandbox(ctx, id, req)
 	if err != nil {
 		var ae *api.Error

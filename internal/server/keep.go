@@ -39,6 +39,9 @@ import (
 type keptRecord struct {
 	Sandbox api.Sandbox       `json:"sandbox"`
 	Env     map[string]string `json:"env,omitempty"`
+	// MetricsHeaders are the metrics export's header values, kept as Env
+	// is; the rest of the export is in Sandbox.
+	MetricsHeaders map[string]string `json:"metrics_headers,omitempty"`
 	// NextPID is the last process number handed out, so a taken-back sandbox
 	// never gives a new process the number of one a client still remembers.
 	NextPID int `json:"next_pid"`
@@ -76,7 +79,7 @@ func (s *Server) persist(rec *record) {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 	rec.mu.Lock()
-	kr := keptRecord{Sandbox: rec.sbx, Env: rec.env, NextPID: rec.nextPID}
+	kr := keptRecord{Sandbox: rec.sbx, Env: rec.env, MetricsHeaders: rec.export.headers, NextPID: rec.nextPID}
 	for _, pr := range rec.procs {
 		if pr.session != "" && pr.info.State == api.ProcessRunning {
 			kr.Procs = append(kr.Procs, keptProc{PID: pr.info.PID, Session: pr.session, Argv: pr.info.Argv,
@@ -310,7 +313,11 @@ func readRecord(path, id string) (*record, []keptProc, error) {
 	if kr.NextPID < 0 {
 		return nil, nil, errors.New("a negative process number")
 	}
-	return &record{sbx: kr.Sandbox, env: kr.Env, nextPID: kr.NextPID}, kr.Procs, nil
+	rec := &record{sbx: kr.Sandbox, env: kr.Env, nextPID: kr.NextPID}
+	if kr.Sandbox.MetricsExport != nil {
+		rec.export = exportState{headers: kr.MetricsHeaders}
+	}
+	return rec, kr.Procs, nil
 }
 
 // Snapshots are kept the same way, in RecordDir/snapshots: the list of them is

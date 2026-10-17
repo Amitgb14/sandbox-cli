@@ -20,6 +20,7 @@ import type {
   Info,
   LaunchRequest,
   LaunchResult,
+  MetricsExport,
   MetricsList,
   NetworkPolicy,
   NodeStatus,
@@ -302,7 +303,7 @@ export function useDeleteSnapshot() {
 /** Renames, relabels or retimes a live sandbox; only what is given changes. */
 export function useUpdateSandbox() {
   return useInvalidating(
-    ({ id, ...req }: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; idle_action?: "terminate" | "suspend"; lifetime_secs?: number }) =>
+    ({ id, ...req }: { id: string; name?: string; labels?: Record<string, string>; idle_timeout_secs?: number; idle_action?: "terminate" | "suspend"; lifetime_secs?: number; metrics_export?: MetricsExport }) =>
       apiFetch<Sandbox>(sbx(id), { method: "PATCH", json: req }),
     ({ id }) => [[...keys.sandbox(id)], [...keys.sandboxes]],
   );

@@ -72,3 +72,54 @@ test("a running sandbox is renamed, relabelled, retimed and given a new network 
   await api(request, `/v1/sandboxes/${sb.id}`, "DELETE");
   await api(request, "/egress/groups/edit-go", "DELETE");
 });
+
+test("a sandbox's metrics are exported from its panel, the credential never shown again", async ({ page, request }) => {
+  const sb = await (await api(request, "/v1/sandboxes", "POST", { name: "export-me" })).json();
+  await page.goto(`/sandbox/?id=${sb.id}`);
+  await page.getByRole("button", { name: "Export metrics" }).click();
+  const dlg = page.getByRole("dialog", { name: "Metrics export" });
+  await dlg.getByRole("textbox", { name: "OTLP endpoint" }).fill("https://otlp.collector.example");
+  await dlg.getByRole("combobox", { name: "Push every" }).click();
+  await page.getByRole("option", { name: "30 s" }).click();
+  await dlg.getByRole("button", { name: "Add header" }).click();
+  await dlg.getByLabel("Header value").fill("Bearer e2e-otel-secret");
+  await dlg.getByRole("button", { name: "Save" }).click();
+  await expect(dlg).toHaveCount(0);
+
+  const got = await (await api(request, `/v1/sandboxes/${sb.id}`)).json();
+  expect(got.metrics_export).toMatchObject({ endpoint: "https://otlp.collector.example/v1/metrics", interval_secs: 30, header_names: ["Authorization"] });
+  expect(JSON.stringify(got)).not.toContain("e2e-otel-secret");
+  await expect(page.getByText("https://otlp.collector.example/v1/metrics")).toBeVisible();
+  await expect(page.getByText("every 30 s · headers Authorization")).toBeVisible();
+
+  // Opened again, the header is there by name, its value left to be typed.
+  await page.getByRole("button", { name: "Change the metrics export" }).click();
+  await expect(dlg.getByRole("textbox", { name: "Header name" })).toHaveValue("Authorization");
+  await expect(dlg.getByLabel("Header value")).toHaveValue("");
+  await dlg.getByRole("button", { name: "Stop exporting" }).click();
+  await expect(dlg).toHaveCount(0);
+  expect((await (await api(request, `/v1/sandboxes/${sb.id}`)).json()).metrics_export).toBeUndefined();
+});
+
+test("the Playground's metrics export is in the run and its code, the header's value in neither", async ({ page, request }) => {
+  await page.goto("/launch/");
+  await page.getByText("Command", { exact: true }).first().click();
+  await page.getByRole("textbox", { name: "Command" }).fill("echo exported");
+  await page.getByText("Sandbox options").click();
+  await page.getByRole("textbox", { name: "OTLP endpoint" }).fill("https://otlp.collector.example");
+  await page.getByRole("button", { name: "Add header" }).click();
+  await page.getByLabel("Header value").fill("Bearer e2e-launch-secret");
+  await expect(page.getByText("to otlp.collector.example, every 1 min")).toBeVisible();
+  const code = page.locator("pre").last();
+  await expect(code).toContainText("--metrics-export https://otlp.collector.example --metrics-export-header Authorization=OTEL_AUTHORIZATION");
+  await page.getByRole("tab", { name: "curl" }).click();
+  await expect(code).toContainText('"metrics_export":{"endpoint":"https://otlp.collector.example","interval_secs":60,"headers":{"Authorization":"<Authorization value>"}}');
+  await expect(page.locator("body")).not.toContainText("e2e-launch-secret");
+
+  await page.locator("form").getByRole("button", { name: "Launch" }).click();
+  await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+  const id = new URL(page.url()).searchParams.get("id")!;
+  const got = await (await api(request, `/v1/sandboxes/${id}`)).json();
+  expect(got.metrics_export).toMatchObject({ endpoint: "https://otlp.collector.example/v1/metrics", interval_secs: 60, header_names: ["Authorization"] });
+  expect(JSON.stringify(got)).not.toContain("e2e-launch-secret");
+});

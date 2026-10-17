@@ -107,7 +107,7 @@ func studioLauncher(ctxName string) studio.Launcher {
 			cpus: req.CPUs, memory: req.MemoryMB, disk: req.DiskMB,
 			image: req.Image, fromSnapshot: req.Snapshot,
 			snapEvery: time.Duration(req.SnapshotEverySecs) * time.Second, snapKeep: req.SnapshotKeep,
-			onIdle: req.IdleAction}
+			onIdle: req.IdleAction, exportReq: req.MetricsExport}
 		for k, v := range req.Labels {
 			rf.labels = append(rf.labels, k+"="+v)
 		}

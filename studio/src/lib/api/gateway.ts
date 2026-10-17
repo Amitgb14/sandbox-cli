@@ -189,11 +189,12 @@ export function useRemoveService() {
 
 // --- secrets: names only; a value goes in and never comes back --------------------------
 
-export function useSecrets() {
+export function useSecrets(enabled = true) {
   return useQuery({
     queryKey: gkeys.secrets,
     queryFn: async () => (await apiFetch<{ secrets: SecretInfo[] }>("/v1/secrets")).secrets ?? [],
     retry: false,
+    enabled,
   });
 }
 

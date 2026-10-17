@@ -53,12 +53,16 @@ type runFlags struct {
 	fallback      []string
 	labels        []string
 	volumes       []string
+	export        exportFlags
 
 	// project is the directory whose .sandbox.yaml applies; empty is the
 	// current directory. Not a flag: Studio sets it, to a directory with no
 	// project config, so a run it starts does not pick up whatever
 	// .sandbox.yaml sits where Studio happened to be started.
 	project string
+	// exportReq is a metrics export given whole, header values included:
+	// Studio's, from its form. Not a flag; it takes the place of export.
+	exportReq *api.MetricsExport
 
 	// flags is the set these were parsed from, to tell a flag that was given
 	// from one left at its default.
@@ -94,6 +98,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.StringVar(&rf.configPath, "config", "", "an explicit config file, trusted like your own")
 	f.StringArrayVar(&rf.volumes, "volume", nil, "mount a named volume, NAME:/path or NAME:/path:ro (repeatable; sandbox-cli volume)")
 	f.StringArrayVar(&rf.labels, "label", nil, "label the sandbox, key=value (repeatable); shown by list and recorded in its audit events")
+	rf.export.register(f, false)
 	f.StringArrayVar(&rf.fallback, "fallback", nil, "an agent to try next if this one's provider is down (repeatable; agent wrappers only)")
 }
 
@@ -206,6 +211,11 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 		Name: rf.name, Image: rf.image, CPUs: rf.cpus, MemoryMB: rf.memory, DiskMB: rf.disk,
 		IdleTimeoutSecs: rf.idle, IdleAction: rf.onIdle, LifetimeSecs: int(rf.lifetime.Round(time.Second) / time.Second), SnapshotID: rf.fromSnapshot,
 		SnapshotEverySecs: int(rf.snapEvery / time.Second), SnapshotKeep: rf.snapKeep,
+	}
+	if req.MetricsExport = rf.exportReq; req.MetricsExport == nil {
+		if req.MetricsExport, err = rf.export.export(); err != nil {
+			return 1, err
+		}
 	}
 	if req.Env, err = buildEnv(rf.env, rs.agent); err != nil {
 		return 1, err

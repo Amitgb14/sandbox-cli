@@ -72,6 +72,10 @@ type LaunchRequest struct {
 	// IdleAction is the CLI's --on-idle: "suspend" has the server's idle
 	// timeout suspend the sandbox rather than terminate it.
 	IdleAction string `json:"idle_action,omitempty"`
+	// MetricsExport pushes the sandbox's usage to the user's collector, as
+	// the API's field: header values pass through to sandboxd (or names of
+	// the gateway's secrets) and are never kept here.
+	MetricsExport *api.MetricsExport `json:"metrics_export,omitempty"`
 	// CPUs, MemoryMB and DiskMB size the sandbox — a template's, in the
 	// Playground: the CLI's --cpus, --memory and --disk. Zero is the server's
 	// default; the server's limits bound the rest.

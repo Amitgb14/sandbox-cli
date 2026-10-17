@@ -22,6 +22,7 @@ func newUpdateCmd() *cobra.Command {
 	var labels, unlabel, allow, deny, groups []string
 	var idle time.Duration
 	var noBaseline bool
+	var export exportFlags
 	cmd := &cobra.Command{
 		Use:   "update SANDBOX",
 		Short: "Rename, relabel, retime or change the network of a live sandbox",
@@ -37,12 +38,15 @@ func newUpdateCmd() *cobra.Command {
 			"it: --allow and --allow-group add to the built-in hosts unless --no-baseline,\n" +
 			"and an agent's sandbox keeps its agent's API. Not every endpoint can change a\n" +
 			"running sandbox's network.\n\n" +
+			"--metrics-export sets where the sandbox's usage is pushed, replacing what was\n" +
+			"set, headers included; --metrics-export none stops it.\n\n" +
 			"vCPUs and memory are fixed while a VM runs.",
 		Example: "  sandbox-cli update web --name api\n" +
 			"  sandbox-cli update api --label team=infra --label ticket-\n" +
 			"  sandbox-cli update api --idle 2h\n" +
 			"  sandbox-cli update api --idle 30m --on-idle suspend\n" +
 			"  sandbox-cli update api --lifetime +15m\n" +
+			"  OTEL_AUTH='Bearer …' sandbox-cli update api --metrics-export https://otlp.example.com --metrics-export-header Authorization=OTEL_AUTH\n" +
 			"  sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline\n" +
 			"  sandbox-cli update api --network allowlist --allow-group go   # through a gateway",
 		Args: cobra.ExactArgs(1),
@@ -62,6 +66,11 @@ func newUpdateCmd() *cobra.Command {
 			if f.Changed("on-idle") {
 				req.IdleAction = &onIdle
 			}
+			me, err := export.export()
+			if err != nil {
+				return err
+			}
+			req.MetricsExport = me
 			if (len(allow) > 0 || len(groups) > 0 || noBaseline) && network != api.NetworkAllowlist {
 				return errors.New("--allow, --allow-group and --no-baseline go with --network allowlist")
 			}
@@ -106,8 +115,8 @@ func newUpdateCmd() *cobra.Command {
 				}
 				req.Network = n
 			}
-			if req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.IdleAction == nil && req.Network == nil && req.LifetimeSecs == nil {
-				return errors.New("nothing to change: name a flag (--name, --label, --unlabel, --idle, --on-idle, --lifetime, --network)")
+			if req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.IdleAction == nil && req.Network == nil && req.LifetimeSecs == nil && req.MetricsExport == nil {
+				return errors.New("nothing to change: name a flag (--name, --label, --unlabel, --idle, --on-idle, --lifetime, --network, --metrics-export)")
 			}
 			sb, err := c.UpdateSandbox(ctx, args[0], req)
 			if err != nil {
@@ -119,6 +128,9 @@ func newUpdateCmd() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "%s  name %s  network %s  idle %s  ends %s  labels %s\n", sb.ID,
 				orDash(sb.Name), sb.Network.Mode, idleWithAction(sb), ends, formatLabels(sb.Labels))
+			if req.MetricsExport != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "metrics export %s\n", exportSummary(sb.MetricsExport))
+			}
 			return nil
 		},
 	}
@@ -135,6 +147,7 @@ func newUpdateCmd() *cobra.Command {
 	f.StringArrayVar(&groups, "allow-group", nil, "with --network allowlist: a gateway allowlist group whose hosts it may reach (repeatable)")
 	f.StringArrayVar(&deny, "deny", nil, "with --network: a host it may not reach (repeatable)")
 	f.BoolVar(&noBaseline, "no-baseline", false, "with --network allowlist: only the hosts named, without the built-in ones")
+	export.register(f, true)
 	return cmd
 }
 

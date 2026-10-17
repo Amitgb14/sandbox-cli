@@ -131,6 +131,10 @@ const (
 	// (POST /v1/sandboxes/{ref}/resize). The sandbox restarts to take the
 	// new size: its files are kept, its processes are not.
 	CapResize = "resize"
+	// CapMetricsExport: a sandbox's usage, as CapMetrics samples it, can be
+	// pushed to an OTLP/HTTP endpoint its owner names
+	// (CreateSandboxRequest.MetricsExport). Needs CapMetrics.
+	CapMetricsExport = "metrics_export"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -149,6 +153,9 @@ type Limits struct {
 	// sandbox it may keep: each is a copy of the sandbox, on the host's disk.
 	MinSnapshotEverySecs int `json:"min_snapshot_every_secs"`
 	MaxSnapshotKeep      int `json:"max_snapshot_keep"`
+	// MinMetricsExportSecs is the shortest interval a metrics export may
+	// push at.
+	MinMetricsExportSecs int `json:"min_metrics_export_secs,omitempty"`
 }
 
 // SnapshotSchedule is a sandbox's scheduled snapshots: one every EverySecs
@@ -212,6 +219,45 @@ type CreateSandboxRequest struct {
 	// stored or recorded. Through a gateway it is the gateway's to set, from
 	// the organization's registry logins, and a client's is refused.
 	RegistryLogin *RegistryLogin `json:"registry_login,omitempty"`
+	// MetricsExport pushes the sandbox's usage to an OTLP/HTTP endpoint
+	// (capability metrics_export).
+	MetricsExport *MetricsExport `json:"metrics_export,omitempty"`
+}
+
+// MetricsExport is where a sandbox's usage is pushed: its CPU, memory,
+// network and disk as the host measures them (GET …/metrics), as OTLP/HTTP
+// to the owner's own collector.
+type MetricsExport struct {
+	// Endpoint is an https URL on a public address; one with no path gets
+	// /v1/metrics. An operator may allow private addresses and http to
+	// loopback. No user, password or query: a credential goes in Headers.
+	// In an update, "" stops the export.
+	Endpoint string `json:"endpoint"`
+	// IntervalSecs is how often to push; 0 is 60, and less than
+	// limits.min_metrics_export_secs is refused.
+	IntervalSecs int `json:"interval_secs,omitempty"`
+	// Headers are sent with every push: a collector's credential. Their
+	// values are never returned, logged or recorded; the sandbox shows
+	// their names.
+	Headers map[string]string `json:"headers,omitempty"`
+	// HeaderSecrets, through a gateway, fills a header from one of the
+	// tenant's secrets: header name to secret name. A plain sandboxd has no
+	// secrets and refuses it.
+	HeaderSecrets map[string]string `json:"header_secrets,omitempty"`
+}
+
+// MetricsExportStatus is a sandbox's metrics export, as GET reports it.
+type MetricsExportStatus struct {
+	Endpoint     string   `json:"endpoint"`
+	IntervalSecs int      `json:"interval_secs"`
+	HeaderNames  []string `json:"header_names,omitempty"`
+	// LastPushAt is the last push the endpoint accepted.
+	LastPushAt *time.Time `json:"last_push_at,omitempty"`
+	// LastError is why the last push failed — the endpoint's status, or the
+	// connection's failure — and FailingSince when the pushes began to
+	// fail; both absent once one succeeds.
+	LastError    string     `json:"last_error,omitempty"`
+	FailingSince *time.Time `json:"failing_since,omitempty"`
 }
 
 // RegistryLogin is a user name and a token for one registry.
@@ -287,6 +333,10 @@ type UpdateSandboxRequest struct {
 	// past ends it at once. At least 1, and at most limits.max_lifetime_secs
 	// where that is set. Through a gateway only an admin may lengthen it.
 	LifetimeSecs *int `json:"lifetime_secs,omitempty"`
+	// MetricsExport replaces the metrics export whole; an empty endpoint
+	// stops it. Headers not sent again are dropped, as their values are
+	// never shown to be sent back.
+	MetricsExport *MetricsExport `json:"metrics_export,omitempty"`
 }
 
 // Sandbox is a sandbox as the API reports it. Environment values are never
@@ -324,6 +374,8 @@ type Sandbox struct {
 	Snapshotting *SnapshotProgress `json:"snapshotting,omitempty"`
 	Labels       map[string]string `json:"labels,omitempty"`
 	Volumes      []VolumeMount     `json:"volumes,omitempty"`
+	// MetricsExport is where its usage is pushed, and how that is going.
+	MetricsExport *MetricsExportStatus `json:"metrics_export,omitempty"`
 }
 
 // Snapshot phases, in order.
@@ -386,6 +438,10 @@ type Event struct {
 	IdleAction string `json:"idle_action,omitempty"`
 	// LifetimeSecs is the lifetime after an update that changed it.
 	LifetimeSecs *int `json:"lifetime_secs,omitempty"`
+	// MetricsEndpoint is where the sandbox's usage is pushed, after a create
+	// or an update that set it; "none" after one that stopped it. Header
+	// values are never recorded.
+	MetricsEndpoint string `json:"metrics_endpoint,omitempty"`
 
 	PID int `json:"pid,omitempty"`
 	// A process is recorded by its program, its argument count and a hash

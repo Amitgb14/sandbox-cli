@@ -56,6 +56,31 @@ export interface Sandbox {
   snapshot_keep?: number;
   /** The snapshot being taken of it, while one is. */
   snapshotting?: SnapshotProgress;
+  /** Where its usage is pushed (capability metrics_export), and how that is going. */
+  metrics_export?: MetricsExportStatus;
+}
+
+/**
+ * A sandbox's usage pushed to the user's own OTLP/HTTP collector. Header
+ * values go in and never come back; through a gateway a header may name one
+ * of the user's secrets instead.
+ */
+export interface MetricsExport {
+  /** https on a public address; "" in an update stops the export. */
+  endpoint: string;
+  interval_secs?: number;
+  headers?: Record<string, string>;
+  header_secrets?: Record<string, string>;
+}
+
+export interface MetricsExportStatus {
+  endpoint: string;
+  interval_secs: number;
+  /** Names only: the values are never returned. */
+  header_names?: string[];
+  last_push_at?: string;
+  last_error?: string;
+  failing_since?: string;
 }
 
 /** How far a snapshot has got: what has been read, against an estimate where the backend has one. */
@@ -81,6 +106,8 @@ export interface Capabilities {
     /** The shortest snapshot schedule allowed, and the most scheduled snapshots kept. */
     min_snapshot_every_secs?: number;
     max_snapshot_keep?: number;
+    /** The shortest interval a metrics export may push at. */
+    min_metrics_export_secs?: number;
   };
   network: { default: NetworkPolicy; ceiling: NetworkMode; may_allow: string[] | null };
 }
@@ -281,6 +308,8 @@ export interface LaunchRequest {
   snapshot_keep?: number;
   /** "suspend": the idle timeout suspends it, and the next use resumes it. */
   idle_action?: "suspend";
+  /** Push the sandbox's usage to the user's collector. */
+  metrics_export?: MetricsExport;
 }
 
 export interface LaunchResult {

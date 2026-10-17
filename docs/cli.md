@@ -1583,6 +1583,10 @@ Flags:
 | `--label stringArray` |  | label the sandbox, key=value (repeatable); shown by list and recorded in its audit events |
 | `--lifetime duration` |  | terminate this long after it starts, busy or not, e.g. 30m (default: the server's limit, if it sets one; never longer) |
 | `--memory int` |  | memory in MiB |
+| `--metrics-export string` |  | push the sandbox's CPU, memory, network and disk to this OTLP/HTTP endpoint (your collector; https) |
+| `--metrics-export-every duration` |  | how often to push, e.g. 30s (default 60s; the server sets the shortest) |
+| `--metrics-export-header stringArray` |  | NAME=ENV: send header NAME with the value of the environment variable ENV, e.g. Authorization=OTEL_AUTH (repeatable) |
+| `--metrics-export-header-secret stringArray` |  | NAME=SECRET: through a gateway, send header NAME with the value of your secret SECRET (repeatable; sandbox-cli secret set) |
 | `--name string` |  | name the sandbox |
 | `--network string` |  | none, allowlist or open (default: the server's) |
 | `--no-baseline` |  | an allowlist of only the hosts named with --allow (and an agent's API), without the built-in agents' APIs and registries |
@@ -2139,6 +2143,9 @@ it: --allow and --allow-group add to the built-in hosts unless --no-baseline,
 and an agent's sandbox keeps its agent's API. Not every endpoint can change a
 running sandbox's network.
 
+--metrics-export sets where the sandbox's usage is pushed, replacing what was
+set, headers included; --metrics-export none stops it.
+
 vCPUs and memory are fixed while a VM runs.
 ```
 
@@ -2150,6 +2157,7 @@ sandbox-cli update api --label team=infra --label ticket-
 sandbox-cli update api --idle 2h
 sandbox-cli update api --idle 30m --on-idle suspend
 sandbox-cli update api --lifetime +15m
+OTEL_AUTH='Bearer …' sandbox-cli update api --metrics-export https://otlp.example.com --metrics-export-header Authorization=OTEL_AUTH
 sandbox-cli update api --network allowlist --allow proxy.golang.org --no-baseline
 sandbox-cli update api --network allowlist --allow-group go   # through a gateway
 ```
@@ -2165,6 +2173,10 @@ Flags:
 | `--idle duration` |  | terminate it after this long idle, e.g. 2h (0: never, where allowed) |
 | `--label stringArray` |  | set a label, key=value, or remove one, key- (repeatable) |
 | `--lifetime string` |  | when it ends, from its creation: 45m sets it, +15m or -10m moves its end |
+| `--metrics-export string` |  | push the sandbox's usage to this OTLP/HTTP endpoint, replacing any export; "none" stops it |
+| `--metrics-export-every duration` |  | how often to push, e.g. 30s (default 60s; the server sets the shortest) |
+| `--metrics-export-header stringArray` |  | NAME=ENV: send header NAME with the value of the environment variable ENV, e.g. Authorization=OTEL_AUTH (repeatable) |
+| `--metrics-export-header-secret stringArray` |  | NAME=SECRET: through a gateway, send header NAME with the value of your secret SECRET (repeatable; sandbox-cli secret set) |
 | `--name string` |  | rename it ("" removes the name) |
 | `--network string` |  | none, allowlist or open, applied to the running sandbox |
 | `--no-baseline` |  | with --network allowlist: only the hosts named, without the built-in ones |

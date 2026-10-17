@@ -71,6 +71,9 @@ func CombineCapabilities(sts []api.NodeStatus) api.Capabilities {
 		l.MaxCPUs = min(l.MaxCPUs, c.Limits.MaxCPUs)
 		l.MaxMemoryMB = min(l.MaxMemoryMB, c.Limits.MaxMemoryMB)
 		l.MaxDiskMB = min(l.MaxDiskMB, c.Limits.MaxDiskMB)
+		// The strictest node's: a request any node would refuse is refused
+		// up front, not on whichever node it lands.
+		l.MinMetricsExportSecs = max(l.MinMetricsExportSecs, c.Limits.MinMetricsExportSecs)
 		// 0 is "no bound": the bounded one is the stricter.
 		if l.MaxIdleTimeoutSecs == 0 || (c.Limits.MaxIdleTimeoutSecs > 0 && c.Limits.MaxIdleTimeoutSecs < l.MaxIdleTimeoutSecs) {
 			l.MaxIdleTimeoutSecs = c.Limits.MaxIdleTimeoutSecs
