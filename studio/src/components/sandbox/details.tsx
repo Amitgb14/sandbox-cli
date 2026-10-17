@@ -9,6 +9,7 @@ import { SandboxAgent } from "@/components/sandbox/agent";
 import { SandboxDesktop } from "@/components/sandbox/desktop";
 import { useRecordings } from "@/components/sandbox/recordings";
 import { SandboxEvents } from "@/components/sandbox/events";
+import { SandboxHistory } from "@/components/sandbox/history";
 import { SandboxFiles } from "@/components/sandbox/files";
 import { ProcessOutput } from "@/components/sandbox/output";
 import { SandboxOverview } from "@/components/sandbox/overview";
@@ -21,7 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMinWidth } from "@/hooks/use-min-width";
 import { useCan } from "@/lib/caller";
-import { SHELL_ARGV, useAgentOS, useAgentStates, useInfo, useKill, useOpenShell, useProcesses, useSandbox, useSnapshot, useSuspend } from "@/lib/api/queries";
+import { SHELL_ARGV, useAgentLog, useAgentOS, useAgentStates, useInfo, useKill, useOpenShell, useProcesses, useSandbox, useSnapshot, useSuspend } from "@/lib/api/queries";
 import type { Process } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -95,6 +96,8 @@ export function SandboxDetails({
   const { data: agentStates } = useAgentStates();
   // An agentos image says so in a manifest; only then is there an Agent tab.
   const { data: agentos } = useAgentOS(id, sb?.state === "running");
+  // Studio's own record of the agent's sessions, which outlives the VM.
+  const { data: agentLog } = useAgentLog(id);
   const caps = info?.capabilities?.capabilities ?? {};
   const can = useCan();
   const kill = useKill();
@@ -175,6 +178,7 @@ export function SandboxDetails({
       .catch((e: Error) => toast.error(e.message));
 
   // An agentos sandbox opens on its agent: that is what it is for.
+  const hasHistory = !!agentLog?.enabled && (agentLog.records.length > 0 || (sb.state === "running" && !!agentos));
   const fallback = sb.state === "running" && agentos ? "agent" : tty ? "terminal" : processes.length ? "output" : "events";
   const current = tab ?? (twoPane || fallback === "agent" ? fallback : tty ? "terminal" : "overview");
   const value = twoPane && current === "overview" ? fallback : current;
@@ -336,6 +340,7 @@ export function SandboxDetails({
               Desktop
             </TabsTrigger>
           )}
+          {hasHistory ? <TabsTrigger value="history">History</TabsTrigger> : null}
           <TabsTrigger value="output" disabled={processes.length === 0}>
             Logs
           </TabsTrigger>
@@ -387,6 +392,11 @@ export function SandboxDetails({
             <SandboxDesktop sandbox={id} image={sb.image} processes={processes} canStart={can("sandbox:create")} />
           </TabsContent>
         )}
+        {hasHistory ? (
+          <TabsContent value="history" className="mt-0 p-5">
+            <SandboxHistory sandbox={id} />
+          </TabsContent>
+        ) : null}
         <TabsContent value="output" className="mt-0 flex flex-col gap-3 p-5">
           <div className="flex flex-wrap gap-1.5">
             {processes.map((p) => (

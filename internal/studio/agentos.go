@@ -229,7 +229,7 @@ func (s *Server) acp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var argv []string
-	login := ""
+	login, image := "", ""
 	for _, a := range m.Agents {
 		if a.ID == agent {
 			argv, login = a.ACP, a.Login
@@ -238,6 +238,22 @@ func (s *Server) acp(w http.ResponseWriter, r *http.Request) {
 	if argv == nil {
 		writeErr(w, http.StatusNotFound, fmt.Sprintf("no agent %q in %s", agent, AgentOSManifest))
 		return
+	}
+	// The record names the sandbox by id, which the log is read by; a
+	// sandbox that cannot be looked up cannot start an agent either.
+	var rec *acpRecorder
+	if s.AgentLog != nil {
+		sb, err := c.Sandbox(ctx, ref)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		base := AgentRecord{Sandbox: sb.ID, Name: sb.Name, Agent: agent, Org: orgOf(r)}
+		if sess := sessionFrom(r.Context()); sess != nil {
+			base.User = sess.who.User
+		}
+		rec = newACPRecorder(s.AgentLog, base)
+		image = sb.Image
 	}
 	keepACPLogin(ctx, c, ref, login)
 	proc, err := c.StartProcess(ctx, ref, api.RunRequest{Argv: argv, Cwd: agentosCwd})
@@ -266,6 +282,10 @@ func (s *Server) acp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer stream.Close()
+	rec.Start(image)
+	// Without an exit code, the page left (or the stream broke) first.
+	var exit *int
+	defer func() { rec.End(exit) }()
 	ws, err := upgradeWebSocket(w, r)
 	if err != nil {
 		_ = stream.CloseStdin()
@@ -280,6 +300,7 @@ func (s *Server) acp(w http.ResponseWriter, r *http.Request) {
 	go ws.readLoop(func(_ byte, payload []byte) {
 		line, ok := acpLine(payload)
 		if ok {
+			rec.Page(line)
 			_, _ = stream.Write(line)
 		}
 	}, func() {
@@ -294,6 +315,7 @@ func (s *Server) acp(w http.ResponseWriter, r *http.Request) {
 	stdout := &acpLines{
 		send: func(line []byte) error {
 			if line[0] == '{' && json.Valid(line) {
+				rec.Agent(line)
 				return ws.writeFrame(wsOpText, acpEnvelope(line))
 			}
 			// Not protocol: an agent that prints to stdout. Shown as a log
@@ -320,6 +342,7 @@ func (s *Server) acp(w http.ResponseWriter, r *http.Request) {
 	})
 	if code, err := stream.Copy(stdout, stderr); err == nil {
 		stdout.flush()
+		exit = &code
 		_ = ws.writeJSON(map[string]any{"type": "exit", "code": code})
 	}
 }

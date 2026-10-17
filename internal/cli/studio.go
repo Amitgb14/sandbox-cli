@@ -15,14 +15,16 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/studio"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
 )
 
 func newStudioCmd() *cobra.Command {
-	var ctxFlag, uiDir string
+	var ctxFlag, uiDir, agentLog string
 	var port int
 	cmd := &cobra.Command{
 		Use:   "studio",
@@ -49,6 +51,9 @@ func newStudioCmd() *cobra.Command {
 				Logf: func(format string, a ...any) {
 					fmt.Fprintf(os.Stderr, "studio: "+format+"\n", a...)
 				},
+			}
+			if agentLog != "none" {
+				srv.AgentLog = audit.NewLog(agentLog)
 			}
 			if uiDir != "" {
 				// A UI built from source, served from disk: how Studio's
@@ -81,6 +86,8 @@ func newStudioCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd Studio talks to")
 	cmd.Flags().IntVar(&port, "port", 7080, "loopback port to serve on (0: any free one)")
+	cmd.Flags().StringVar(&agentLog, "agent-log", filepath.Join(agenthome.ConfigDir(), "studio", "agent-log.jsonl"),
+		"where to record what agentos sessions do (prompts, tool calls, answers), as JSONL; none keeps no record")
 	cmd.Flags().StringVar(&uiDir, "ui-dir", "", "serve the UI from this directory instead of the one built in (studio/out, when working on it)")
 	cmd.AddCommand(newStudioHostCmd())
 	return cmd

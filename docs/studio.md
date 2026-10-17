@@ -82,6 +82,57 @@ and passes only JSON messages on, and the page shows them as text — images
 only as PNG, JPEG or WebP. The page offers the agent no files or terminals of
 its own: it works with the sandbox's.
 
+### The History tab: what the agent did
+
+Studio's server records each session from the messages it relays, one JSON
+line per thing done, and the sandbox's **History** tab shows them by
+session, newest first. The record outlives the VM: an ended sandbox keeps
+its History tab for as long as sandboxd still lists it (it keeps the newest
+100 ended sandboxes), and the file keeps the records after that, for `jq`.
+
+| Record | What it holds |
+| --- | --- |
+| `session.start` | the agent, the image |
+| `prompt` | what was asked (images counted, not kept) |
+| `tool` | one line per tool call once it finishes: title, kind, status (`completed`, `failed`, or `unfinished` when the session ended first), when it started, its arguments and its result |
+| `permission` | what the agent asked to run and the option chosen, or `unanswered` |
+| `mode`, `cancel` | a mode asked for; a turn stopped from the page |
+| `turn.end` | why the turn ended, and the agent's reply |
+| `limit` | the session wrote 4 MiB of records: from here only its end is kept |
+| `session.end` | the agent's exit code, or `closed` when the page left first; `dropped`, how many records the limit cost |
+
+Every record names the sandbox by id and by its name then, the session and
+the agent; hosted, also the signed-in user and the organisation.
+
+```sh
+jq -c 'select(.name == "os" and .type == "tool") | [.time, .title, .status]' \
+  ~/.config/sandbox/studio/agent-log.jsonl
+```
+
+- **Where.** `sandbox-cli studio --agent-log FILE`, by default
+  `~/.config/sandbox/studio/agent-log.jsonl`; `--agent-log none` keeps none,
+  and the History tab says so. `sandbox-cli studio host` keeps none unless
+  given `--agent-log FILE`: a hosted Studio otherwise writes nothing on its
+  machine, and this would be its users' sessions.
+- **How much.** Each text field is cut at 4 KiB (`truncated` says so) and
+  images are never written. The file is 0600 and rotates as the audit log
+  does: at 8 MiB, keeping five old generations. One session writes at most
+  4 MiB, so an agent that floods tool calls cannot rotate other sandboxes'
+  history away. A read returns the newest 2,000 records of the sandbox.
+- **Who reads it.** `GET /api/agent-log?sandbox=` looks the sandbox up with
+  the caller's own credentials first and returns only that sandbox id's
+  records, so a hosted user sees the sessions of sandboxes the gateway lets
+  them see, and a name used again later starts with no history.
+- **What it can be trusted for.** It is written on Studio's machine, so
+  nothing in the sandbox can change it afterwards; it says what the agent
+  *reported*, not what the guest did (a tool's title and result are the
+  agent's account). sandboxd's events (the Events tab) are the guest's side.
+  It is best-effort, as the audit log is: a session is not refused because
+  its record could not be written. Treat it as sensitive: a tool call's
+  arguments are where a token the agent handled would show.
+- Only sessions through Studio are recorded; an editor that speaks ACP to
+  `agentos-acp` directly (`sandbox-cli exec … -- agentos-acp`) is not.
+
 ## A plain sandboxd, or a gateway
 
 On load Studio asks `GET /v1/whoami`. A plain `sandboxd` answers 404 and

@@ -17,6 +17,7 @@ import (
 	"github.com/Amitgb14/sandbox-cli/internal/agenthome"
 	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
 	"github.com/Amitgb14/sandbox-cli/internal/studio"
 	"github.com/Amitgb14/sandbox-cli/internal/version"
@@ -24,10 +25,10 @@ import (
 
 func newStudioHostCmd() *cobra.Command {
 	var (
-		gateway, publicURL, caFile, listen, tlsCert, tlsKey, uiDir string
-		allowedHosts                                               []string
-		idle, maxAge                                               time.Duration
-		allowAdmin                                                 bool
+		gateway, publicURL, caFile, listen, tlsCert, tlsKey, uiDir, agentLog string
+		allowedHosts                                                         []string
+		idle, maxAge                                                         time.Duration
+		allowAdmin                                                           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "host",
@@ -44,7 +45,9 @@ func newStudioHostCmd() *cobra.Command {
 			"gets the admin screens (users and keys, policies, nodes, audit), and their\n" +
 			"session ends after an hour unused or twelve hours in all.\n\n" +
 			"Sessions are kept in memory: a restart signs everyone out, and they open their\n" +
-			"invite link again.",
+			"invite link again.\n\n" +
+			"--agent-log FILE records what each user's agentos sessions do (prompts, tool\n" +
+			"calls, answers) on this machine; without it nothing is kept.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if gateway == "" || publicURL == "" {
@@ -89,6 +92,10 @@ func newStudioHostCmd() *cobra.Command {
 				Logf: func(format string, a ...any) {
 					fmt.Fprintf(os.Stderr, "studio: "+format+"\n", a...)
 				},
+				AgentLog: audit.NewLog(agentLog),
+			}
+			if agentLog == "none" {
+				srv.AgentLog = nil
 			}
 			if uiDir != "" {
 				if _, err := os.Stat(filepath.Join(uiDir, "index.html")); err != nil {
@@ -131,6 +138,7 @@ func newStudioHostCmd() *cobra.Command {
 	f.StringVar(&tlsCert, "tls-cert", "", "TLS certificate (PEM)")
 	f.StringVar(&tlsKey, "tls-key", "", "TLS private key (PEM)")
 	f.StringArrayVar(&allowedHosts, "allowed-host", nil, "a further Host header to answer, for a proxy that rewrites it (repeatable)")
+	f.StringVar(&agentLog, "agent-log", "", "record what users' agentos sessions do (prompts, tool calls, answers) in this JSONL file; none by default")
 	f.StringVar(&uiDir, "ui-dir", "", "serve the UI from this directory (studio/out-hosted, from make studio-hosted)")
 	f.DurationVar(&idle, "session-idle", 12*time.Hour, "end a session not used for this long")
 	f.DurationVar(&maxAge, "session-max-age", 7*24*time.Hour, "end a session this long after sign-in")

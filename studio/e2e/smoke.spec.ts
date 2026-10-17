@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
 
-const { token } = JSON.parse(readFileSync(join(__dirname, ".state.json"), "utf8")) as { token: string };
+const { token, dir } = JSON.parse(readFileSync(join(__dirname, ".state.json"), "utf8")) as { token: string; dir: string };
 const ROUTES = ["/", "/sandboxes/", "/launch/", "/snapshots/", "/agents/", "/templates/", "/volumes/", "/images/", "/settings/"];
 
 test("every screen renders with no console errors", async ({ page }) => {
@@ -266,6 +266,63 @@ test("an agentos sandbox opens on its Agent tab, and one without a manifest has 
 
   await api(`/v1/sandboxes/${plain.id}`, "DELETE");
   await api(`/v1/sandboxes/${os.id}`, "DELETE");
+});
+
+test("the History tab shows what a sandbox's agent sessions did, and stays after the sandbox ends", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown, headers: Record<string, string> = {}) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}`, ...headers } });
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "history-box" })).json();
+  const other = await (await api("/v1/sandboxes", "POST", { name: "history-other" })).json();
+
+  // What the ACP bridge writes for a session (internal/studio/agentlog.go),
+  // in the log the e2e Studio keeps under its XDG_CONFIG_HOME. The fake
+  // backend cannot run an agent, so the records are written as it would.
+  const log = join(dir, "cfg", "sandbox", "studio", "agent-log.jsonl");
+  mkdirSync(dirname(log), { recursive: true });
+  const at = (s: number) => new Date(Date.UTC(2026, 9, 17, 9, 0, s)).toISOString();
+  const base = { sandbox: sb.id, name: "history-box", session: "s1", agent: "claude" };
+  const recs = [
+    { ...base, time: at(0), type: "session.start", image: "ghcr.io/x/sandbox-agentos:edge" },
+    { ...base, time: at(1), type: "prompt", text: "open example.com and save a screenshot" },
+    { ...base, time: at(2), type: "tool", tool_id: "t1", title: "browser_navigate", kind: "fetch", status: "completed", started: at(1), input: '{"url":"https://example.com"}', output: "Example Domain" },
+    { ...base, time: at(3), type: "permission", title: "rm -rf ~/agentos-output", status: "selected", option: "Reject", option_kind: "reject_once" },
+    { ...base, time: at(4), type: "tool", tool_id: "t2", title: "screenshot", status: "completed", started: at(3), images: 1 },
+    { ...base, time: at(5), type: "turn.end", stop_reason: "end_turn", text: "Saved it to ~/agentos-output/example.png." },
+    { ...base, time: at(6), type: "session.end", code: 0 },
+    { ...base, sandbox: other.id, name: "history-other", session: "s2", time: at(7), type: "prompt", text: "someone else's prompt" },
+  ];
+  appendFileSync(log, recs.map((r) => JSON.stringify(r) + "\n").join(""), { mode: 0o600 });
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  await page.getByRole("row").filter({ hasText: "history-box" }).getByText("history-box").click();
+  const panel = page.getByRole("dialog");
+  await panel.getByRole("tab", { name: "History" }).click();
+  await expect(panel.getByText("open example.com and save a screenshot")).toBeVisible();
+  await expect(panel.getByText("ended, exit 0")).toBeVisible();
+  await expect(panel.getByText("Reject")).toBeVisible();
+  await expect(panel.getByText("Saved it to ~/agentos-output/example.png.")).toBeVisible();
+  await expect(panel.getByText("someone else's prompt")).toHaveCount(0);
+  // A tool call opens to its arguments and result.
+  await panel.getByRole("button", { name: /browser_navigate/ }).click();
+  await expect(panel.getByText('{"url":"https://example.com"}')).toBeVisible();
+  await expect(panel.getByText("Example Domain")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Each sandbox's History is its own.
+  await page.getByRole("row").filter({ hasText: "history-other" }).getByText("history-other").click();
+  const second = page.getByRole("dialog");
+  await second.getByRole("tab", { name: "History" }).click();
+  await expect(second.getByText("someone else's prompt")).toBeVisible();
+  await expect(second.getByText("open example.com and save a screenshot")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // Ended, the sandbox's record is still there.
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
+  const after = await (await api(`/agent-log?sandbox=${sb.id}`)).json();
+  expect(after.records.map((r: { type: string }) => r.type)).toEqual(["session.start", "prompt", "tool", "permission", "tool", "turn.end", "session.end"]);
+  await api(`/v1/sandboxes/${other.id}`, "DELETE");
 });
 
 test("an agent's config options, as OpenCode sends its mode and model, are menus that set them", async ({ page, request }) => {

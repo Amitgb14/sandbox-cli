@@ -140,6 +140,16 @@ in `_old/` as reference, to be ported where this design still wants it.
   Agent Client Protocol (`/api/ws/acp`): stdout only, one JSON-RPC message a
   line, its stderr apart as a log. The manifest is checked, as anything from
   the guest is; a sandbox without one has no Agent tab.
+- **Studio keeps a record of what each agentos session did.** The ACP bridge
+  writes every prompt, tool call (arguments, result, status), question and
+  answer, mode change and how the session ended to
+  `~/.config/sandbox/studio/agent-log.jsonl`, and the sandbox's new
+  **History** tab shows it, after the sandbox ends too
+  (`GET /api/agent-log`). It is written 0600 and rotated as the audit log is;
+  text is cut at 4 KiB a field, images are only counted, and one session
+  writes at most 4 MiB. `sandbox-cli
+  studio --agent-log none` keeps none; `sandbox-cli studio host` keeps none
+  unless given `--agent-log FILE`.
 - **A config key this version does not read is refused,** naming what
   replaced it (`security:` → the VM boundary and sandboxd's policy, `mounts:` and
   `cache:` → a volume, …), and so is a typo. A beta.15

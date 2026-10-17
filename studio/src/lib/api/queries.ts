@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, apiFetch } from "@/lib/api/client";
 import type {
   Agent,
+  AgentLog,
   AgentOS,
   AgentState,
   AuditEvent,
@@ -386,6 +387,21 @@ export function useDesktops(sandbox: string, enabled: boolean) {
  * An agentos sandbox's manifest (GET /api/agentos), or null for a sandbox
  * without one: what decides whether its Agent tab is shown.
  */
+/**
+ * The sandbox's agent log: what its agentos sessions did, as Studio recorded
+ * them. It outlives the sandbox, so it is asked for whatever the state.
+ */
+export function useAgentLog(sandbox: string, refetch = false) {
+  return useQuery({
+    queryKey: ["agent-log", sandbox],
+    queryFn: () => apiFetch<AgentLog>(`/agent-log?sandbox=${encodeURIComponent(sandbox)}`),
+    enabled: !!sandbox,
+    retry: false,
+    refetchInterval: refetch ? 5_000 : false,
+    refetchOnWindowFocus: false,
+  });
+}
+
 export function useAgentOS(sandbox: string, enabled: boolean) {
   return useQuery({
     queryKey: ["agentos", sandbox],

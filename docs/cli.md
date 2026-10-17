@@ -2011,6 +2011,7 @@ Flags:
 
 | Flag | Default | |
 |---|---|---|
+| `--agent-log string` | `~/.config/sandbox/studio/agent-log.jsonl` | where to record what agentos sessions do (prompts, tool calls, answers), as JSONL; none keeps no record |
 | `--context string` |  | which sandboxd Studio talks to |
 | `--port int` | `7080` | loopback port to serve on (0: any free one) |
 | `--ui-dir string` |  | serve the UI from this directory instead of the one built in (studio/out, when working on it) |
@@ -2040,12 +2041,16 @@ session ends after an hour unused or twelve hours in all.
 
 Sessions are kept in memory: a restart signs everyone out, and they open their
 invite link again.
+
+--agent-log FILE records what each user's agentos sessions do (prompts, tool
+calls, answers) on this machine; without it nothing is kept.
 ```
 
 Flags:
 
 | Flag | Default | |
 |---|---|---|
+| `--agent-log string` |  | record what users' agentos sessions do (prompts, tool calls, answers) in this JSONL file; none by default |
 | `--allow-admin` |  | let admin keys sign in and manage the gateway from here (sessions of at most 1h idle, 12h in all) |
 | `--allowed-host stringArray` |  | a further Host header to answer, for a proxy that rewrites it (repeatable) |
 | `--ca string` |  | CA (PEM) the gateway's certificate is signed by, for a private CA |
