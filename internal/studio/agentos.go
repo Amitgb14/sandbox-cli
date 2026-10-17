@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Amitgb14/sandbox-cli/internal/agents"
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
 
@@ -116,6 +117,23 @@ func parseAgentOS(data []byte) (AgentOS, error) {
 	return m, nil
 }
 
+// keepACPLogin asks the gateway to copy the user's kept login for the agent
+// into the sandbox before the agent starts, as an agent console does. A
+// sandbox started some other way than sandbox-cli agent — by a bot, from an
+// image — had no login in it, and the tab's first task answered
+// "Authentication required" though the gateway held one. The gateway copies
+// only the caller's own login, into the caller's own sandbox, and saves it
+// back as it is refreshed. The name comes from the guest's manifest, so only
+// an agent this side knows to have login files is asked for. Anything that
+// fails — a node with no logins, none kept — leaves the agent to ask, as
+// before: the login is a convenience, not a control.
+func keepACPLogin(ctx context.Context, c *api.Client, ref, login string) {
+	if d, ok := agents.Lookup(login); !ok || len(d.AuthPaths) == 0 {
+		return
+	}
+	_, _ = c.KeepAgentLogin(ctx, ref, login)
+}
+
 func argvOK(argv []string) bool {
 	if len(argv) == 0 || len(argv) > 16 || argv[0] == "" {
 		return false
@@ -211,15 +229,17 @@ func (s *Server) acp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var argv []string
+	login := ""
 	for _, a := range m.Agents {
 		if a.ID == agent {
-			argv = a.ACP
+			argv, login = a.ACP, a.Login
 		}
 	}
 	if argv == nil {
 		writeErr(w, http.StatusNotFound, fmt.Sprintf("no agent %q in %s", agent, AgentOSManifest))
 		return
 	}
+	keepACPLogin(ctx, c, ref, login)
 	proc, err := c.StartProcess(ctx, ref, api.RunRequest{Argv: argv, Cwd: agentosCwd})
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())

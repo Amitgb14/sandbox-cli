@@ -48,8 +48,12 @@ offers, the command that speaks ACP for each, its desktop and where the agent
 saves files. Studio reads that file, never the image's name, and shows the
 **Agent** tab only for a running sandbox that has one; the tab opens first.
 
-Start the sandbox with the agent's login, the way the CLI does, then use the
-tab:
+The agent needs its login in the sandbox. On a gateway that keeps yours
+([agent logins](api/v1.md#agent-logins)), **Start** has the gateway copy it in
+first, as an agent console does, so a sandbox a bot or a script started works
+too; the login named is the manifest's `login`, and only for an agent this
+side knows to keep login files. Otherwise start the sandbox with the agent's
+login, the way the CLI does:
 
 ```sh
 sandbox-cli agent claude --image ghcr.io/<owner>/sandbox-agentos:edge \
