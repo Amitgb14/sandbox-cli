@@ -10,6 +10,15 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **The Agent tab draws the agent's replies as Markdown.** Tables, lists,
+  bold and code showed as their source — rows of pipes, words in stars. HTML
+  in a reply stays text, a link opens only to a web or mail address, and an
+  image in a reply shows as its alt text rather than being fetched from
+  wherever the agent pointed.
+- **The Agent tab draws the agent's replies as Markdown.** Tables, lists,
+  bold and code showed as their source — rows of pipes, words in stars. HTML
+  in a reply stays text, and an image in one shows as its alt text rather
+  than being fetched from wherever the agent pointed.
 - **The Agent tab starts logged in where the gateway keeps your login.**
   Start now has the gateway copy your kept login for the agent into the
   sandbox first, as an agent console does. A sandbox started by a bot or a

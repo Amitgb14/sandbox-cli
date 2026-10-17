@@ -345,6 +345,73 @@ test("an agent's config options, as OpenCode sends its mode and model, are menus
   await api(`/v1/sandboxes/${sb.id}`, "DELETE");
 });
 
+test("an agent's reply is drawn as Markdown, and its HTML, script links and images are not", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown, headers: Record<string, string> = {}) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}`, ...headers } });
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "markdown-box" })).json();
+  const manifest = { contract: 1, agents: [{ id: "claude", name: "Claude Code", acp: ["agentos-acp"], login: "claude" }] };
+  const put = await api(`/v1/sandboxes/${sb.id}/files?path=/etc/agentos/manifest.json`, "PUT", JSON.stringify(manifest), {
+    "Content-Type": "application/octet-stream",
+  });
+  expect(put.ok()).toBeTruthy();
+
+  // Sent in pieces, as an agent streams a reply, split mid-table.
+  const reply = [
+    "**Fri Oct 23** fares:\n\n| Price | Airline |\n|---|---|\n| **$254** | Frontier |\n",
+    "| $288 | Frontier |\n\n- carry-on extra\n- `prices change`\n\n",
+    '<b>raw</b> [click](javascript:alert(1)) [docs](https://example.com/) ![beacon](https://tracker.example/p.png)',
+  ];
+  const fetched: string[] = [];
+  await page.route("https://tracker.example/**", (r) => {
+    fetched.push(r.request().url());
+    return r.abort();
+  });
+  await page.routeWebSocket(/\/api\/ws\/acp/, (ws) => {
+    const send = (message: Record<string, unknown>) => ws.send(JSON.stringify({ type: "rpc", message: { jsonrpc: "2.0", ...message } }));
+    ws.onMessage((raw) => {
+      const m = JSON.parse(String(raw)).message;
+      if (m.method === "initialize") send({ id: m.id, result: { protocolVersion: 1 } });
+      else if (m.method === "session/new") send({ id: m.id, result: { sessionId: "ses_1" } });
+      else if (m.method === "session/prompt") {
+        for (const text of reply)
+          send({
+            method: "session/update",
+            params: { sessionId: "ses_1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } },
+          });
+        send({ id: m.id, result: { stopReason: "end_turn" } });
+      }
+    });
+  });
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  await page.getByRole("row").filter({ hasText: "markdown-box" }).getByText("markdown-box").click();
+  const panel = page.getByRole("dialog");
+  await panel.getByRole("button", { name: "Start Claude Code" }).click();
+  await panel.getByPlaceholder("A task for the agent").fill("find flights");
+  await panel.getByRole("button", { name: "Send" }).click();
+
+  const agent = panel.getByRole("tabpanel", { name: "Agent" });
+  const table = agent.getByRole("table");
+  await expect(table.getByRole("columnheader")).toHaveText(["Price", "Airline"]);
+  await expect(table.getByRole("row")).toHaveCount(3);
+  await expect(table.locator("strong")).toHaveText("$254");
+  await expect(agent.getByText("**", { exact: false })).toHaveCount(0);
+  await expect(agent.getByRole("listitem")).toHaveText(["carry-on extra", "prices change"]);
+  // The guest's HTML stays text, its script link goes nowhere, and its image
+  // is never fetched.
+  await expect(agent.locator("b")).toHaveCount(0);
+  await expect(agent.getByText("<b>raw</b>")).toBeVisible();
+  await expect(agent.locator('a[href^="javascript"]')).toHaveCount(0);
+  await expect(agent.getByRole("link", { name: "docs" })).toHaveAttribute("rel", "noopener noreferrer nofollow");
+  await expect(agent.locator("img")).toHaveCount(0);
+  await expect(agent.getByText("[image: beacon]")).toBeVisible();
+  expect(fetched).toEqual([]);
+
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
+});
+
 test("a snapshot being taken shows how far it has got, in the panel and the list", async ({ page, request }) => {
   const api = (path: string, method = "GET", data?: unknown) =>
     request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });

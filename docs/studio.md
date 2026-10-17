@@ -78,8 +78,11 @@ and the sandbox needs a network that reaches them. Leaving the tab keeps the
 session, so the Desktop tab shows the agent at work; closing the page ends it.
 
 What the agent sends is the guest's: the server checks the manifest's fields
-and passes only JSON messages on, and the page shows them as text — images
-only as PNG, JPEG or WebP. The page offers the agent no files or terminals of
+and passes only JSON messages on. The page draws the agent's replies as
+Markdown — tables, lists, emphasis, code — and nothing more: HTML in a reply
+stays text, a link opens only to a web or mail address, in a new tab, and an
+image in a reply is shown as its alt text, never fetched. The images it shows
+are what the agent saw, from its tool calls, and only as PNG, JPEG or WebP. The page offers the agent no files or terminals of
 its own: it works with the sandbox's.
 
 ## A plain sandboxd, or a gateway
