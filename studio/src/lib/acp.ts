@@ -29,6 +29,20 @@ export interface AcpMode {
   description?: string;
 }
 
+/**
+ * One of a session's settings, as the agent offers it in ACP's session config
+ * options: a mode, a model, a reasoning level. Only selects are shown; a kind
+ * this client does not know is left out.
+ */
+export interface AcpConfigOption {
+  id: string;
+  name: string;
+  category?: string;
+  description?: string;
+  value: string;
+  choices: AcpMode[];
+}
+
 export interface AcpPlanEntry {
   content: string;
   status: string;
@@ -71,6 +85,8 @@ export interface AcpSession {
   agentName?: string;
   modes: AcpMode[];
   mode?: string;
+  /** The session's config options; an agent that sends them (OpenCode does) has its mode among them, not in modes. */
+  options: AcpConfigOption[];
   entries: AcpEntry[];
   plan: AcpPlanEntry[];
   permissions: AcpPermission[];
@@ -106,6 +122,34 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const SAFE_IMAGE = /^image\/(png|jpeg|webp)$/;
+
+/**
+ * A session's config options, from session/new, a set, or an update. Grouped
+ * choices are flattened; an option with nothing to choose from, or whose
+ * current value is not one of its choices, is left out rather than shown
+ * wrong.
+ */
+function configOptionsOf(v: unknown): AcpConfigOption[] {
+  return arr(v)
+    .map(obj)
+    .filter((o) => o.type === "select" && str(o.id))
+    .map((o) => {
+      const choices = arr(o.options)
+        .map(obj)
+        .flatMap((c) => (c.options === undefined ? [c] : arr(c.options).map(obj)))
+        .map((c) => ({ id: str(c.value), name: str(c.name) || str(c.value), description: str(c.description) || undefined }))
+        .filter((c) => c.id);
+      return {
+        id: str(o.id),
+        name: str(o.name) || str(o.id),
+        category: str(o.category) || undefined,
+        description: str(o.description) || undefined,
+        value: str(o.currentValue),
+        choices,
+      };
+    })
+    .filter((o) => o.choices.some((c) => c.id === o.value));
+}
 
 /** Text and images out of ACP content blocks, and the tool-call content that wraps them. */
 function contentOf(blocks: unknown): { text: string[]; images: string[] } {
@@ -194,6 +238,7 @@ class Conn {
           .map((m) => ({ id: str(m.id), name: str(m.name) || str(m.id), description: str(m.description) || undefined }))
           .filter((m) => m.id),
         mode: str(modes.currentModeId) || undefined,
+        options: configOptionsOf(sess.configOptions),
       }));
     } catch (e) {
       this.end((e as Error).message);
@@ -305,6 +350,9 @@ class Conn {
       case "current_mode_update":
         this.patch(() => ({ mode: str(u.currentModeId) || undefined }));
         return;
+      case "config_option_update":
+        this.patch(() => ({ options: configOptionsOf(u.configOptions) }));
+        return;
     }
   }
 
@@ -329,7 +377,7 @@ export function startSession(sandbox: string, agent: string) {
   useAcp.setState((st) => ({
     sessions: {
       ...st.sessions,
-      [sandbox]: { sandbox, agent, status: "connecting", modes: [], entries: [], plan: [], permissions: [], busy: false, log: [] },
+      [sandbox]: { sandbox, agent, status: "connecting", modes: [], options: [], entries: [], plan: [], permissions: [], busy: false, log: [] },
     },
   }));
   conns.set(sandbox, new Conn(sandbox, agent));
@@ -376,6 +424,21 @@ export async function setMode(sandbox: string, mode: string) {
   if (!c || !s?.sessionId) return;
   await c.request("session/set_mode", { sessionId: s.sessionId, modeId: mode });
   useAcp.getState().patch(sandbox, () => ({ mode }));
+}
+
+/**
+ * Sets one of the session's config options. The agent answers with all of
+ * them, since one choice can change the others (a model's reasoning levels).
+ */
+export async function setOption(sandbox: string, id: string, value: string) {
+  const c = conns.get(sandbox);
+  const s = useAcp.getState().sessions[sandbox];
+  if (!c || !s?.sessionId) return;
+  const res = obj(await c.request("session/set_config_option", { sessionId: s.sessionId, configId: id, value }));
+  const options = configOptionsOf(res.configOptions);
+  useAcp
+    .getState()
+    .patch(sandbox, (cur) => ({ options: options.length ? options : cur.options.map((o) => (o.id === id ? { ...o, value } : o)) }));
 }
 
 /** Answers a permission request with one of its options, or cancels it (optionId null). */

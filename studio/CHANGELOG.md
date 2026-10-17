@@ -10,6 +10,11 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **The Agent tab shows OpenCode's settings.** OpenCode sends its mode
+  (`build` or `plan`), model and reasoning level as ACP config options rather
+  than as modes, so the tab showed it no menus at all. Each is now a menu,
+  set with `session/set_config_option`, and the agent's own changes to them
+  show as they come.
 - **An Agent tab for agentos sandboxes**: a prompt, the agent's plan and tool
   calls (with what it saw), its questions to answer, its mode, Stop, and its
   log. Moving to the Desktop tab to watch it does not end the session. See

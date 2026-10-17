@@ -268,6 +268,83 @@ test("an agentos sandbox opens on its Agent tab, and one without a manifest has 
   await api(`/v1/sandboxes/${os.id}`, "DELETE");
 });
 
+test("an agent's config options, as OpenCode sends its mode and model, are menus that set them", async ({ page, request }) => {
+  const api = (path: string, method = "GET", data?: unknown, headers: Record<string, string> = {}) =>
+    request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}`, ...headers } });
+  const sb = await (await api("/v1/sandboxes", "POST", { name: "opencode-box" })).json();
+  const manifest = { contract: 1, agents: [{ id: "opencode", name: "OpenCode", acp: ["opencode", "acp"], login: "opencode" }] };
+  const put = await api(`/v1/sandboxes/${sb.id}/files?path=/etc/agentos/manifest.json`, "PUT", JSON.stringify(manifest), {
+    "Content-Type": "application/octet-stream",
+  });
+  expect(put.ok()).toBeTruthy();
+
+  // The agent's side of the bridge, as `opencode acp` 1.19 answers: no
+  // "modes", its mode and model as config options instead.
+  const options = (mode: string, model: string) => [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: model,
+      options: [
+        { value: "opencode/big-pickle", name: "OpenCode Zen/Big Pickle" },
+        { value: "opencode/exo-free", name: "OpenCode Zen/Exo Free" },
+      ],
+    },
+    {
+      id: "mode",
+      name: "Session Mode",
+      category: "mode",
+      type: "select",
+      currentValue: mode,
+      options: [
+        { value: "build", name: "build", description: "The default agent." },
+        { value: "plan", name: "plan", description: "Plan mode. Disallows all edit tools." },
+      ],
+    },
+  ];
+  const sets: unknown[] = [];
+  await page.routeWebSocket(/\/api\/ws\/acp/, (ws) => {
+    const reply = (message: Record<string, unknown>) => ws.send(JSON.stringify({ type: "rpc", message: { jsonrpc: "2.0", ...message } }));
+    let mode = "build";
+    ws.onMessage((raw) => {
+      const m = JSON.parse(String(raw)).message;
+      if (m.method === "initialize") reply({ id: m.id, result: { protocolVersion: 1, agentInfo: { name: "OpenCode", version: "1.19.0" } } });
+      else if (m.method === "session/new") reply({ id: m.id, result: { sessionId: "ses_1", configOptions: options(mode, "opencode/big-pickle") } });
+      else if (m.method === "session/set_config_option") {
+        sets.push(m.params);
+        mode = m.params.value;
+        reply({ id: m.id, result: { configOptions: options(mode, "opencode/big-pickle") } });
+        // The agent may change one itself, and says so.
+        reply({ method: "session/update", params: { sessionId: "ses_1", update: { sessionUpdate: "config_option_update", configOptions: options(mode, "opencode/exo-free") } } });
+      }
+    });
+  });
+
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/sandboxes/");
+  await page.getByRole("row").filter({ hasText: "opencode-box" }).getByText("opencode-box").click();
+  const panel = page.getByRole("dialog");
+  await expect(panel.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
+  await panel.getByRole("button", { name: "Start OpenCode" }).click();
+  const mode = panel.getByRole("combobox", { name: "Session Mode" });
+  const model = panel.getByRole("combobox", { name: "Model" });
+  await expect(mode).toHaveText("build");
+  await expect(model).toHaveText("OpenCode Zen/Big Pickle");
+  // The mode is a config option here, so there is no second menu for it.
+  await expect(panel.getByRole("combobox", { name: "Mode", exact: true })).toHaveCount(0);
+
+  await mode.click();
+  await page.getByRole("option", { name: "plan" }).click();
+  await expect(mode).toHaveText("plan");
+  expect(sets).toEqual([{ sessionId: "ses_1", configId: "mode", value: "plan" }]);
+  await expect(model).toHaveText("OpenCode Zen/Exo Free");
+
+  await api(`/v1/sandboxes/${sb.id}`, "DELETE");
+});
+
 test("a snapshot being taken shows how far it has got, in the panel and the list", async ({ page, request }) => {
   const api = (path: string, method = "GET", data?: unknown) =>
     request.fetch(`/api${path}`, { method, data, headers: { Authorization: `Bearer ${token}` } });

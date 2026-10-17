@@ -5,7 +5,8 @@ import { Bot, ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleX, Loa
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { answerPermission, cancelTurn, clearSession, endSession, sendPrompt, setMode, startSession, useAcp } from "@/lib/acp";
+import { toast } from "sonner";
+import { answerPermission, cancelTurn, clearSession, endSession, sendPrompt, setMode, setOption, startSession, useAcp } from "@/lib/acp";
 import type { AcpEntry, AcpSession, AcpToolCall } from "@/lib/acp";
 import type { AgentOS } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -166,8 +167,28 @@ export function SandboxAgent({ sandbox, image, manifest, canStart }: { sandbox: 
           {s.status === "connecting" ? "starting…" : s.status === "ready" ? (s.busy ? "working" : "ready") : s.status === "failed" ? "failed" : "ended"}
         </span>
         <div className="ml-auto flex items-center gap-1.5">
-          {s.modes.length > 0 && s.status === "ready" && (
-            <Select value={s.mode} onValueChange={(m) => void setMode(sandbox, m).catch(() => undefined)}>
+          {s.status === "ready" &&
+            s.options.map((o) => (
+              <Select
+                key={o.id}
+                value={o.value}
+                onValueChange={(v) => void setOption(sandbox, o.id, v).catch((e: Error) => toast.error(`${o.name}: ${e.message}`))}
+              >
+                <SelectTrigger aria-label={o.name} className="h-7 w-44 text-xs" title={o.description ?? o.name}>
+                  <SelectValue placeholder={o.name} />
+                </SelectTrigger>
+                <SelectContent>
+                  {o.choices.map((c) => (
+                    <SelectItem key={c.id} value={c.id} className="text-xs" title={c.description}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ))}
+          {/* An agent that sends its mode as a config option (OpenCode) has it above. */}
+          {s.modes.length > 0 && s.status === "ready" && !s.options.some((o) => o.category === "mode") && (
+            <Select value={s.mode} onValueChange={(m) => void setMode(sandbox, m).catch((e: Error) => toast.error(`Mode: ${e.message}`))}>
               <SelectTrigger aria-label="Mode" className="h-7 w-44 text-xs" title="Whether the agent asks before it acts">
                 <SelectValue placeholder="Mode" />
               </SelectTrigger>

@@ -59,9 +59,18 @@ sandbox-cli agent claude --image ghcr.io/<owner>/sandbox-agentos:edge \
 **Start** opens a session: Studio's server starts the manifest's command in
 the sandbox's home and bridges it to the page (`/api/ws/acp`). Give a task;
 the tab shows the agent's plan, each tool call (open one for its output and
-any screenshot), and its replies. The mode menu switches to one that asks
-before each tool call, and the question appears with its options; **Stop**
-ends the turn, **End session** the agent's process. Leaving the tab keeps the
+any screenshot), and its replies. The menus above it are the session's
+settings, as the agent offers them: its mode, and where the agent has them,
+its model and reasoning level. A mode that asks before each tool call shows
+the question with its options; **Stop** ends the turn, **End session** the
+agent's process.
+
+An agent may send its settings in either of ACP's two forms, and the tab
+shows both: Claude Code's mode menu (`modes`), and OpenCode's mode, model and
+reasoning menus (`configOptions`: `build` or `plan`, its models, and the
+model's reasoning levels, which follow the model chosen). A manifest offers
+OpenCode with `"acp": ["opencode", "acp"]`; its free models need no login,
+and the sandbox needs a network that reaches them. Leaving the tab keeps the
 session, so the Desktop tab shows the agent at work; closing the page ends it.
 
 What the agent sends is the guest's: the server checks the manifest's fields
