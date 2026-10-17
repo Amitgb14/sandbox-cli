@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -51,6 +53,8 @@ type testNode struct {
 	// background holds the method and path of every request the node was
 	// sent marked api.HeaderBackground.
 	background []string
+	// writes holds the body of every create and update the node was sent.
+	writes []string
 }
 
 func startNode(t *testing.T, name string, caps ...string) *testNode {
@@ -83,6 +87,13 @@ func startNodeWith(t *testing.T, name string, wrap func(*fake.Backend) backend.B
 	mux.Handle("/", tn.h)
 	tn.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tn.requests.Add(1)
+		if (r.Method == http.MethodPost && r.URL.Path == "/v1/sandboxes") || (r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/v1/sandboxes/")) {
+			b, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(b))
+			tn.mu.Lock()
+			tn.writes = append(tn.writes, string(b))
+			tn.mu.Unlock()
+		}
 		tn.mu.Lock()
 		tn.paths = append(tn.paths, r.URL.Path)
 		if r.Header.Get(api.HeaderBackground) == "1" {

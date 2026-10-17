@@ -75,6 +75,11 @@ type Server struct {
 	// MetricsInterval is how often sandboxes' usage is sampled, where the
 	// backend can read it; 0 is ten seconds.
 	MetricsInterval time.Duration
+	// MetricsExportAllowPrivate lets a sandbox's metrics export reach
+	// loopback, private and link-local addresses, and http to loopback
+	// (sandboxd --metrics-export-allow-private). Off, it reaches public
+	// addresses only (metrics_export.go).
+	MetricsExportAllowPrivate bool
 
 	now func() time.Time
 
@@ -90,6 +95,9 @@ type Server struct {
 	metricsOnce   sync.Once
 	nm            *nodeMetrics // metrics.go
 	images        imageJobs    // images.go
+	pushOnce      sync.Once    // metrics_export.go
+	pushClient    *http.Client
+	pushSlots     chan struct{}
 
 	// RecordDir, when set, is where each sandbox's record is kept on disk, so
 	// a later sandboxd can take back the sandboxes this one leaves running
@@ -119,6 +127,7 @@ type record struct {
 	// snapshotting is set while one of its snapshots is being taken.
 	lastScheduled time.Time
 	snapshotting  bool
+	export        exportState // metrics_export.go
 }
 
 // touch records activity, which holds the idle timeout off: a request that
@@ -257,6 +266,7 @@ func (s *Server) caps() api.Capabilities {
 	caps[api.CapAudit] = s.Audit != nil
 	_, caps[api.CapMetrics] = s.usageReader()
 	_, caps[api.CapImages] = s.imageStore()
+	caps[api.CapMetricsExport] = s.canExport()
 	return api.Capabilities{
 		APIVersion:   api.Version,
 		Backend:      s.Backend.Name(),
@@ -310,6 +320,10 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bs.FromSnapshot = req.SnapshotID
+	export, ok := s.resolveExport(w, req.MetricsExport)
+	if !ok {
+		return
+	}
 	if bs.IdleAction == api.IdleSuspend && !s.canSuspend() {
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot suspend a sandbox, so idle_action suspend cannot be had; leave it out to terminate an idle sandbox")
 		return
@@ -357,6 +371,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		lastActive:    s.now(),
 		lastScheduled: s.now(),
 	}
+	rec.setExport(export)
 	s.mu.Lock()
 	// Checked under the same lock that registers the sandbox, so once a cordon
 	// has returned no create that began before it can still land.
@@ -420,6 +435,9 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	ev := api.Event{Type: api.EventSandboxCreated, Sandbox: id, Name: out.Name, Image: out.Image,
 		Labels: out.Labels, Network: &out.Network, EnvNames: out.EnvNames, Snapshot: req.SnapshotID, Volumes: out.Volumes,
 		Reason: from}
+	if export != nil {
+		ev.MetricsEndpoint = export.URL
+	}
 	s.event(ev)
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -652,7 +670,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.Network == nil && req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.IdleAction == nil && req.LifetimeSecs == nil {
+	if req.Network == nil && req.Name == nil && req.Labels == nil && req.IdleTimeoutSecs == nil && req.IdleAction == nil && req.LifetimeSecs == nil && req.MetricsExport == nil {
 		writeErr(w, http.StatusBadRequest, api.CodeInvalidRequest, "nothing to update")
 		return
 	}
@@ -711,6 +729,13 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var export *spec.MetricsExport
+	if req.MetricsExport != nil {
+		var ok bool
+		if export, ok = s.resolveExport(w, req.MetricsExport); !ok {
+			return
+		}
+	}
 	id := rec.snapshot().ID
 	if req.Name != nil && s.nameTaken(*req.Name, id) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, "a sandbox named "+*req.Name+" already exists")
@@ -741,7 +766,7 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		s.event(api.Event{Type: api.EventNetworkUpdated, Sandbox: id, Network: &pol})
 	}
 
-	if req.Name != nil || req.Labels != nil || req.IdleTimeoutSecs != nil || req.IdleAction != nil || req.LifetimeSecs != nil {
+	if req.Name != nil || req.Labels != nil || req.IdleTimeoutSecs != nil || req.IdleAction != nil || req.LifetimeSecs != nil || req.MetricsExport != nil {
 		// The name is checked again and set under the lock create registers
 		// names under, so two renames, or a rename and a create, cannot both
 		// take one name.
@@ -773,6 +798,9 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 			at := rec.sbx.CreatedAt.Add(time.Duration(life) * time.Second)
 			rec.sbx.LifetimeSecs, rec.sbx.ExpiresAt = life, &at
 		}
+		if req.MetricsExport != nil {
+			rec.setExport(export)
+		}
 		after := rec.sbx
 		rec.mu.Unlock()
 		s.mu.Unlock()
@@ -795,6 +823,9 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.LifetimeSecs != nil {
 			ev.LifetimeSecs = &after.LifetimeSecs
+		}
+		if req.MetricsExport != nil {
+			ev.MetricsEndpoint = exportEndpoint(export)
 		}
 		s.event(ev)
 	}

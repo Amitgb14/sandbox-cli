@@ -43,6 +43,9 @@ type policyFile struct {
 		// Scheduled snapshots: how often at most, and how many of one sandbox.
 		MinSnapshotEverySecs *int `yaml:"min_snapshot_every_secs"`
 		MaxSnapshotKeep      *int `yaml:"max_snapshot_keep"`
+		// How often at most a sandbox's metrics may be pushed to its owner's
+		// collector.
+		MinMetricsExportSecs *int `yaml:"min_metrics_export_secs"`
 	} `yaml:"limits"`
 	Network *struct {
 		Default *struct {
@@ -94,6 +97,7 @@ func LoadPolicy(path string) (Policy, error) {
 		set(&p.Limits.MaxLifetimeSecs, l.MaxLifetimeSecs)
 		set(&p.Limits.MinSnapshotEverySecs, l.MinSnapshotEverySecs)
 		set(&p.Limits.MaxSnapshotKeep, l.MaxSnapshotKeep)
+		set(&p.Limits.MinMetricsExportSecs, l.MinMetricsExportSecs)
 	}
 	if n := f.Network; n != nil {
 		if n.Default != nil {

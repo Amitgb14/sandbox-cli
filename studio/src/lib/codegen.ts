@@ -9,7 +9,10 @@ import type { NetworkMode, VolumeMount } from "@/lib/types";
  * Every line here must be exactly what the client accepts: a snippet that
  * almost works teaches the wrong call. So it covers what all four can say —
  * a command, its image or snapshot, its snapshot schedule, size, name,
- * network, allow and deny lists, labels and volumes. An agent run is
+ * network, allow and deny lists, labels, volumes and a metrics export. A
+ * header's value is never written into a snippet: the CLI's flag names an
+ * environment variable to read it from, and an API body holds a placeholder
+ * where it goes. An agent run is
  * the CLI's alone (the agent's login is copied in by sandbox-cli, not by the
  * API), so for one the code tabs show only the CLI.
  */
@@ -37,6 +40,8 @@ export interface RunConfig {
   noBaseline?: boolean;
   labels?: Record<string, string>;
   volumes?: VolumeMount[];
+  /** A metrics export (--metrics-export…; "metrics_export"): header names only, never values. */
+  metricsExport?: ExportConfig;
   /**
    * What `--allow` on the CLI adds to: the server's default allowlist, or the
    * built-in baseline when the server's default is not an allowlist. The
@@ -45,6 +50,20 @@ export interface RunConfig {
    * terminal.
    */
   defaultAllow?: string[];
+}
+
+export interface ExportConfig {
+  endpoint: string;
+  intervalSecs?: number;
+  /** Headers typed in: their names, the values left out. */
+  headers?: string[];
+  /** Headers from a gateway secret: header name to secret name. */
+  headerSecrets?: Record<string, string>;
+}
+
+/** The environment variable a CLI snippet reads a header's value from: Authorization is OTEL_AUTHORIZATION. */
+export function headerEnv(name: string): string {
+  return "OTEL_" + name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 }
 
 /** Seconds as a Go duration the CLI's flags take: 30m, 6h, 90s. */
@@ -76,6 +95,13 @@ function cliFlags(c: Omit<RunConfig, "command" | "defaultAllow">): string[] {
   if (c.noBaseline) f.push("--no-baseline");
   for (const [k, v] of Object.entries(c.labels ?? {})) f.push("--label", `${k}=${v}`);
   for (const v of c.volumes ?? []) f.push("--volume", `${v.name}:${v.path}${v.read_only ? ":ro" : ""}`);
+  if (c.metricsExport?.endpoint) {
+    const me = c.metricsExport;
+    f.push("--metrics-export", me.endpoint);
+    if (me.intervalSecs && me.intervalSecs !== 60) f.push("--metrics-export-every", goDuration(me.intervalSecs));
+    for (const h of me.headers ?? []) f.push("--metrics-export-header", `${h}=${headerEnv(h)}`);
+    for (const [h, sec] of Object.entries(me.headerSecrets ?? {})) f.push("--metrics-export-header-secret", `${h}=${sec}`);
+  }
   return f;
 }
 
@@ -114,6 +140,14 @@ function createBody(c: Omit<RunConfig, "command">): Record<string, unknown> {
   else if (deny.deny) body.network = deny;
   if (c.labels && Object.keys(c.labels).length) body.labels = c.labels;
   if (c.volumes?.length) body.volumes = c.volumes.map((v) => (v.read_only ? v : { name: v.name, path: v.path }));
+  if (c.metricsExport?.endpoint) {
+    const me = c.metricsExport;
+    const out: Record<string, unknown> = { endpoint: me.endpoint };
+    if (me.intervalSecs) out.interval_secs = me.intervalSecs;
+    if (me.headers?.length) out.headers = Object.fromEntries(me.headers.map((h) => [h, `<${h} value>`]));
+    if (me.headerSecrets && Object.keys(me.headerSecrets).length) out.header_secrets = me.headerSecrets;
+    body.metrics_export = out;
+  }
   return body;
 }
 

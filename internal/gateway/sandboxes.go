@@ -131,6 +131,9 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	if f := g.addRegistryLogin(ctx, p, &req, &want); f != nil {
 		return api.Sandbox{}, f
 	}
+	if f := g.resolveExportSecrets(ctx, p, req.MetricsExport); f != nil {
+		return api.Sandbox{}, f
+	}
 	if req.Network != nil {
 		want.NetworkMode = req.Network.Mode
 		switch req.Network.Mode {
@@ -193,6 +196,10 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	// create is refused there though another could have had it.
 	if req.IdleAction == api.IdleSuspend && g.anyNodeHas(api.CapSuspend) {
 		want.Caps = append(want.Caps, api.CapSuspend)
+	}
+	// So with a metrics export, on a node that can push one.
+	if req.MetricsExport != nil && req.MetricsExport.Endpoint != "" && g.anyNodeHas(api.CapMetricsExport) {
+		want.Caps = append(want.Caps, api.CapMetricsExport)
 	}
 
 	if req.Name != "" {

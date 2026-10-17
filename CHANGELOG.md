@@ -433,6 +433,30 @@ in `_old/` as reference, to be ported where this design still wants it.
 
 **Added:**
 
+- **A sandbox's usage can be pushed to your own OpenTelemetry collector.** A
+  create or an update may carry `metrics_export: {endpoint, interval_secs,
+  headers}` (capability `metrics_export`). The sandbox's CPU, memory, network
+  and disk, as the host measures them, are then pushed as OTLP/HTTP every
+  `interval_secs` (60s by default; at least the policy's
+  `limits.min_metrics_export_secs`, 10s). Each series is tagged with the
+  sandbox's id, name, image and labels. GET shows where it goes, the header
+  names (never their values), the last push and why one failed.
+  `sandbox-cli run` and `update` take `--metrics-export URL`,
+  `--metrics-export-every` and `--metrics-export-header NAME=ENV`, which reads
+  the value from an environment variable so it is never in the arguments;
+  `update --metrics-export none` stops it. Through a gateway,
+  `header_secrets` (`--metrics-export-header-secret NAME=SECRET`) fills a
+  header from one of your secrets. Studio sets it in the Playground's sandbox
+  options and from a sandbox's overview, and shows how it is going; the
+  Python and TypeScript SDKs take `metrics_export`.
+
+  The push is made from the host, to an address the sandbox's owner chose,
+  so sandboxd pushes only over https to a public address, checked as each
+  push connects. That refuses a name that resolves to the host's loopback, a
+  private network or a metadata address. `sandboxd
+  --metrics-export-allow-private` lifts this for a collector on the
+  operator's own network. Redirects are not followed, and a failed push is
+  the sandbox's status, never a line in the operator's log.
 - `sandboxd`, its API (`docs/api/v1.md`), and a conformance suite that
   defines it.
 - `attach` with a real terminal, and `doctor` against any endpoint.

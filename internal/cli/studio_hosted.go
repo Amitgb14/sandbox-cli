@@ -215,7 +215,8 @@ func hostedLauncher() studio.Launcher {
 		cr := api.CreateSandboxRequest{
 			Name: req.Name, Image: req.Image, SnapshotID: req.Snapshot,
 			SnapshotEverySecs: req.SnapshotEverySecs, SnapshotKeep: req.SnapshotKeep, IdleAction: req.IdleAction,
-			CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
+			MetricsExport: req.MetricsExport,
+			CPUs:          req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
 			Env: map[string]string{},
 		}
 		// The agent's constant settings only. Its EnvAllow names are values

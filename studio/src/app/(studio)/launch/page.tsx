@@ -9,6 +9,7 @@ import { CodeTabs } from "@/components/common/code-tabs";
 import { PageHeader } from "@/components/common/page-header";
 import { AgentList } from "@/components/launch/agent-list";
 import { every, scheduleIntervals } from "@/components/sandbox/snapshots";
+import { emptyExport, exportProblem, ExportFields, intervalLabel, toExport, type ExportForm } from "@/components/sandbox/metrics-export";
 import { ImagePicker } from "@/components/launch/image-picker";
 import { VolumePicker, type Mount } from "@/components/launch/volume-picker";
 import { computeEgress } from "@/components/settings/egress-rules";
@@ -57,6 +58,15 @@ const NETWORKS: ["default" | NetworkMode, string, string, LucideIcon][] = [
   ["open", "Open", "Anywhere, minus the deny rules", Globe],
 ];
 
+/** A URL's host, or the text as typed while it is not yet a URL. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
 function Section({ step, title, children }: { step: number; title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
@@ -104,6 +114,10 @@ function LaunchForm() {
   const canSuspend = !!info?.capabilities?.capabilities?.suspend;
   const [onIdle, setOnIdle] = useState<"terminate" | "suspend">("terminate");
   const idleAction = canSuspend && onIdle === "suspend" ? ("suspend" as const) : undefined;
+  // Pushing the sandbox's usage to the user's collector, where the endpoint can.
+  const canExport = !!info?.capabilities?.capabilities?.metrics_export;
+  const [exportForm, setExportForm] = useState<ExportForm>(emptyExport);
+  const metricsExport = canExport ? toExport(exportForm) : undefined;
   const { data: snapshots } = useSnapshots(canSnapshot);
   const caller = useCaller();
   const callerKind = caller.kind;
@@ -169,6 +183,12 @@ function LaunchForm() {
     noBaseline,
     labels: labelMap,
     volumes: vols,
+    metricsExport: metricsExport && {
+      endpoint: metricsExport.endpoint,
+      intervalSecs: metricsExport.interval_secs,
+      headers: Object.keys(metricsExport.headers ?? {}),
+      headerSecrets: metricsExport.header_secrets,
+    },
   };
   const code =
     kind === "command"
@@ -201,6 +221,14 @@ function LaunchForm() {
       req.snapshot_keep = schedule.snapshotKeep;
     }
     if (idleAction) req.idle_action = idleAction;
+    if (metricsExport) {
+      const problem = exportProblem(exportForm);
+      if (problem) {
+        toast.error(`Metrics export: ${problem}`);
+        return;
+      }
+      req.metrics_export = metricsExport;
+    }
     if (sizeOver) {
       toast.error(`${template!.name}: ${sizeOver}`);
       return;
@@ -531,7 +559,10 @@ function LaunchForm() {
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
             <ChevronRight className="size-4 text-muted-foreground transition-transform group-open:rotate-90" aria-hidden />
             Sandbox options
-            <span className="ml-auto text-xs font-normal text-muted-foreground">name, labels, volumes{canSuspend ? ", when idle" : ""}</span>
+            <span className="ml-auto text-xs font-normal text-muted-foreground">
+              name, labels, volumes{canSuspend ? ", when idle" : ""}
+              {canExport ? ", metrics export" : ""}
+            </span>
           </summary>
           <div className="grid gap-4 border-t p-4 sm:grid-cols-2">
             <div className="flex flex-col gap-2">
@@ -563,6 +594,12 @@ function LaunchForm() {
                     ? "After its idle timeout it is suspended, memory, processes and files kept; the next shell, command or file resumes it."
                     : "After its idle timeout it is terminated, and everything in it discarded."}
                 </span>
+              </div>
+            ) : null}
+            {canExport ? (
+              <div className="flex flex-col gap-2 sm:col-span-2">
+                <span className="text-sm font-medium">Metrics export</span>
+                <ExportFields value={exportForm} onChange={setExportForm} />
               </div>
             ) : null}
           </div>
@@ -602,6 +639,14 @@ function LaunchForm() {
                 <>
                   <dt className="text-muted-foreground">When idle</dt>
                   <dd className="truncate text-[13px]">suspended, resumed on use</dd>
+                </>
+              ) : null}
+              {metricsExport ? (
+                <>
+                  <dt className="text-muted-foreground">Metrics</dt>
+                  <dd className="truncate text-[13px]" title={metricsExport.endpoint}>
+                    to {hostOf(metricsExport.endpoint)}, every {intervalLabel(metricsExport.interval_secs ?? 60)}
+                  </dd>
                 </>
               ) : null}
               <dt className="text-muted-foreground">Starts in</dt>

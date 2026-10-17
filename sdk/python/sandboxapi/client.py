@@ -153,7 +153,8 @@ class Client:
                        snapshot_id: str = "",
                        snapshot_every_secs: int = 0, snapshot_keep: int = 0,
                        labels: Optional[Dict[str, str]] = None,
-                       volumes: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                       volumes: Optional[List[Dict[str, Any]]] = None,
+                       metrics_export: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Create a sandbox. ``network`` is ``{"mode": "none"|"allowlist"|"open",
         "allow": [...], "deny": [...]}``; ``"allow": None`` (or absent) means the
         server's default list, ``[]`` means nothing — which is refused.
@@ -166,14 +167,19 @@ class Client:
         while it runs, keeping the newest ``snapshot_keep`` (default 1), within
         the server's ``limits``. ``idle_action`` is what the idle timeout does:
         ``"terminate"`` (the default) or ``"suspend"`` (capability ``suspend``),
-        which the next command, file or tunnel resumes."""
+        which the next command, file or tunnel resumes. ``metrics_export``
+        pushes the sandbox's usage to your OTLP/HTTP collector (capability
+        ``metrics_export``): ``{"endpoint": "https://…", "interval_secs": 60,
+        "headers": {"Authorization": "…"}}``, or, through a gateway,
+        ``"header_secrets": {"Authorization": "secret-name"}``. Header values
+        are never returned."""
         req: Dict[str, Any] = {}
         for k, v in (("name", name), ("image", image), ("cpus", cpus), ("memory_mb", memory_mb),
                      ("disk_mb", disk_mb), ("env", env), ("network", network),
                      ("idle_timeout_secs", idle_timeout_secs), ("idle_action", idle_action),
                      ("snapshot_id", snapshot_id),
                      ("snapshot_every_secs", snapshot_every_secs), ("snapshot_keep", snapshot_keep),
-                     ("labels", labels), ("volumes", volumes)):
+                     ("labels", labels), ("volumes", volumes), ("metrics_export", metrics_export)):
             if v:
                 req[k] = v
         if network is not None and "allow" not in network:
@@ -217,17 +223,20 @@ class Client:
                        labels: Optional[Dict[str, str]] = None,
                        idle_timeout_secs: Optional[int] = None,
                        idle_action: Optional[str] = None,
-                       network: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       network: Optional[Dict[str, Any]] = None,
+                       metrics_export: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Change a live sandbox; only what is passed changes. ``name=""``
         removes the name; ``labels`` replaces them whole (``{}`` removes them);
         ``idle_timeout_secs`` is within ``limits.max_idle_timeout_secs``, 0
         (never) only where that is 0; ``idle_action`` is ``"terminate"`` or
         ``"suspend"``. ``network`` needs a running sandbox and
-        capability ``network_policy_update``. A request with one bad field
-        changes nothing."""
+        capability ``network_policy_update``. ``metrics_export`` replaces the
+        export whole, headers included; ``{"endpoint": ""}`` stops it. A request
+        with one bad field changes nothing."""
         req: Dict[str, Any] = {}
         for k, v in (("name", name), ("labels", labels), ("idle_timeout_secs", idle_timeout_secs),
-                     ("idle_action", idle_action), ("network", network)):
+                     ("idle_action", idle_action), ("network", network),
+                     ("metrics_export", metrics_export)):
             if v is not None:
                 req[k] = v
         return self._json("PATCH", self._sbx(ref), req)

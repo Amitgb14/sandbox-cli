@@ -31,6 +31,7 @@ sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
 | `--policy FILE` | the built-in policy | the operator policy ([below](#the-policy-file)). |
 | `--audit-log FILE` | `<state-dir>/audit/events.jsonl` | every sandbox's events, as JSONL; `none` keeps no log ([self-hosting.md](self-hosting.md#the-audit-log)). |
 | `--metrics-listen HOST:PORT` | off | Prometheus metrics at `/metrics`, on loopback only ([below](#metrics)). |
+| `--metrics-export-allow-private` | off | lets a sandbox's [metrics export](api/v1.md#metrics-export-capability-metrics_export) reach loopback, private and link-local addresses, and `http` to loopback. Off, sandboxd pushes a sandbox's usage only over https to a public address. For a collector on this machine or the operator's own network. It is the whole node's: every sandbox's owner can then point a push at those addresses. |
 | `--version` | | print the version and exit. |
 
 ### The backend
@@ -95,6 +96,7 @@ pools:                                     # sandboxes booted ahead of time
 | `defaults.cpus`, `.memory_mb`, `.disk_mb`, `.idle_timeout_secs` | 1, 1024, 10240, 1800 | what a request that asks for nothing gets. Each must be within the limits. |
 | `limits.max_cpus`, `.max_memory_mb`, `.max_disk_mb`, `.max_idle_timeout_secs` | 8, 16384, 102400, 604800 (a week) | the most a request may ask for. |
 | `limits.max_lifetime_secs` | 0 (none) | how long any sandbox may exist, busy or not, from its creation. Set, every sandbox gets it unless it asks for less, and a request for more is refused. For a demo or trial server: `1800` ends every sandbox 30 minutes after it starts. On a fleet, give every node the same value: the gateway offers the strictest. A running sandbox's lifetime can be changed (`PATCH /v1/sandboxes/{ref}` `lifetime_secs`, `sandbox-cli update --lifetime`), within this limit; to give some users less than others, use a gateway's [user policies](fleet.md#user-policies) and set this above them. |
+| `limits.min_metrics_export_secs` | 10 | how often at most a sandbox's [metrics export](api/v1.md#metrics-export-capability-metrics_export) may push. Each push is a connection this machine makes, per sandbox, to an address its owner chose. On a fleet the gateway offers the largest of its nodes'. |
 | `limits.min_snapshot_every_secs`, `.max_snapshot_keep` | 300 (five minutes), 5 | how often at most a sandbox's schedule may snapshot it, and how many of its scheduled snapshots it may keep. Each is a copy of the sandbox on this machine's disk (about 2 GB of the base image on macOS), so these bound what schedules can cost. At least 1 second. |
 | `network.default` | `{mode: open}` | `mode` is `none`, `allowlist` or `open`; `allow` and `deny` are names, wildcards allowed. `deny` wins over `allow`. The default must itself be something the ceiling permits. |
 | `network.ceiling` | `open` | the most open mode a request may ask for. |
@@ -164,6 +166,9 @@ free, cordon, and creates by status with a latency histogram. It has no
 credential, so `sandboxd` refuses any address but loopback; put a proxy with
 its own authentication in front if the scraper is elsewhere. The names are
 listed in [operations.md](operations.md#metrics).
+
+A sandbox's own usage is not here: its owner can have it pushed to their
+collector with its [metrics export](api/v1.md#metrics-export-capability-metrics_export).
 
 ## Files
 

@@ -98,6 +98,7 @@ func run(args []string) error {
 	fl.IntVar(&node.diskMB, "capacity-disk-mb", 0, "disk offered to sandboxes, MiB (default: the size of the state directory's filesystem)")
 	fl.StringVar(&node.clientCA, "client-ca", "", "CA (PEM) whose certificates alone may connect; needs --tls-cert (mutual TLS, for a node behind a gateway)")
 	metricsListen := fl.String("metrics-listen", "", "loopback host:port to serve Prometheus metrics on, without a credential; off when empty")
+	exportPrivate := fl.Bool("metrics-export-allow-private", false, "let a sandbox's metrics export reach loopback, private and link-local addresses, and http to loopback (default: https to public addresses only)")
 	showVersion := fl.Bool("version", false, "print the version and exit")
 	if err := fl.Parse(args); err != nil {
 		return err
@@ -192,7 +193,8 @@ func run(args []string) error {
 	nodeCap := capacity(node, *stateDir)
 	apiSrv := &server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts,
 		Audit: audit.NewLog(logPath), Logf: logf,
-		NodeID: node.id, NodeLabels: labels, Capacity: nodeCap}
+		NodeID: node.id, NodeLabels: labels, Capacity: nodeCap,
+		MetricsExportAllowPrivate: *exportPrivate}
 	// The records hold sandboxes' environment values, so they exist only
 	// while --keep-sandboxes is on; turning it off deletes them.
 	recordDir := filepath.Join(*stateDir, "records")

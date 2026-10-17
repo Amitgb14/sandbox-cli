@@ -92,7 +92,8 @@ internal/
   agents/       the agent descriptor table (verified headless modes only)
   egressproxy/  name-based egress allowlist
   audit/        run log — environment variables by name only
-  metrics/      Prometheus text format by hand, for sandboxd's and the gateway's /metrics
+  metrics/      Prometheus text format by hand, for sandboxd's and the gateway's /metrics; OTLP/HTTP push of a sandbox's own usage to its owner's collector
+  publicnet/    which addresses are public, checked as a connection to a client-chosen address is dialled
   termsafe/     printing repository-controlled text safely
   backend/      Backend interface + capabilities; macos/, firecracker/, fake/
   guestproto/   host <-> guest agent protocol; the host treats the guest as hostile

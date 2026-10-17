@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Pencil, Scaling, SquareTerminal } from "lucide-react";
+import { Activity, Pencil, Scaling, SquareTerminal } from "lucide-react";
 import { toast } from "sonner";
 import { CopyButton } from "@/components/common/copy-button";
 import { StatusBadge } from "@/components/common/status-badge";
@@ -11,6 +11,7 @@ import { ResourcesWithMetrics } from "@/components/sandbox/metrics";
 import { SandboxSnapshots } from "@/components/sandbox/snapshots";
 import { EditDetails } from "@/components/sandbox/edit-details";
 import { EditNetwork } from "@/components/sandbox/edit-network";
+import { EditMetricsExport, ExportStatus } from "@/components/sandbox/metrics-export";
 import { ResizeDialog, resizeBlocked } from "@/components/sandbox/resize";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useInfo, useUpdateSandbox } from "@/lib/api/queries";
@@ -163,7 +164,7 @@ export function SandboxOverview({
   const labels = Object.keys(sb.labels ?? {}).length;
   const { data: info } = useInfo();
   const can = useCan();
-  const [editing, setEditing] = useState<"details" | "network" | "resize" | null>(null);
+  const [editing, setEditing] = useState<"details" | "network" | "resize" | "export" | null>(null);
   // What a live sandbox can have changed, for a key that may change it;
   // null hides the control, a string disables it and says why.
   const live = sb.state === "running" || sb.state === "suspended";
@@ -231,6 +232,19 @@ export function SandboxOverview({
         <SandboxSnapshots sb={sb} />
       </Section>
 
+      {sb.metrics_export || (caps?.metrics_export && mayEdit) ? (
+        <Section
+          title="Metrics export"
+          aside={mayEdit ? <Action label={sb.metrics_export ? "Change the metrics export" : "Export metrics"} icon={sb.metrics_export ? Pencil : Activity} onClick={() => setEditing("export")} /> : null}
+        >
+          {sb.metrics_export ? (
+            <ExportStatus st={sb.metrics_export} />
+          ) : (
+            <span className="text-xs text-muted-foreground">Not exported. Push its CPU, memory, network and disk to your OpenTelemetry collector.</span>
+          )}
+        </Section>
+      ) : null}
+
       {labels || mayEdit ? (
         <Section title="Labels" aside={edit}>
           <Labels labels={sb.labels} />
@@ -239,6 +253,7 @@ export function SandboxOverview({
 
       <EditDetails sb={sb} open={editing === "details"} onOpenChange={(o) => setEditing(o ? "details" : null)} />
       <EditNetwork sb={sb} open={editing === "network"} onOpenChange={(o) => setEditing(o ? "network" : null)} />
+      <EditMetricsExport sb={sb} open={editing === "export"} onOpenChange={(o) => setEditing(o ? "export" : null)} />
       <ResizeDialog
         sb={sb}
         open={editing === "resize"}

@@ -105,7 +105,7 @@ func DefaultPolicy() Policy {
 		// about 2 GB of the base image on macOS — so how often, and how many,
 		// is the operator's to bound.
 		Limits: api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400, MaxIdleTimeoutSecs: 7 * 24 * 3600,
-			MinSnapshotEverySecs: 300, MaxSnapshotKeep: 5},
+			MinSnapshotEverySecs: 300, MaxSnapshotKeep: 5, MinMetricsExportSecs: DefaultMinMetricsExportSecs},
 		Network: NetworkPolicy{
 			Default:  api.NetworkPolicy{Mode: api.NetworkOpen},
 			Ceiling:  api.NetworkOpen,
@@ -166,6 +166,9 @@ func (p Policy) Validate() error {
 	// Under a second, a schedule is a sandbox being copied continuously.
 	if p.Limits.MinSnapshotEverySecs < 1 || p.Limits.MaxSnapshotKeep < 0 {
 		return fmt.Errorf("policy: limits.min_snapshot_every_secs must be at least 1, and limits.max_snapshot_keep not negative")
+	}
+	if p.Limits.MinMetricsExportSecs < 0 {
+		return fmt.Errorf("policy: limits.min_metrics_export_secs must not be negative")
 	}
 	return nil
 }

@@ -96,6 +96,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"ASnapshotForksTheSandbox", testSnapshot},
 		{"MetricsSampleARunningSandbox", testMetrics},
 		{"AScheduleKeepsTheNewestSnapshots", testSnapshotSchedule},
+		{"AMetricsExportIsShownWithoutItsCredential", testMetricsExport},
 		{"ATunnelReachesAGuestPort", testTunnel},
 		{"LabelsAreKeptAndFilterTheListing", testLabels},
 		{"TheAuditLogRecordsWhatHappened", testAudit},
@@ -1640,5 +1641,73 @@ func testMetrics(t *testing.T, e *env) {
 	}
 	if _, err := e.c.Metrics(ctx, "sbx_0000000000000000"); err == nil {
 		t.Fatal("metrics of a sandbox that does not exist")
+	}
+}
+
+// testMetricsExport: a sandbox may name an OTLP endpoint for its usage. The
+// export is shown back — where, how often, the header names — and a header's
+// value never is, in the sandbox or its events. Where the endpoint does not
+// measure usage, it is refused rather than accepted and silent. Whether a
+// push arrives is not tested here: the suite has no collector the endpoint
+// can reach (internal/server's tests push to one).
+func testMetricsExport(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	const secret = "Bearer conformance-otel-do-not-leak"
+	me := &api.MetricsExport{Endpoint: "https://otlp.collector.example", Headers: map[string]string{"authorization": secret}}
+	if !e.caps.Has(api.CapMetricsExport) {
+		_, err := e.c.CreateSandbox(ctx, api.CreateSandboxRequest{MetricsExport: me})
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	for name, bad := range map[string]*api.MetricsExport{
+		"plain http off the machine": {Endpoint: "http://otlp.collector.example:4318"},
+		"a password in the URL":      {Endpoint: "https://u:p@otlp.collector.example"},
+		"a host header":              {Endpoint: "https://otlp.collector.example", Headers: map[string]string{"Host": "elsewhere.example"}},
+		"headers and no endpoint":    {Headers: map[string]string{"Authorization": secret}},
+		"a negative interval":        {Endpoint: "https://otlp.collector.example", IntervalSecs: -1},
+	} {
+		_, err := e.c.CreateSandbox(ctx, api.CreateSandboxRequest{MetricsExport: bad})
+		if err == nil || !api.IsCode(err, api.CodeInvalidRequest) {
+			t.Errorf("%s: %v; want invalid_request", name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), secret) {
+			t.Errorf("%s: the error holds the header's value", name)
+		}
+	}
+	if m := e.caps.Limits.MinMetricsExportSecs; m > 1 {
+		_, err := e.c.CreateSandbox(ctx, api.CreateSandboxRequest{MetricsExport: &api.MetricsExport{Endpoint: me.Endpoint, IntervalSecs: m - 1}})
+		wantCode(t, err, api.CodeInvalidRequest)
+	}
+
+	sb := e.newSandbox(t, api.CreateSandboxRequest{MetricsExport: me, Network: &api.NetworkPolicy{Mode: api.NetworkNone}})
+	st := sb.MetricsExport
+	if st == nil || st.Endpoint != "https://otlp.collector.example/v1/metrics" || st.IntervalSecs < 1 || strings.Join(st.HeaderNames, ",") != "Authorization" {
+		t.Fatalf("export shown as %+v", st)
+	}
+	got, err := e.c.Sandbox(ctx, sb.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(got)
+	if got.MetricsExport == nil || strings.Contains(string(raw), secret) {
+		t.Fatalf("GET: %s", raw)
+	}
+	if e.caps.Has(api.CapAudit) {
+		events, err := e.c.Events(ctx, sb.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw, _ := json.Marshal(events); strings.Contains(string(raw), secret) {
+			t.Fatalf("the events hold the header's value: %s", raw)
+		}
+	}
+
+	// An update with no endpoint stops it.
+	up, err := e.c.UpdateSandbox(ctx, sb.ID, api.UpdateSandboxRequest{MetricsExport: &api.MetricsExport{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if up.MetricsExport != nil {
+		t.Fatalf("after stopping: %+v", up.MetricsExport)
 	}
 }

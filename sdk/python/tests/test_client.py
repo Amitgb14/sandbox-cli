@@ -74,6 +74,17 @@ class ClientTest(unittest.TestCase):
         got = self.c.update_sandbox(sb["id"], labels={})
         self.assertEqual((got["name"], got.get("labels")), ("py-after", None))
 
+    def test_metrics_export(self):
+        sb = self.new(metrics_export={"endpoint": "https://otlp.collector.example", "interval_secs": 30,
+                                      "headers": {"Authorization": "Bearer py-otel-secret"}})
+        me = sb["metrics_export"]
+        self.assertEqual((me["endpoint"], me["interval_secs"], me["header_names"]),
+                         ("https://otlp.collector.example/v1/metrics", 30, ["Authorization"]))
+        self.assertNotIn("py-otel-secret", json.dumps(self.c.sandbox(sb["id"])))
+        self.assertNotIn("py-otel-secret", json.dumps(self.c.events(sb["id"])))
+        got = self.c.update_sandbox(sb["id"], metrics_export={"endpoint": ""})
+        self.assertNotIn("metrics_export", got)
+
     def test_volumes(self):
         self.c.create_volume("pyvol", size_mb=8)
         self.addCleanup(lambda: self.c.delete_volume("pyvol"))
