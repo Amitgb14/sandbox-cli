@@ -53,6 +53,10 @@ func (n *acpNode) handler(t *testing.T) http.Handler {
 		}
 		p := r.URL.Path
 		switch {
+		case p == "/v1/sandboxes/os" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(api.Sandbox{ID: "sbx_os", Name: "os", State: api.StateRunning, Image: "ghcr.io/x/sandbox-agentos:edge"})
+		case p == "/v1/sandboxes/nope" && r.Method == http.MethodGet:
+			notFound()
 		case strings.HasSuffix(p, "/agent-login") && r.Method == http.MethodPost:
 			var req api.KeepAgentLoginRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)

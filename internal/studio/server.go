@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
+	"github.com/Amitgb14/sandbox-cli/internal/audit"
 	"github.com/Amitgb14/sandbox-cli/internal/policy"
 )
 
@@ -113,6 +114,9 @@ type Server struct {
 	Launch  Launcher
 	Version string
 	Logf    func(format string, a ...any)
+	// AgentLog, when set, is where the ACP bridge records what each agentos
+	// session did (agentlog.go); nil keeps no record.
+	AgentLog *audit.Log
 
 	// Hosted, when set, serves many users from a public address, each signed
 	// in with their own gateway key (hosted.go). Client, Context and Token
@@ -136,6 +140,7 @@ func (s *Server) Handler() http.Handler {
 	api("GET /api/desktops", s.desktops)
 	api("GET /api/ws/acp", s.acp)
 	api("GET /api/agentos", s.agentos)
+	api("GET /api/agent-log", s.agentLog)
 	api("GET /api/agents/state", s.agentStates)
 	api("POST /api/runs", s.launch)
 	api("GET /api/agents", s.agents)

@@ -28,6 +28,7 @@ package audit
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -107,8 +108,25 @@ func (l *Log) Read(sandbox string, max int) (events []api.Event, truncated bool,
 	if l == nil {
 		return nil, false, nil
 	}
-	gens := Generations(l.Path)
-	// Oldest generation first, so the result is in order.
+	Lines(l.Path, func(line []byte) {
+		var e api.Event
+		if json.Unmarshal(line, &e) == nil && e.Sandbox == sandbox {
+			events = append(events, e)
+		}
+	})
+	if max > 0 && len(events) > max {
+		events, truncated = events[len(events)-max:], true
+	}
+	return events, truncated, nil
+}
+
+// Lines hands fn each line of the log at path, oldest generation first and
+// in the order written, without its newline. A reader of a log of another
+// shape uses it; fn decides what a line is, and skips one that does not parse:
+// the log is appended to while it is read, and its last line may be
+// half-written.
+func Lines(path string, fn func(line []byte)) {
+	gens := Generations(path)
 	for i := len(gens) - 1; i >= 0; i-- {
 		f, err := os.Open(gens[i])
 		if err != nil {
@@ -119,9 +137,8 @@ func (l *Log) Read(sandbox string, max int) (events []api.Event, truncated bool,
 		br := bufio.NewReader(f)
 		for {
 			line, rerr := br.ReadBytes('\n')
-			var e api.Event
-			if len(line) > 0 && json.Unmarshal(line, &e) == nil && e.Sandbox == sandbox {
-				events = append(events, e)
+			if line = bytes.TrimSuffix(line, []byte{'\n'}); len(line) > 0 {
+				fn(line)
 			}
 			if rerr != nil {
 				break
@@ -129,10 +146,6 @@ func (l *Log) Read(sandbox string, max int) (events []api.Event, truncated bool,
 		}
 		f.Close()
 	}
-	if max > 0 && len(events) > max {
-		events, truncated = events[len(events)-max:], true
-	}
-	return events, truncated, nil
 }
 
 // MaxGenerations is how many rotated logs are kept beside the current one.

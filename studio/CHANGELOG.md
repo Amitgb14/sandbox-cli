@@ -10,6 +10,10 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **History: what an agentos sandbox's agent did.** A tab beside Agent lists
+  each session's prompts, tool calls (open one for its arguments and result),
+  questions and answers, and how it ended, and stays after the sandbox ends.
+  See [CHANGELOG.md](../CHANGELOG.md) for where it is kept.
 - **The Agent tab starts logged in where the gateway keeps your login.**
   Start now has the gateway copy your kept login for the agent into the
   sandbox first, as an agent console does. A sandbox started by a bot or a

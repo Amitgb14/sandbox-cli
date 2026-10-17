@@ -607,3 +607,44 @@ export interface MetricsList {
   interval_secs: number;
   samples: MetricSample[];
 }
+
+/**
+ * One record of Studio's agent log (internal/studio/agentlog.go): what an
+ * agentos session did, written by Studio's server from the messages it
+ * relayed. Which fields are set depends on type.
+ */
+export interface AgentRecord {
+  time: string;
+  type: "session.start" | "prompt" | "tool" | "permission" | "mode" | "cancel" | "turn.end" | "limit" | "session.end";
+  sandbox: string;
+  name?: string;
+  session: string;
+  agent: string;
+  user?: string;
+  org?: string;
+  image?: string;
+  text?: string;
+  tool_id?: string;
+  title?: string;
+  kind?: string;
+  status?: string;
+  started?: string;
+  input?: string;
+  output?: string;
+  images?: number;
+  option?: string;
+  option_kind?: string;
+  mode?: string;
+  stop_reason?: string;
+  code?: number;
+  /** session.end: records not kept once the session reached its limit. */
+  dropped?: number;
+  truncated?: boolean;
+}
+
+export interface AgentLog {
+  /** False when this Studio keeps no agent log (--agent-log none). */
+  enabled: boolean;
+  records: AgentRecord[];
+  truncated?: boolean;
+}
