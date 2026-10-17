@@ -5,6 +5,7 @@ import { Bot, ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleX, Loa
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { AgentMarkdown } from "@/components/sandbox/agent-markdown";
 import { toast } from "sonner";
 import { answerPermission, cancelTurn, clearSession, endSession, sendPrompt, setMode, setOption, startSession, useAcp } from "@/lib/acp";
 import type { AcpEntry, AcpSession, AcpToolCall } from "@/lib/acp";
@@ -59,7 +60,7 @@ function Entry({ e }: { e: AcpEntry }) {
     case "user":
       return <div className="ml-auto max-w-[85%] whitespace-pre-wrap rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground">{e.text}</div>;
     case "agent":
-      return <div className="whitespace-pre-wrap break-words text-sm">{e.text}</div>;
+      return <AgentMarkdown text={e.text} />;
     case "thought":
       return <div className="whitespace-pre-wrap break-words border-l-2 pl-3 text-xs italic text-muted-foreground">{e.text}</div>;
     case "tool":
