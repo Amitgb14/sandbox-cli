@@ -37,6 +37,7 @@ type acpNode struct {
 	lines   []string // what the agent read, one per line
 	exited  chan struct{}
 	signals []string
+	logins  []string // the agents a login was asked to be copied in for
 }
 
 func (n *acpNode) handler(t *testing.T) http.Handler {
@@ -52,12 +53,21 @@ func (n *acpNode) handler(t *testing.T) http.Handler {
 		}
 		p := r.URL.Path
 		switch {
+		case strings.HasSuffix(p, "/agent-login") && r.Method == http.MethodPost:
+			var req api.KeepAgentLoginRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			n.mu.Lock()
+			n.logins = append(n.logins, req.Agent)
+			n.mu.Unlock()
+			_, _ = io.WriteString(w, `{"restored":true}`)
 		case strings.HasSuffix(p, "/files"):
 			switch {
 			case r.URL.Query().Get("path") != AgentOSManifest:
 				notFound()
 			case strings.Contains(p, "/os/"):
 				_, _ = io.WriteString(w, testManifest)
+			case strings.Contains(p, "/odd/"):
+				_, _ = io.WriteString(w, strings.Replace(testManifest, `"login": "claude"`, `"login": "nologin"`, 1))
 			case strings.Contains(p, "/bad/"):
 				_, _ = io.WriteString(w, strings.Replace(testManifest, `"contract": 1`, `"contract": 2`, 1))
 			default:
@@ -272,10 +282,15 @@ func TestACPBridge(t *testing.T) {
 	}
 
 	node.mu.Lock()
-	started, cwd, lines := node.started, node.cwd, append([]string(nil), node.lines...)
+	started, cwd, lines, logins := node.started, node.cwd, append([]string(nil), node.lines...), node.logins
 	node.mu.Unlock()
 	if len(started) != 1 || strings.Join(started[0], " ") != "agentos-acp" || cwd != "/sandbox/home" {
 		t.Fatalf("started %v in %q", started, cwd)
+	}
+	// The user's kept login is copied in first, as a console's is: a
+	// sandbox a bot started has none of its own.
+	if strings.Join(logins, " ") != "claude" {
+		t.Fatalf("logins asked for: %v", logins)
 	}
 	if len(lines) != 1 || lines[0] != `{"jsonrpc":"2.0","id":1,"method":"initialize"}`+"\n" {
 		t.Fatalf("the agent read %q", lines)
@@ -286,6 +301,22 @@ func TestACPBridge(t *testing.T) {
 	case <-node.exited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the agent's input did not end when the browser left")
+	}
+}
+
+// A manifest's login is the guest's word: one naming an agent with no login
+// files this side knows of is not asked for, and the agent still starts.
+func TestACPBridgeAsksOnlyForKnownLogins(t *testing.T) {
+	node, addr := agentosUnderTest(t)
+	conn, resp, _ := dialWS(t, addr, "/api/ws/acp?sandbox=odd&agent=claude&token="+testToken)
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("handshake: %d", resp.StatusCode)
+	}
+	conn.Close()
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	if len(node.started) != 1 || len(node.logins) != 0 {
+		t.Fatalf("started %v; logins asked for %v", node.started, node.logins)
 	}
 }
 

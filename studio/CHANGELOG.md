@@ -10,6 +10,10 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **The Agent tab starts logged in where the gateway keeps your login.**
+  Start now has the gateway copy your kept login for the agent into the
+  sandbox first, as an agent console does. A sandbox started by a bot or a
+  script had none, and the first task answered "Authentication required".
 - **The Agent tab shows OpenCode's settings.** OpenCode sends its mode
   (`build` or `plan`), model and reasoning level as ACP config options rather
   than as modes, so the tab showed it no menus at all. Each is now a menu,

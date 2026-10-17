@@ -148,11 +148,12 @@ export function SandboxAgent({ sandbox, image, manifest, canStart }: { sandbox: 
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          The agent uses its login in the sandbox. A sandbox started with{" "}
+          The agent uses its login in the sandbox. Where the gateway keeps yours, Start copies it in, as a console does; a
+          sandbox started with{" "}
           <code className="break-all font-mono">
             sandbox-cli agent {manifest.agents.find((a) => a.id === agent)?.login || agent} --image {image} --keep -- --version
           </code>{" "}
-          has it; otherwise log in from the Terminal tab. Files the agent makes for you go to{" "}
+          has it too; otherwise log in from the Terminal tab. Files the agent makes for you go to{" "}
           <code className="font-mono">{manifest.outputDir || "its home"}</code>.
         </p>
       </div>
