@@ -46,6 +46,20 @@ type RootFS struct {
 // boots, but setuid tools and root-owned configuration will not behave as the
 // image intended, and RootFS.OwnedByHost says so.
 func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootFS, error) {
+	return BuildRootFSWithKit(ctx, p, ref, agent, dir, nil)
+}
+
+// Kit is a tree added to a root disk after the image and the guest agent: a
+// GPU kit's driver (docs/roadmap/task-9-gpu-sandboxes.md). Dir is the tree, as
+// it is to appear under the guest's /; Sum identifies its content (TreeSum),
+// and is part of the disk's key, so a disk is built per image, agent and kit.
+type Kit struct {
+	Dir, Sum string
+}
+
+// BuildRootFSWithKit is BuildRootFS with kit's tree added; a nil kit is
+// BuildRootFS, with the same key.
+func BuildRootFSWithKit(ctx context.Context, p *Puller, ref, agent, dir string, kit *Kit) (*RootFS, error) {
 	pulled, err := p.Pull(ctx, ref)
 	if err != nil {
 		return nil, err
@@ -54,7 +68,11 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 	if err != nil {
 		return nil, fmt.Errorf("guest agent: %w", err)
 	}
-	keySum := sha256.Sum256([]byte(rootfsFormat + "\x00" + pulled.Digest + "\x00" + agentSum))
+	keyIn := rootfsFormat + "\x00" + pulled.Digest + "\x00" + agentSum
+	if kit != nil {
+		keyIn += "\x00kit " + kit.Sum
+	}
+	keySum := sha256.Sum256([]byte(keyIn))
 	key := hex.EncodeToString(keySum[:16])
 	out := filepath.Join(dir, "rootfs", key, "rootfs.ext4")
 	res := &RootFS{Path: out, Key: key, Config: pulled.Config, OwnedByHost: os.Geteuid() != 0}
@@ -98,6 +116,11 @@ func BuildRootFS(ctx context.Context, p *Puller, ref, agent, dir string) (*RootF
 	}
 	if err := inject(stage, agent, pulled.Config); err != nil {
 		return nil, err
+	}
+	if kit != nil {
+		if err := copyTree(stage, kit.Dir); err != nil {
+			return nil, fmt.Errorf("adding the kit %s: %w", kit.Dir, err)
+		}
 	}
 	if err := os.Chmod(stage, 0o755); err != nil {
 		return nil, err
@@ -288,4 +311,81 @@ func lockKey(k string) func() {
 	keyLocksMu.Unlock()
 	m.Lock()
 	return m.Unlock
+}
+
+// copyTree copies src's directories, regular files and symlinks into root at
+// the same paths, each resolved within root as a layer entry is: a symlink the
+// image planted cannot carry a file out of root. What src holds replaces what
+// the image had at that path.
+func copyTree(root, src string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil || rel == "." {
+			return err
+		}
+		if d.IsDir() {
+			_, err := resolveDir(root, filepath.ToSlash(rel))
+			return err
+		}
+		parent, err := resolveDir(root, filepath.ToSlash(filepath.Dir(rel)))
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(parent, filepath.Base(rel))
+		if err := replace(dst); err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			link, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, dst)
+		case info.Mode().IsRegular():
+			return copyFile(p, dst, info.Mode().Perm())
+		default:
+			return fmt.Errorf("%s: not a file, directory or symlink", rel)
+		}
+	})
+}
+
+// TreeSum identifies a tree's content: every path, its type and permissions,
+// a symlink's target and a file's bytes, in a fixed order.
+func TreeSum(dir string) (string, error) {
+	h := sha256.New()
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "%s\x00%v\x00", filepath.ToSlash(rel), info.Mode())
+		switch {
+		case info.Mode()&fs.ModeSymlink != 0:
+			link, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "%s\x00", link)
+		case info.Mode().IsRegular():
+			sum, err := hashFile(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "%s\x00", sum)
+		}
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil)), err
 }
