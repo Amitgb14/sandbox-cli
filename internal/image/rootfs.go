@@ -23,8 +23,9 @@ const GuestAgentPath = "/sbin/sandbox-guestd"
 const ImageConfigPath = "/etc/sandbox/image.json"
 
 // rootfsFormat changes when what Build puts in a disk changes, so a cached disk
-// from an older format is not reused.
-const rootfsFormat = "1"
+// from an older format is not reused. 2: setuid, setgid and sticky bits are
+// kept (1 dropped them).
+const rootfsFormat = "2"
 
 // RootFS is a bootable, read-only root disk for an image.
 type RootFS struct {

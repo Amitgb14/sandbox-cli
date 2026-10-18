@@ -27,4 +27,7 @@ COPY chromium-flags /etc/chromium.d/sandbox
 RUN chmod 0755 /usr/local/bin/sandbox-desktop \
     # X keeps its socket here; created ahead so the sandbox user, not root,
     # can start the display.
-    && mkdir -p -m 1777 /tmp/.X11-unix
+    && mkdir -p -m 1777 /tmp/.X11-unix \
+    # As in the base image: nothing setuid or setgid, the packages above
+    # included.
+    && find / -xdev -type f -perm /6000 -exec chmod ug-s {} +

@@ -98,7 +98,10 @@ func Unpack(root string, layer io.Reader, maxBytes int64, st *UnpackStats) error
 			return fmt.Errorf("layer entry %q: %w", h.Name, err)
 		}
 		target := filepath.Join(parent, base)
-		mode := fs.FileMode(h.Mode) & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
+		// FileInfo converts the header's Unix mode, whose setuid, setgid and
+		// sticky bits (0o7000) are not where fs.FileMode keeps them: a plain
+		// fs.FileMode(h.Mode) silently dropped all three.
+		mode := h.FileInfo().Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
 		if !isRoot {
 			mode &^= fs.ModeSetuid | fs.ModeSetgid
 			if h.Typeflag == tar.TypeDir {
