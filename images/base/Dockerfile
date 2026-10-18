@@ -64,7 +64,13 @@ RUN npm install -g opencode-ai || true
 RUN groupadd -g 1001 sandbox \
     && useradd -m -u 1001 -g 1001 -d /sandbox/home -s /bin/bash sandbox \
     && mkdir -p /sandbox/home/.npm /sandbox/home/.cache/pip /sandbox/home/go/pkg/mod \
-    && chown -R 1001:1001 /sandbox/home
+    && chown -R 1001:1001 /sandbox/home \
+    # No setuid or setgid programs: every process runs as the sandbox user and
+    # nothing here needs to become another, and a root-run sandboxd keeps the
+    # bits, so one left (su, passwd, mount, ...) would be a way to root in the
+    # guest that no sandbox setting asked for. An image built on this one that
+    # wants root (sudo) adds it on purpose.
+    && find / -xdev -type f -perm /6000 -exec chmod ug-s {} +
 
 # Present in the image for the macOS backend, which runs
 # `sandbox-guestd serve --stdio` per request. On Linux, BuildRootFS injects the

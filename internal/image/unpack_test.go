@@ -204,3 +204,37 @@ func TestSymlinkLoop(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A tar header's mode is the Unix one (setuid 0o4000, sticky 0o1000); Go's
+// fs.FileMode keeps those bits elsewhere. The special bits must survive the
+// conversion: sticky always, setuid and setgid when unpacking as root, so
+// an image's sudo or /tmp means in the guest what it meant in the image.
+func TestUnpackKeepsSpecialBits(t *testing.T) {
+	root := t.TempDir()
+	err := unpack(t, root, layer(t, false,
+		entry{name: "shared", typ: tar.TypeDir, mode: 0o1777},
+		dir("usr/bin"),
+		entry{name: "usr/bin/sudo", body: "#!", typ: tar.TypeReg, mode: 0o4755},
+		entry{name: "usr/bin/wall", body: "#!", typ: tar.TypeReg, mode: 0o2755},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(root, "shared")); err != nil || fi.Mode()&os.ModeSticky == 0 {
+		t.Errorf("sticky directory: %v %v", fi.Mode(), err)
+	}
+	for name, bit := range map[string]os.FileMode{"usr/bin/sudo": os.ModeSetuid, "usr/bin/wall": os.ModeSetgid} {
+		fi, err := os.Stat(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o755 {
+			t.Errorf("%s: permissions %v", name, fi.Mode().Perm())
+		}
+		// Unprivileged, a setuid file would be the building user's: the bit
+		// is dropped on purpose.
+		if got, want := fi.Mode()&bit != 0, os.Geteuid() == 0; got != want {
+			t.Errorf("%s as uid %d: %v, want the bit %v", name, os.Geteuid(), fi.Mode(), want)
+		}
+	}
+}

@@ -1082,6 +1082,18 @@ that fails on the code before the fix:
 
 ### Fixed
 
+- **An image's setuid, setgid and sticky bits reach the guest.** Unpacking a
+  layer converted the tar header's Unix mode with a plain `fs.FileMode(...)`,
+  which keeps those bits elsewhere, so every root disk lost all three, even
+  from a root-run `sandboxd` that is meant to keep the image as built: an
+  image's `sudo` refused to run ("must be owned by uid 0 and have the setuid
+  bit set") and sticky directories such as `/tmp/.X11-unix` were not. They
+  are kept now (setuid and setgid still only when `sandboxd` runs as root),
+  and the root disk format is 2, so disks built before are rebuilt on next
+  use. The base and desktop images remove every setuid and setgid bit
+  themselves, so their `su`, `passwd`, `mount` and the rest, which were
+  inert by accident until now, stay inert on purpose; an image that wants
+  root inside the guest adds it deliberately.
 - **A slow create says where it waited.** A Firecracker sandbox showed
   `pending` for most of a minute, and sandboxd's log said only `ready in
   82ms`, the boot alone. Its line is now `created in 48.2s (image …,
