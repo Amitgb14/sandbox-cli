@@ -10,6 +10,12 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **The Agent tab draws the agent's replies as Markdown.** Tables, lists,
+  bold and code showed as their source — rows of pipes, words in stars. HTML
+  in a reply stays text, a link is one only to an absolute web or mail
+  address (never back into Studio), and an
+  image in a reply shows as its alt text rather than being fetched from
+  wherever the agent pointed.
 - **History: what an agentos sandbox's agent did.** A tab beside Agent lists
   each session's prompts, tool calls (open one for its arguments and result),
   questions and answers, and how it ended, and stays after the sandbox ends.

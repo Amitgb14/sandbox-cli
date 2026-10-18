@@ -78,8 +78,13 @@ and the sandbox needs a network that reaches them. Leaving the tab keeps the
 session, so the Desktop tab shows the agent at work; closing the page ends it.
 
 What the agent sends is the guest's: the server checks the manifest's fields
-and passes only JSON messages on, and the page shows them as text — images
-only as PNG, JPEG or WebP. The page offers the agent no files or terminals of
+and passes only JSON messages on. The page draws the agent's replies as
+Markdown — tables, lists, emphasis, code — and nothing more. HTML in a reply
+stays text. A link is a link only to an absolute web or mail address, opened
+in a new tab; any other, such as one back into Studio, is its text alone. An
+image in a reply is shown as its alt text, never fetched. The images the page
+shows are what the agent saw, from its tool calls, and only as PNG, JPEG or
+WebP. The page offers the agent no files or terminals of
 its own: it works with the sandbox's.
 
 ### The History tab: what the agent did
