@@ -214,7 +214,7 @@ func (b *Backend) checkKept(id, dir string) (candidate, string) {
 	if b.cfg.Jailer != nil && ks.UID < b.cfg.Jailer.UIDBase {
 		return candidate{}, "its jail uid is not one the jailer hands out"
 	}
-	v := &vm{id: id, dir: dir, spec: ks.Spec, pid: ks.PID, start: ks.Start, suspended: ks.Suspended, adopted: true}
+	v := &vm{id: id, dir: dir, spec: ks.Spec, pid: ks.PID, start: ks.Start, suspended: ks.Suspended, adopted: true, cloudHV: len(ks.Spec.GPUs) > 0}
 	if b.cfg.Jailer != nil {
 		v.root = b.cfg.Jailer.root(id)
 	}
@@ -296,7 +296,7 @@ func (b *Backend) removeLeftover(id, dir string) {
 // a record can be wrong: a VMM started for a resume just before sandboxd
 // crashed is not the pid its keep.json names, and without this it would run
 // on with nothing to stop it. A process is this backend's only when it is a
-// firecracker whose working directory is in this state directory — the
+// firecracker (or cloud-hypervisor) whose working directory is in this state directory — the
 // sandbox's own directory, or its jail — so nothing else on the host is ever
 // touched. It returns how many it ended.
 func (b *Backend) sweepVMMs(keep map[int]bool) int {
@@ -335,10 +335,11 @@ func (b *Backend) sweepVMMs(keep map[int]bool) int {
 }
 
 // ownedVMM reports whether a process is a VMM of this state directory: named
-// firecracker, working in one of roots. A directory removed under it reads
-// back with " (deleted)" appended, and still counts.
+// firecracker or cloud-hypervisor (cut to the 15 bytes the kernel keeps of a
+// name), working in one of roots. A directory removed under it reads back
+// with " (deleted)" appended, and still counts.
 func ownedVMM(comm, cwd string, roots []string) bool {
-	if strings.TrimSpace(comm) != "firecracker" {
+	if c := strings.TrimSpace(comm); c != "firecracker" && c != "cloud-hyperviso" {
 		return false
 	}
 	cwd = strings.TrimSuffix(cwd, " (deleted)")

@@ -46,6 +46,9 @@ func (b *Backend) ResizeSandbox(ctx context.Context, id string, size api.NodeRes
 	if err != nil {
 		return api.NodeResources{}, false, err
 	}
+	if v.cloudHV {
+		return sizeOf(v.spec), false, unsupportedGPU("resized")
+	}
 	v.restart.Lock()
 	defer v.restart.Unlock()
 	if v, err = b.get(id); err != nil { // terminated while waiting

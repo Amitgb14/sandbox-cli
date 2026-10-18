@@ -51,6 +51,10 @@ type Spec struct {
 	// Volumes are mounted at their paths. The server has checked that each
 	// exists, is attached nowhere else, and that the paths are allowed.
 	Volumes []api.VolumeMount
+	// GPUs are the PCI addresses (0000:01:00.0) of the whole GPUs passed
+	// through to the sandbox, chosen by the server from the node's free ones.
+	// A sandbox with any cannot be suspended, snapshotted or resized.
+	GPUs []string `json:"GPUs,omitempty"`
 }
 
 // Keeper can leave its sandboxes running when sandboxd exits, and take back,

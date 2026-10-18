@@ -115,6 +115,9 @@ func (b *Backend) Suspend(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if v.cloudHV {
+		return unsupportedGPU("suspended")
+	}
 	// Volumes are written out first, so what is on their disks while the VM
 	// is suspended is complete: another process may read the image, and a
 	// suspended sandbox may be terminated without ever running again.
@@ -213,6 +216,9 @@ func (b *Backend) Snapshot(ctx context.Context, id, snapshotID string) (backend.
 	v, err := b.get(id)
 	if err != nil {
 		return backend.SnapshotInfo{}, err
+	}
+	if v.cloudHV {
+		return backend.SnapshotInfo{}, unsupportedGPU("snapshotted")
 	}
 	if v.net != nil && v.net.ns == "" {
 		return backend.SnapshotInfo{}, fmt.Errorf("%w: this sandbox started before sandboxes had network namespaces, and a snapshot of it would give every fork its network identity; snapshot one started since", backend.ErrUnsupported)

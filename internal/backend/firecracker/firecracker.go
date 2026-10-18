@@ -57,6 +57,12 @@ type Config struct {
 	// at start, the ones an earlier sandboxd left (keep.go). Without it a
 	// start removes every VM it finds, as it always has.
 	Keep bool
+	// CloudHypervisor and GPUKit, both set, let the node run sandboxes with
+	// GPUs (Spec.GPUs, gpu.go): the Cloud Hypervisor binary, and the kit
+	// directory scripts/gpu-kit.sh writes, whose kernel GPU sandboxes boot and
+	// whose driver their root disks carry.
+	CloudHypervisor string
+	GPUKit          string
 }
 
 // Backend runs sandboxes as Firecracker microVMs.
@@ -82,6 +88,12 @@ type Backend struct {
 	// record of which references they serve is kept here. A restart forgets
 	// it, which costs a gateway one hint, not a sandbox.
 	built map[string]bool
+
+	// kit is the GPU kit, nil when the node serves no GPUs.
+	kit *gpuKit
+	// cloudHVAll runs every sandbox on Cloud Hypervisor, GPU or not: set only
+	// by this package's tests, to test that path without a free GPU.
+	cloudHVAll bool
 }
 
 // CachedImages is backend.ImageLister: those built since this process
@@ -155,6 +167,7 @@ type vm struct {
 	exited    chan struct{}
 	suspended bool
 	adopted   bool // taken back from an earlier sandboxd (keep.go)
+	cloudHV   bool // on Cloud Hypervisor, not Firecracker (gpu.go)
 	// restart is held while the VMM is restarted (resize.go), so a
 	// terminate waits for the new VMM rather than racing its start.
 	restart sync.Mutex
@@ -200,6 +213,22 @@ func New(cfg Config) (*Backend, error) {
 		cfg.Logf = func(string, ...any) {}
 	}
 	b := &Backend{cfg: cfg, vms: map[string]*vm{}}
+	if (cfg.CloudHypervisor == "") != (cfg.GPUKit == "") {
+		return nil, errors.New("firecracker backend: GPUs need both Cloud Hypervisor and a GPU kit")
+	}
+	if cfg.CloudHypervisor != "" {
+		if _, err := os.Stat(cfg.CloudHypervisor); err != nil {
+			return nil, fmt.Errorf("firecracker backend: cloud hypervisor: %w", err)
+		}
+		if cfg.Jailer != nil {
+			if _, err := exec.LookPath("setpriv"); err != nil {
+				return nil, errors.New("firecracker backend: GPU sandboxes under the jailer need setpriv (util-linux)")
+			}
+		}
+		if b.kit, err = loadKit(cfg.GPUKit); err != nil {
+			return nil, fmt.Errorf("firecracker backend: %w", err)
+		}
+	}
 	if err := os.MkdirAll(b.sandboxesDir(), 0o700); err != nil {
 		return nil, err
 	}
@@ -314,6 +343,12 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	if l, ok := backend.RegistryLoginFrom(ctx); ok {
 		ctx = image.WithLogin(ctx, image.Login{Registry: l.Registry, Username: l.Username, Password: l.Password})
 	}
+	cloudHV := b.cloudHV(s)
+	if cloudHV {
+		if err := b.checkGPUs(s); err != nil {
+			return err
+		}
+	}
 	if s.FromSnapshot != "" {
 		return b.createFromSnapshot(ctx, s)
 	}
@@ -326,7 +361,11 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 			b.cfg.Logf("sandbox %s: not created after %v (%s)", s.ID, time.Since(t.start).Round(time.Millisecond), &t)
 		}
 	}()
-	rootfs, err := image.BuildRootFS(ctx, b.cfg.Puller, s.Image, b.cfg.Agent, b.cfg.ImageDir)
+	var kit *image.Kit
+	if cloudHV {
+		kit = b.kit.tree
+	}
+	rootfs, err := image.BuildRootFSWithKit(ctx, b.cfg.Puller, s.Image, b.cfg.Agent, b.cfg.ImageDir, kit)
 	t.mark("image")
 	if err != nil {
 		b.cfg.Logf("sandbox %s: image %s: %v", s.ID, s.Image, err)
@@ -346,6 +385,7 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 	if err != nil {
 		return err
 	}
+	v.cloudHV = cloudHV
 	defer func() {
 		if err != nil {
 			b.destroy(v)
@@ -384,6 +424,9 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 		bootArgs = append(bootArgs, tap.kernelArgs()...)
 		t.mark("network")
 	}
+	if cloudHV {
+		return b.bootCloudHV(ctx, v, rootfs.Path, scratch, volumes, cloudHypervisorBootArgs(bootArgs, len(s.GPUs) > 0), &t)
+	}
 
 	// The sandbox's own files are named relative to the VMM's working directory
 	// (its sandbox directory, or the jail's root), and the shared ones by
@@ -410,11 +453,51 @@ func (b *Backend) Create(ctx context.Context, s backend.Spec) (err error) {
 		return err
 	}
 	t.mark("boot")
-	b.cfg.Logf("sandbox %s: created in %v (%s)", s.ID, time.Since(t.start).Round(time.Millisecond), &t)
+	b.created(v, &t)
+	return nil
+}
+
+// created logs a create's steps and serves the VM.
+func (b *Backend) created(v *vm, t *steps) {
+	b.cfg.Logf("sandbox %s: created in %v (%s)", v.id, time.Since(t.start).Round(time.Millisecond), t)
 	b.mu.Lock()
-	b.vms[s.ID] = v
+	b.vms[v.id] = v
 	b.mu.Unlock()
 	b.saveKeep(v)
+}
+
+// bootCloudHV is the rest of Create for a sandbox on Cloud Hypervisor (gpu.go):
+// its disks laid out, its devices handed to its VMM, the VMM started and the
+// guest waited for.
+func (b *Backend) bootCloudHV(ctx context.Context, v *vm, rootfs, scratch string, volumes, bootArgs []string, t *steps) error {
+	paths := vmPaths{Kernel: b.kit.kernel, RootFS: rootfs, Scratch: "scratch.ext4", VsockUDS: "v.sock", APISock: "api.sock", Volumes: volumes}
+	if b.cfg.Jailer != nil {
+		var err error
+		if paths, err = b.cfg.Jailer.prepareCloudHV(v.id, b.kit.kernel, rootfs, scratch, volumes); err != nil {
+			return err
+		}
+		t.mark("jail")
+	}
+	args, err := CloudHypervisorArgs(v.spec, paths, strings.Join(bootArgs, " "), v.net, v.spec.GPUs)
+	if err != nil {
+		return err
+	}
+	data, _ := json.Marshal(args)
+	if err := os.WriteFile(filepath.Join(v.dir, cloudHVArgsFile), data, 0o600); err != nil {
+		return err
+	}
+	if err := b.handGPUs(v); err != nil {
+		return err
+	}
+	if err := b.startVMM(v, b.cloudHVCommand(v, args)); err != nil {
+		return err
+	}
+	err = b.waitReady(ctx, v)
+	t.mark("boot")
+	if err != nil {
+		return err
+	}
+	b.created(v, t)
 	return nil
 }
 
@@ -467,13 +550,6 @@ func (b *Backend) own(id, path string) {
 // socket and the given arguments, from the directory its relative paths are
 // relative to.
 func (b *Backend) vmm(v *vm, args ...string) error {
-	_ = os.Remove(v.hostPath("v.sock"))
-	_ = os.Remove(v.hostPath("api.sock"))
-	console, err := os.OpenFile(filepath.Join(v.dir, "console.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer console.Close()
 	// A VM with a namespace of its own runs in it, where its tap is: the
 	// jailer joins it (--netns); without one, ip netns exec does, and execs
 	// the VMM in its place, so the pid is the VMM's.
@@ -492,6 +568,19 @@ func (b *Backend) vmm(v *vm, args ...string) error {
 		cmd = exec.Command(argv[0], argv[1:]...)
 		cmd.Dir = v.dir
 	}
+	return b.startVMM(v, cmd)
+}
+
+// startVMM starts a VM's VMM command, its output to the console log, and
+// records it as the VM's.
+func (b *Backend) startVMM(v *vm, cmd *exec.Cmd) error {
+	_ = os.Remove(v.hostPath("v.sock"))
+	_ = os.Remove(v.hostPath("api.sock"))
+	console, err := os.OpenFile(filepath.Join(v.dir, "console.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer console.Close()
 	cmd.Stdout, cmd.Stderr = console, console
 	// A session of its own, not only a process group: a VMM must outlive
 	// sandboxd when VMs are kept (keep.go), and a signal to sandboxd's
@@ -577,6 +666,7 @@ func (b *Backend) destroy(v *vm) {
 	if v.net != nil {
 		b.cfg.Network.detach(v.net)
 	}
+	b.releaseGPUs(v)
 	if b.cfg.Jailer != nil {
 		b.cfg.Jailer.cleanup(v.id)
 		// The jail held a hard link to each volume, chowned to its uid; the

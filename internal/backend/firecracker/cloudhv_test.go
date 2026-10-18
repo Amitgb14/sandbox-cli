@@ -48,8 +48,12 @@ func TestCloudHypervisorArgsRefuses(t *testing.T) {
 }
 
 func TestCloudHypervisorBootArgs(t *testing.T) {
-	got := strings.Join(cloudHypervisorBootArgs([]string{"console=ttyS0", "pci=off", "ro", "init=/sbin/sandbox-guestd"}), " ")
-	if got != "console=ttyS0 ro init=/sbin/sandbox-guestd root=/dev/vda sbx.halt=poweroff sbx.gpu=1" {
-		t.Fatalf("%q", got)
+	fc := []string{"console=ttyS0", "pci=off", "ro", "init=/sbin/sandbox-guestd"}
+	if got := strings.Join(cloudHypervisorBootArgs(fc, true), " "); got != "console=ttyS0 ro init=/sbin/sandbox-guestd root=/dev/vda sbx.halt=poweroff sbx.gpu=1" {
+		t.Errorf("with a GPU: %q", got)
+	}
+	// Without one (the tests' cloudHVAll), the driver is not loaded.
+	if got := strings.Join(cloudHypervisorBootArgs(fc, false), " "); got != "console=ttyS0 ro init=/sbin/sandbox-guestd root=/dev/vda sbx.halt=poweroff" {
+		t.Errorf("without: %q", got)
 	}
 }
