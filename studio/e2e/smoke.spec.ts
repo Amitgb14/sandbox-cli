@@ -416,7 +416,9 @@ test("an agent's reply is drawn as Markdown, and its HTML, script links and imag
   const reply = [
     "**Fri Oct 23** fares:\n\n| Price | Airline |\n|---|---|\n| **$254** | Frontier |\n",
     "| $288 | Frontier |\n\n- carry-on extra\n- `prices change`\n\n",
-    '<b>raw</b> [click](javascript:alert(1)) [docs](https://example.com/) ![beacon](https://tracker.example/p.png)',
+    '<b>raw</b> [click](javascript:alert(1)) [docs](https://example.com/) ![beacon](https://tracker.example/p.png)\n' +
+      "[sign in](/#key=sgk_guest) [use](#token=abc) [chat](irc://evil.example/x) [mail](mailto:a@example.com)\n" +
+      "Step 1: clone\nStep 2: build\n\n```\nplain block\n```\n",
   ];
   const fetched: string[] = [];
   await page.route("https://tracker.example/**", (r) => {
@@ -461,6 +463,13 @@ test("an agent's reply is drawn as Markdown, and its HTML, script links and imag
   await expect(agent.locator("b")).toHaveCount(0);
   await expect(agent.getByText("<b>raw</b>")).toBeVisible();
   await expect(agent.locator('a[href^="javascript"]')).toHaveCount(0);
+  // Only absolute web and mail addresses are links: one back into Studio,
+  // with a key or token in its fragment, is its text alone.
+  await expect(agent.getByRole("link")).toHaveText(["docs", "mail"]);
+  await expect(agent.getByText("sign in")).toBeVisible();
+  // A single newline stays a line break, as it was before Markdown.
+  await expect(agent.locator("p", { hasText: "Step 1: clone" })).toHaveCSS("white-space", "pre-wrap");
+  await expect(agent.locator("pre code")).toHaveCSS("font-size", "12px");
   await expect(agent.getByRole("link", { name: "docs" })).toHaveAttribute("rel", "noopener noreferrer nofollow");
   await expect(agent.locator("img")).toHaveCount(0);
   await expect(agent.getByText("[image: beacon]")).toBeVisible();
