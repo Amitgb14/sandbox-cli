@@ -13,7 +13,8 @@ import (
 
 // runInit is PID 1 of a Firecracker guest. The kernel command line carries the
 // little it needs (sbx.*): the scratch device for the writable layer, the vsock
-// port, the hostname, and a DNS server if the host provides one.
+// port, the hostname, a DNS server if the host provides one, and whether the
+// sandbox has a GPU whose driver to load (sbx.gpu, gpu_linux.go).
 //
 // The root disk is the image, shared read-only by every sandbox made from it;
 // the scratch disk is this sandbox's own, empty at create. An overlay of the two
@@ -24,6 +25,7 @@ func runInit() {
 	mountEarly()
 	reopenConsole()
 	args := cmdline()
+	haltPowerOff = args["sbx.halt"] == "poweroff"
 	if dev := args["sbx.overlay"]; dev != "" {
 		if err := overlayRoot(dev); err != nil {
 			fail("overlay root on %s: %v", dev, err)
@@ -43,6 +45,14 @@ func runInit() {
 		// VM, while it believed they were kept.
 		if err := mountVolume(v); err != nil {
 			fail("volume %s at %s: %v", v.dev, v.path, err)
+		}
+	}
+	// A GPU sandbox's driver, from the kit sandboxd put in the root disk. A
+	// sandbox that was given a GPU and cannot use it fails to boot, so the
+	// create says so rather than handing over a sandbox with no GPU.
+	if args["sbx.gpu"] == "1" {
+		if err := loadGPU(); err != nil {
+			fail("GPU: %v", err)
 		}
 	}
 	if err := loopbackUp(); err != nil {
@@ -371,9 +381,17 @@ func supervise(port string) {
 	}
 }
 
+// haltPowerOff is sbx.halt=poweroff: how a failed boot ends on a VMM that
+// resets a guest that reboots (Cloud Hypervisor) rather than exiting, as
+// Firecracker does. Powered off, the VMM exits and the create fails at once.
+var haltPowerOff bool
+
 func fail(format string, a ...any) {
 	fmt.Printf("sandbox-guestd: FATAL: "+format+"\n", a...)
 	syscall.Sync()
+	if haltPowerOff {
+		_ = syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
+	}
 	_ = syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART)
 	for {
 		time.Sleep(time.Hour)

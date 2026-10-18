@@ -1,0 +1,25 @@
+--api-socket
+path=api.sock
+--kernel
+/k/vmlinux
+--cmdline
+console=ttyS0 ro sbx.gpu=1
+--cpus
+boot=2
+--memory
+size=8192M
+--disk
+path=/i/rootfs.ext4,readonly=on,image_type=raw
+path=scratch.ext4,image_type=raw
+path=/v/data.ext4,image_type=raw
+path=/v/ref.ext4,image_type=raw,readonly=on
+--net
+tap=tap0,mac=06:00:0a:00:00:02
+--vsock
+cid=3,socket=v.sock
+--device
+path=/sys/bus/pci/devices/0000:01:00.0/
+--serial
+tty
+--console
+off

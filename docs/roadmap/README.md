@@ -33,6 +33,7 @@ earlier decisions are reversed and why.
 |---|------|-------|
 | 7 | [A gateway in front of many sandboxd nodes](task-7-fleet-gateway.md): sandboxes by API and SSH on one port across hundreds of machines, then agents, jobs and services, as a platform beside Kubernetes | **Proposed** 2026-10-04; five decisions needed before phase 1 |
 | 8 | [The gateway's state in a database](task-8-postgres-store.md): SQLite or PostgreSQL, row-level security as a second wall between tenants, a state file imported once | **Phases 1–3 and 5 built** 2026-10-10; phase 4, several gateways on one database, next |
+| 9 | [GPU sandboxes](task-9-gpu-sandboxes.md): a sandbox that owns a whole physical GPU, on Cloud Hypervisor with VFIO, the driver as an operator's kit injected like the guest agent | **Proposed** 2026-10-18; phase 0 (the node) and the phase 1–3 spike next |
 
 
 ## Reversed decisions
