@@ -7,8 +7,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 )
@@ -36,6 +38,99 @@ func TestCloudHVCommand(t *testing.T) {
 	}
 	if cmd.Dir != "/srv/jail/firecracker/sbx-0123456789abcdef/root" {
 		t.Errorf("under the jailer: in %s", cmd.Dir)
+	}
+
+	// A node whose /dev/kvm is its group's alone: the VMM keeps that group,
+	// and only that one, or it cannot open the device.
+	b.kvmGroups = []int{36}
+	cmd = b.cloudHVCommand(v, []string{"--kernel", "/kit/vmlinux"})
+	want = strings.Replace(want, "--clear-groups", "--groups=36", 1)
+	if got := strings.Join(cmd.Args, " "); got != want {
+		t.Errorf("with /dev/kvm's group:\n got %s\nwant %s", got, want)
+	}
+}
+
+// /dev/kvm open to all needs no group; one open to its group needs that group;
+// one open to neither is refused at start rather than at every create.
+func TestKVMGroups(t *testing.T) {
+	kvm := filepath.Join(t.TempDir(), "kvm")
+	if err := os.WriteFile(kvm, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		mode    os.FileMode
+		want    []int
+		refused bool
+	}{
+		{0o666, nil, false},
+		{0o660, []int{os.Getgid()}, false},
+		{0o600, nil, true},
+	} {
+		if err := os.Chmod(kvm, c.mode); err != nil {
+			t.Fatal(err)
+		}
+		got, err := kvmGroups(kvm)
+		if (err != nil) != c.refused || !slices.Equal(got, c.want) {
+			t.Errorf("%v: %v, %v", c.mode, got, err)
+		}
+	}
+	if _, err := kvmGroups(filepath.Join(t.TempDir(), "none")); err == nil {
+		t.Error("no /dev/kvm: no error")
+	}
+}
+
+// A leftover sandbox's devices are read from its vm.args, so a sandboxd that
+// sweeps it without a keep.json still gives their VFIO groups back.
+func TestLeftoverGPUs(t *testing.T) {
+	dir := t.TempDir()
+	if got := leftoverGPUs(dir); got != nil {
+		t.Errorf("no vm.args: %v", got)
+	}
+	args, _ := json.Marshal([]string{"--disk", "path=/i/rootfs.ext4", "--device", "path=/sys/bus/pci/devices/0000:01:00.0/",
+		"--device", "path=/sys/bus/pci/devices/0000:02:00.1/", "--device", "path=/etc/passwd", "--device"})
+	os.WriteFile(filepath.Join(dir, cloudHVArgsFile), args, 0o600)
+	if got := leftoverGPUs(dir); !slices.Equal(got, []string{"0000:01:00.0", "0000:02:00.1"}) {
+		t.Errorf("got %v", got)
+	}
+}
+
+// A kept sandbox is taken back as a Cloud Hypervisor VM when it has GPUs or
+// its directory has vm.args, even with none.
+func TestOnCloudHV(t *testing.T) {
+	dir := t.TempDir()
+	if onCloudHV(dir, backend.Spec{}) {
+		t.Error("a Firecracker VM: on Cloud Hypervisor")
+	}
+	if !onCloudHV(dir, backend.Spec{GPUs: []string{"0000:01:00.0"}}) {
+		t.Error("with a GPU: not on Cloud Hypervisor")
+	}
+	os.WriteFile(filepath.Join(dir, cloudHVArgsFile), []byte("[]"), 0o600)
+	if !onCloudHV(dir, backend.Spec{}) {
+		t.Error("with vm.args and no GPU: not on Cloud Hypervisor")
+	}
+}
+
+// A terminate whose GPU sandbox's VMM has not exited is an error, and the
+// sandbox stays, so the server does not free a GPU still held; once the VMM
+// has exited, terminating again ends it.
+func TestTerminateWaitsForTheGPU(t *testing.T) {
+	old := gpuReleaseTimeout
+	gpuReleaseTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { gpuReleaseTimeout = old })
+	v := &vm{id: "sbx_1", dir: t.TempDir(), spec: backend.Spec{ID: "sbx_1", GPUs: []string{"0000:01:00.0"}}, exited: make(chan struct{})}
+	b := &Backend{vms: map[string]*vm{"sbx_1": v}}
+	if err := b.Terminate(t.Context(), "sbx_1"); err == nil || !strings.Contains(err.Error(), "still holds GPU 0000:01:00.0") {
+		t.Fatalf("a VMM that has not exited: %v", err)
+	}
+	if _, err := b.get("sbx_1"); err != nil {
+		t.Fatalf("the sandbox is gone after a failed terminate: %v", err)
+	}
+	close(v.exited)
+	if err := b.Terminate(t.Context(), "sbx_1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.get("sbx_1"); err == nil {
+		t.Error("the sandbox is still there after terminate")
 	}
 }
 

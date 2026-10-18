@@ -91,6 +91,9 @@ type Backend struct {
 
 	// kit is the GPU kit, nil when the node serves no GPUs.
 	kit *gpuKit
+	// kvmGroups are the groups a jailed Cloud Hypervisor keeps for /dev/kvm
+	// (gpu.go, kvmGroups).
+	kvmGroups []int
 	// cloudHVAll runs every sandbox on Cloud Hypervisor, GPU or not: set only
 	// by this package's tests, to test that path without a free GPU.
 	cloudHVAll bool
@@ -223,6 +226,9 @@ func New(cfg Config) (*Backend, error) {
 		if cfg.Jailer != nil {
 			if _, err := exec.LookPath("setpriv"); err != nil {
 				return nil, errors.New("firecracker backend: GPU sandboxes under the jailer need setpriv (util-linux)")
+			}
+			if b.kvmGroups, err = kvmGroups("/dev/kvm"); err != nil {
+				return nil, fmt.Errorf("firecracker backend: %w", err)
 			}
 		}
 		if b.kit, err = loadKit(cfg.GPUKit); err != nil {
@@ -649,6 +655,12 @@ func (b *Backend) Terminate(_ context.Context, id string) error {
 		v.restart.Lock()
 		defer v.restart.Unlock()
 		b.flushVolumes(v, true)
+		if err := b.awaitGPURelease(v); err != nil {
+			b.mu.Lock()
+			b.vms[id] = v
+			b.mu.Unlock()
+			return err
+		}
 		b.destroy(v)
 	}
 	return nil
@@ -666,7 +678,7 @@ func (b *Backend) destroy(v *vm) {
 	if v.net != nil {
 		b.cfg.Network.detach(v.net)
 	}
-	b.releaseGPUs(v)
+	b.releaseGPUs(v.spec.GPUs)
 	if b.cfg.Jailer != nil {
 		b.cfg.Jailer.cleanup(v.id)
 		// The jail held a hard link to each volume, chowned to its uid; the

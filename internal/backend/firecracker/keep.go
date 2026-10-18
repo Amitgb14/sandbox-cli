@@ -214,7 +214,7 @@ func (b *Backend) checkKept(id, dir string) (candidate, string) {
 	if b.cfg.Jailer != nil && ks.UID < b.cfg.Jailer.UIDBase {
 		return candidate{}, "its jail uid is not one the jailer hands out"
 	}
-	v := &vm{id: id, dir: dir, spec: ks.Spec, pid: ks.PID, start: ks.Start, suspended: ks.Suspended, adopted: true, cloudHV: len(ks.Spec.GPUs) > 0}
+	v := &vm{id: id, dir: dir, spec: ks.Spec, pid: ks.PID, start: ks.Start, suspended: ks.Suspended, adopted: true, cloudHV: onCloudHV(dir, ks.Spec)}
 	if b.cfg.Jailer != nil {
 		v.root = b.cfg.Jailer.root(id)
 	}
@@ -264,6 +264,10 @@ func (b *Backend) removeLeftover(id, dir string) {
 	} else if pgid, err := readInt(filepath.Join(dir, "vmm.pid")); err == nil && pgid > 1 {
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	}
+	// As destroy does: a GPU's VFIO group was handed to the jail's uid, and
+	// left so, any later process of that uid could open the device. vm.args
+	// names the devices with or without a keep.json.
+	b.releaseGPUs(leftoverGPUs(dir))
 	if b.cfg.Network != nil {
 		if data, err := os.ReadFile(filepath.Join(dir, keepFile)); err == nil {
 			var ks keepState

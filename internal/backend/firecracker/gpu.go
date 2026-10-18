@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
 	"github.com/Amitgb14/sandbox-cli/internal/image"
@@ -26,8 +28,9 @@ import (
 // Under the jailer, Cloud Hypervisor, which has no jailer of its own, runs as
 // the uid the jailer would have given the sandbox, in the jail's directory
 // (not chrooted into it), with the one capability VFIO needs to pin the
-// guest's memory for DMA (CAP_IPC_LOCK) and the VFIO group node of each of its
-// devices handed to that uid for its life.
+// guest's memory for DMA (CAP_IPC_LOCK), /dev/kvm's group if the node is not
+// open to all (kvmGroups), and the VFIO group node of each of its devices
+// handed to that uid for its life.
 
 // gpuKit is a kit as scripts/gpu-kit.sh writes it.
 type gpuKit struct {
@@ -126,16 +129,108 @@ func (b *Backend) handGPUs(v *vm) error {
 	return nil
 }
 
-// releaseGPUs gives v's VFIO group nodes back to root, as vfio-pci made them.
-func (b *Backend) releaseGPUs(v *vm) {
+// releaseGPUs gives the devices' VFIO group nodes back to root, as vfio-pci
+// made them. A VMM still running keeps what it has open; no other process of
+// the jail's uid can open the group after this.
+func (b *Backend) releaseGPUs(gpus []string) {
 	if b.cfg.Jailer == nil {
 		return
 	}
-	for _, d := range v.spec.GPUs {
+	for _, d := range gpus {
 		if node, err := vfioGroup(d); err == nil {
 			_ = os.Chown(node, 0, 0)
 		}
 	}
+}
+
+// gpuReleaseTimeout is how long a terminate waits for a GPU sandbox's killed
+// VMM to exit. Tearing a passed-through device down (its reset, unpinning all
+// of the guest's memory) can take far longer than a Firecracker VM's exit,
+// and until the VMM has exited it holds the VFIO group, so the next sandbox
+// given the GPU would fail to open it. A variable for the tests.
+var gpuReleaseTimeout = 2 * time.Minute
+
+// awaitGPURelease kills a GPU sandbox's VMM and waits for it to exit, so a
+// terminate that returns has freed the device. One that does not exit in time
+// is an error: the sandbox is not terminated, and terminating it again waits
+// again, rather than the server handing the GPU to another sandbox while this
+// VMM still has it.
+func (b *Backend) awaitGPURelease(v *vm) error {
+	if len(v.spec.GPUs) == 0 || v.exited == nil {
+		return nil
+	}
+	killVMM(v)
+	select {
+	case <-v.exited:
+		return nil
+	case <-time.After(gpuReleaseTimeout):
+		return fmt.Errorf("sandbox %s: its VMM has not exited %v after it was killed, and still holds GPU %s; terminate it again",
+			v.id, gpuReleaseTimeout, strings.Join(v.spec.GPUs, ", "))
+	}
+}
+
+// gpusInArgs are the PCI addresses a Cloud Hypervisor command line (vm.args)
+// passes through: how a leftover sandbox's devices are known when no keep.json
+// says, as without --keep-sandboxes.
+func gpusInArgs(args []string) []string {
+	var out []string
+	for i, a := range args {
+		if a != "--device" || i+1 >= len(args) {
+			continue
+		}
+		p := strings.TrimSuffix(strings.TrimPrefix(args[i+1], "path=/sys/bus/pci/devices/"), "/")
+		if ValidPCIAddr(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// leftoverGPUs are the devices a leftover sandbox's VMM was given, from its
+// vm.args.
+func leftoverGPUs(dir string) []string {
+	data, err := os.ReadFile(filepath.Join(dir, cloudHVArgsFile))
+	if err != nil {
+		return nil
+	}
+	var args []string
+	if json.Unmarshal(data, &args) != nil {
+		return nil
+	}
+	return gpusInArgs(args)
+}
+
+// onCloudHV reports whether a kept sandbox's VMM is Cloud Hypervisor: one with
+// GPUs, or any whose directory has the command line only a Cloud Hypervisor VM
+// writes (a test's cloudHVAll sandbox). Taken back as a Firecracker VM, its
+// suspend and snapshot would be Firecracker API calls to Cloud Hypervisor's
+// socket rather than refusals.
+func onCloudHV(dir string, s backend.Spec) bool {
+	if len(s.GPUs) > 0 {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(dir, cloudHVArgsFile))
+	return err == nil
+}
+
+// kvmGroups are the supplementary groups a jailed Cloud Hypervisor keeps so it
+// can open /dev/kvm: none when the node is world read-writable (0666, as many
+// distributions make it), else the group that owns it (kvm, 0660 on Debian and
+// Ubuntu). Firecracker's jailer makes a /dev/kvm of its own in the chroot;
+// Cloud Hypervisor is not chrooted and opens the host's, as the jail's uid.
+func kvmGroups(path string) ([]int, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("GPU sandboxes need %s: %w", path, err)
+	}
+	if fi.Mode().Perm()&0o006 == 0o006 {
+		return nil, nil
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || fi.Mode().Perm()&0o060 != 0o060 {
+		return nil, fmt.Errorf("GPU sandboxes under the jailer need %s read-writable by its group or by all (it is %v)", path, fi.Mode().Perm())
+	}
+	return []int{int(st.Gid)}, nil
 }
 
 // unsupportedGPU is the refusal of what a passed-through device cannot do.
@@ -173,7 +268,15 @@ func (b *Backend) cloudHVCommand(v *vm, args []string) *exec.Cmd {
 	dir := v.dir
 	if b.cfg.Jailer != nil {
 		u := strconv.Itoa(b.cfg.Jailer.uid(v.id))
-		argv = append([]string{"setpriv", "--reuid=" + u, "--regid=" + u, "--clear-groups",
+		groups := "--clear-groups"
+		if len(b.kvmGroups) > 0 {
+			gs := make([]string, len(b.kvmGroups))
+			for i, g := range b.kvmGroups {
+				gs[i] = strconv.Itoa(g)
+			}
+			groups = "--groups=" + strings.Join(gs, ",")
+		}
+		argv = append([]string{"setpriv", "--reuid=" + u, "--regid=" + u, groups,
 			"--inh-caps=-all,+ipc_lock", "--ambient-caps=+ipc_lock", "--bounding-set=-all,+ipc_lock", "--"}, argv...)
 		dir = v.root
 	}

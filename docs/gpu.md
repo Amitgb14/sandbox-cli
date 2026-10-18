@@ -53,8 +53,13 @@ CUDA runtime it builds against.
 **Under the jailer**, Cloud Hypervisor runs as the sandbox's own unprivileged
 uid, the one the jailer would have given it, in the sandbox's network
 namespace. It keeps one capability, `CAP_IPC_LOCK`, which it needs to pin the
-guest's memory for DMA. The device's `/dev/vfio/<group>` belongs to that uid
-while the sandbox runs and goes back to root when it ends. Unlike Firecracker,
+guest's memory for DMA, and, where `/dev/kvm` is not open to all (`0660
+root:kvm` on Debian and Ubuntu), the group that owns it. The device's
+`/dev/vfio/<group>` belongs to that uid while the sandbox runs and goes back
+to root when its VMM has exited, or when sandboxd removes a sandbox an earlier
+run left. A terminate waits for the VMM to exit, up to two minutes, so the GPU
+is free when it returns; one that is not answers with an error and can be
+retried. Unlike Firecracker,
 it is not chrooted, because Cloud Hypervisor has no jailer of its own.
 
 ## What a GPU sandbox costs
