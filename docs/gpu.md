@@ -16,7 +16,7 @@ sandbox-cli run --gpus 1 --image ghcr.io/amitgb14/sandbox-cuda:edge -- sandbox-c
 |---|---|
 | Built and tested without a card | The kit; the CUDA image; the GPU desktop; the VM through sandboxd's Linux backend; `gpus` on create, `sandboxd --gpu`, `sandbox-cli run --gpus`, the SDKs; allocation on a node and placement by a gateway; Studio and `sandbox-cli doctor`; the refusals below |
 | Tested on the card, in a container | The CUDA image and the GPU desktop, with the kit's libraries and the host's own driver (the same version) |
-| Not yet tried | A real card passed through. The node's setup below needs root on it |
+| Tested on the card, passed through | Through sandboxd on an RTX 5070 Ti: `nvidia-smi`, allocation and refusal, the CUDA image, the GPU desktop |
 | Not yet built | Vulkan windows on the desktop (games on Vulkan and Proton) |
 
 The plan, with what each phase proved, is

@@ -250,10 +250,11 @@ func unsupportedGPU(what string) error {
 
 // prepareCloudHV is Jailer.prepare for a VMM that is not chrooted: the same
 // links and ownership in the jail's directory, named relative to it (the
-// VMM's working directory), the kernel by its absolute path in the kit, and
-// the directory itself the VMM's, for its sockets.
+// VMM's working directory), and the directory itself the VMM's, for its
+// sockets. The kit's kernel is linked in too: the jail's uid cannot reach it
+// in the kit, under sandboxd's state directory.
 func (j *Jailer) prepareCloudHV(id, kernel, rootfs, scratch string, volumes []string) (vmPaths, error) {
-	p, err := j.prepare(id, "", rootfs, scratch, volumes)
+	p, err := j.prepare(id, kernel, rootfs, scratch, volumes)
 	if err != nil {
 		return vmPaths{}, err
 	}
@@ -262,7 +263,7 @@ func (j *Jailer) prepareCloudHV(id, kernel, rootfs, scratch string, volumes []st
 		return vmPaths{}, err
 	}
 	rel := func(s string) string { return strings.TrimPrefix(s, "/") }
-	p.Kernel, p.RootFS, p.Scratch, p.VsockUDS, p.APISock = kernel, rel(p.RootFS), rel(p.Scratch), rel(p.VsockUDS), "api.sock"
+	p.Kernel, p.RootFS, p.Scratch, p.VsockUDS, p.APISock = rel(p.Kernel), rel(p.RootFS), rel(p.Scratch), rel(p.VsockUDS), "api.sock"
 	for i := range p.Volumes {
 		p.Volumes[i] = rel(p.Volumes[i])
 	}
