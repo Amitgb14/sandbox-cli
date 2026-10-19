@@ -78,6 +78,10 @@ func (s *Server) suspend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if len(rec.snapshot().GPUs) > 0 {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, errGPUSuspend)
+		return
+	}
 	rec.transit.Lock()
 	defer rec.transit.Unlock()
 	if rec.snapshot().State != api.StateRunning {
@@ -226,6 +230,10 @@ func (s *Server) resize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur := rec.snapshot()
+	if len(cur.GPUs) > 0 {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "a sandbox with a GPU cannot be resized: its VMM cannot restart with a passed-through device kept")
+		return
+	}
 	was := api.NodeResources{CPUs: cur.CPUs, MemoryMB: cur.MemoryMB, DiskMB: cur.DiskMB}
 	size, err := spec.ResolveResize(req, was, s.Policy)
 	if err != nil {
@@ -312,6 +320,10 @@ func (s *Server) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, api.CodeConflict, err.Error())
 		return
 	}
+	if errors.Is(err, errSnapshotGPU) {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, err.Error())
+		return
+	}
 	if err != nil {
 		// The caller gets a generic message for most backend errors; the
 		// operator gets the cause, or a failed snapshot has none anywhere.
@@ -342,6 +354,9 @@ func (s *Server) takeSnapshot(ctx context.Context, rec *record, scheduled bool) 
 	sb := rec.snapshot()
 	if len(sb.Volumes) > 0 {
 		return api.Snapshot{}, errSnapshotVolumes
+	}
+	if len(sb.GPUs) > 0 {
+		return api.Snapshot{}, errSnapshotGPU
 	}
 	// Its progress is on the sandbox while it runs, so whoever looks — the
 	// client that asked, another, or nobody, for a scheduled one — sees the

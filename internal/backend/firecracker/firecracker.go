@@ -322,6 +322,7 @@ func (b *Backend) Capabilities() map[string]bool {
 		api.CapVolumes:             true,
 		api.CapRegistryLogin:       true,
 		api.CapResize:              true,
+		api.CapGPU:                 b.kit != nil,
 	}
 }
 

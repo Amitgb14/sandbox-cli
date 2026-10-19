@@ -46,6 +46,8 @@ type policyFile struct {
 		// How often at most a sandbox's metrics may be pushed to its owner's
 		// collector.
 		MinMetricsExportSecs *int `yaml:"min_metrics_export_secs"`
+		// The most GPUs one sandbox may ask for; 0 gives none.
+		MaxGPUs *int `yaml:"max_gpus"`
 	} `yaml:"limits"`
 	Network *struct {
 		Default *struct {
@@ -98,6 +100,7 @@ func LoadPolicy(path string) (Policy, error) {
 		set(&p.Limits.MinSnapshotEverySecs, l.MinSnapshotEverySecs)
 		set(&p.Limits.MaxSnapshotKeep, l.MaxSnapshotKeep)
 		set(&p.Limits.MinMetricsExportSecs, l.MinMetricsExportSecs)
+		set(&p.Limits.MaxGPUs, l.MaxGPUs)
 	}
 	if n := f.Network; n != nil {
 		if n.Default != nil {

@@ -154,7 +154,8 @@ class Client:
                        snapshot_every_secs: int = 0, snapshot_keep: int = 0,
                        labels: Optional[Dict[str, str]] = None,
                        volumes: Optional[List[Dict[str, Any]]] = None,
-                       metrics_export: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       metrics_export: Optional[Dict[str, Any]] = None,
+                       gpus: int = 0) -> Dict[str, Any]:
         """Create a sandbox. ``network`` is ``{"mode": "none"|"allowlist"|"open",
         "allow": [...], "deny": [...]}``; ``"allow": None`` (or absent) means the
         server's default list, ``[]`` means nothing — which is refused.
@@ -172,14 +173,18 @@ class Client:
         ``metrics_export``): ``{"endpoint": "https://…", "interval_secs": 60,
         "headers": {"Authorization": "…"}}``, or, through a gateway,
         ``"header_secrets": {"Authorization": "secret-name"}``. Header values
-        are never returned."""
+        are never returned. ``gpus`` gives the sandbox that many whole GPUs
+        (capability ``gpu``, at most ``limits.max_gpus``); such a sandbox
+        cannot be suspended, snapshotted or resized, and the create is refused
+        ``unavailable`` when the node has too few free."""
         req: Dict[str, Any] = {}
         for k, v in (("name", name), ("image", image), ("cpus", cpus), ("memory_mb", memory_mb),
                      ("disk_mb", disk_mb), ("env", env), ("network", network),
                      ("idle_timeout_secs", idle_timeout_secs), ("idle_action", idle_action),
                      ("snapshot_id", snapshot_id),
                      ("snapshot_every_secs", snapshot_every_secs), ("snapshot_keep", snapshot_keep),
-                     ("labels", labels), ("volumes", volumes), ("metrics_export", metrics_export)):
+                     ("labels", labels), ("volumes", volumes), ("metrics_export", metrics_export),
+                     ("gpus", gpus)):
             if v:
                 req[k] = v
         if network is not None and "allow" not in network:

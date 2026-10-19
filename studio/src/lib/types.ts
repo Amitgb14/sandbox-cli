@@ -58,6 +58,8 @@ export interface Sandbox {
   snapshotting?: SnapshotProgress;
   /** Where its usage is pushed (capability metrics_export), and how that is going. */
   metrics_export?: MetricsExportStatus;
+  /** The node's PCI addresses of the whole GPUs it was given (capability gpu); absent without. */
+  gpus?: string[];
 }
 
 /**
@@ -108,6 +110,8 @@ export interface Capabilities {
     max_snapshot_keep?: number;
     /** The shortest interval a metrics export may push at. */
     min_metrics_export_secs?: number;
+    /** The most GPUs one sandbox may ask for; absent or 0 where there are none. */
+    max_gpus?: number;
   };
   network: { default: NetworkPolicy; ceiling: NetworkMode; may_allow: string[] | null };
 }
@@ -200,6 +204,8 @@ export interface NodeResources {
   cpus: number;
   memory_mb: number;
   disk_mb: number;
+  /** Whole GPUs; absent on a node with none. */
+  gpus?: number;
 }
 
 export interface NodeStatus {
@@ -297,6 +303,8 @@ export interface LaunchRequest {
   cpus?: number;
   memory_mb?: number;
   disk_mb?: number;
+  /** Whole GPUs (capability gpu): such a sandbox is never suspended, snapshotted or resized. */
+  gpus?: number;
   profile?: "" | "dev" | "prod";
   rows?: number;
   cols?: number;

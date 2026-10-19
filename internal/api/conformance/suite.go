@@ -106,6 +106,7 @@ func RunExcept(t *testing.T, c *api.Client, except map[string]string) {
 		{"AVolumeOutlivesItsSandbox", testVolumes},
 		{"VolumeMountsAreChecked", testVolumeRefusals},
 		{"AVolumeHasOneWriterOrManyReaders", testVolumeSharing},
+		{"AGPUSandboxHasItsGPUAndRefusesWhatItCannotDo", testGPU},
 	} {
 		why, skip := except[tc.name]
 		delete(except, tc.name)
@@ -1709,5 +1710,39 @@ func testMetricsExport(t *testing.T, e *env) {
 	}
 	if up.MetricsExport != nil {
 		t.Fatalf("after stopping: %+v", up.MetricsExport)
+	}
+}
+
+// testGPU: a sandbox given a GPU names it, and what a passed-through device
+// rules out — suspend, snapshot, resize, idle suspend, more GPUs than the
+// limit — is refused out loud. An endpoint without GPUs refuses the request.
+func testGPU(t *testing.T, e *env) {
+	ctx := ctxT(t)
+	if !e.caps.Has(api.CapGPU) {
+		_, err := e.c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: 1})
+		wantCode(t, err, api.CodeUnsupported)
+		return
+	}
+	_, err := e.c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: e.caps.Limits.MaxGPUs + 1})
+	wantCode(t, err, api.CodeInvalidRequest)
+	_, err = e.c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: 1, IdleAction: api.IdleSuspend})
+	wantCode(t, err, api.CodeInvalidRequest)
+
+	sb := e.newSandbox(t, api.CreateSandboxRequest{GPUs: 1})
+	if len(sb.GPUs) != 1 || sb.GPUs[0] == "" {
+		t.Fatalf("a sandbox given one GPU names %v", sb.GPUs)
+	}
+	if got, err := e.c.Sandbox(ctx, sb.ID); err != nil || len(got.GPUs) != 1 || got.GPUs[0] != sb.GPUs[0] {
+		t.Fatalf("read back: %v, %v", got.GPUs, err)
+	}
+	_, err = e.c.Suspend(ctx, sb.ID)
+	wantCode(t, err, api.CodeUnsupported)
+	_, err = e.c.CreateSnapshot(ctx, sb.ID)
+	wantCode(t, err, api.CodeUnsupported)
+	_, err = e.c.Resize(ctx, sb.ID, api.ResizeSandboxRequest{CPUs: 2})
+	wantCode(t, err, api.CodeUnsupported)
+	// It still runs as any sandbox does.
+	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"true"}}); res.ExitCode != 0 {
+		t.Fatalf("true in a GPU sandbox: exit %d", res.ExitCode)
 	}
 }

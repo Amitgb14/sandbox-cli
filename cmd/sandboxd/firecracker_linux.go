@@ -46,5 +46,18 @@ func newFirecracker(o backendOptions) (backend.Backend, error) {
 	if o.jailer != "" {
 		cfg.Jailer = &fc.Jailer{Path: o.jailer, ChrootBase: filepath.Join(o.stateDir, "jail"), UIDBase: 900000}
 	}
+	if len(o.gpus) > 0 {
+		if cfg.CloudHypervisor, err = exec.LookPath(o.cloudHypervisor); err != nil {
+			return nil, fmt.Errorf("--cloud-hypervisor %s: %w", o.cloudHypervisor, err)
+		}
+		cfg.GPUKit = o.gpuKit
+		// Checked again at each create, so a warning, not a refusal: a card
+		// bound after sandboxd starts is served from then on.
+		for _, g := range o.gpus {
+			if err := fc.CheckGPU(g); err != nil {
+				o.logf("%v; no sandbox can have it until that is fixed", err)
+			}
+		}
+	}
 	return fc.New(cfg)
 }

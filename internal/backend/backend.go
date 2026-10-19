@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"regexp"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
@@ -353,3 +354,10 @@ func RegistryLoginFrom(ctx context.Context) (RegistryLogin, bool) {
 	l, ok := ctx.Value(registryLoginKey{}).(RegistryLogin)
 	return l, ok
 }
+
+// pciAddr is a PCI device's full address, domain included, as sysfs names it.
+var pciAddr = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
+
+// ValidPCIAddr reports whether a is a PCI address in sysfs's form
+// (0000:01:00.0), the only form a GPU is named in (Spec.GPUs).
+func ValidPCIAddr(a string) bool { return pciAddr.MatchString(a) }

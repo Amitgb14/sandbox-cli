@@ -118,7 +118,7 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 	}
 
-	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, Spread: spread}
+	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, GPUs: req.GPUs, Spread: spread}
 	if want.CPUs == 0 {
 		want.CPUs = g.cfg.Defaults.CPUs
 	}
@@ -223,7 +223,11 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 		}
 	}
 
-	res := api.NodeResources{CPUs: want.CPUs, MemoryMB: want.MemoryMB, DiskMB: want.DiskMB}
+	// GPUs are reserved with the rest, so a burst of GPU creates between two
+	// polls is not all sent to the one free GPU. A terminate's credit
+	// (roomBack) gives back no GPU, as the store keeps none: one comes free
+	// at the node's next status.
+	res := api.NodeResources{CPUs: want.CPUs, MemoryMB: want.MemoryMB, DiskMB: want.DiskMB, GPUs: want.GPUs}
 	t.mark("checks")
 	hold, err := g.reserveQuota(ctx, p.Tenant, res)
 	t.mark("quota")
@@ -344,7 +348,7 @@ func (g *Gateway) place(want Want, tried []string, res api.NodeResources) (*node
 	if errors.Is(err, errNoCapable) {
 		if want.Node != "" {
 			name, err = want.Node, nil
-		} else if fb, ok := Fallback(cands, tried); ok {
+		} else if fb, ok := Fallback(cands, tried, want); ok {
 			name, err = fb, nil
 		}
 		if err == nil {

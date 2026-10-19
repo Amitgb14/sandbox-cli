@@ -22,6 +22,7 @@ export interface NodeResources {
   cpus: number;
   memory_mb: number;
   disk_mb: number;
+  gpus?: number;
 }
 
 /** A node as Studio keeps it: no endpoint. */

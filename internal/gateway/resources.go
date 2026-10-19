@@ -96,6 +96,16 @@ func CombineCapabilities(sts []api.NodeStatus) api.Capabilities {
 	// Every node may manage its own images, but the gateway does not route
 	// that (http.go), so the fleet does not offer it.
 	out.Capabilities[api.CapImages] = false
+	// GPUs are the exception to "every node": a fleet gives a sandbox GPUs
+	// when some node can, and the scheduler sends it there (canRun), so the
+	// fleet offers what its best GPU node does.
+	out.Limits.MaxGPUs = 0
+	for _, st := range sts {
+		if st.Capabilities.Capabilities[api.CapGPU] {
+			out.Capabilities[api.CapGPU] = true
+			out.Limits.MaxGPUs = max(out.Limits.MaxGPUs, st.Capabilities.Limits.MaxGPUs)
+		}
+	}
 	if api.NetworkRank(out.Network.Default.Mode) > api.NetworkRank(out.Network.Ceiling) {
 		out.Network.Default = api.NetworkPolicy{Mode: out.Network.Ceiling, Allow: []string{}}
 	}
@@ -189,7 +199,7 @@ func (g *Gateway) createVolume(w http.ResponseWriter, r *http.Request, p Princip
 func (g *Gateway) volumeNode(ctx context.Context, p Principal, anyHas bool) *node {
 	cands := g.nodes.candidates()
 	if !anyHas {
-		if name, ok := Fallback(cands, nil); ok {
+		if name, ok := Fallback(cands, nil, Want{Caps: []string{api.CapVolumes}}); ok {
 			return g.nodes.get(name)
 		}
 		return nil

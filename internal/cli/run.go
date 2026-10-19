@@ -34,6 +34,7 @@ type runFlags struct {
 	template      string
 	cpus          float64
 	memory, disk  int
+	gpus          int
 	idle          int
 	onIdle        string
 	lifetime      time.Duration
@@ -78,6 +79,7 @@ func (rf *runFlags) register(cmd *cobra.Command) {
 	f.Float64Var(&rf.cpus, "cpus", 0, "vCPUs")
 	f.IntVar(&rf.memory, "memory", 0, "memory in MiB")
 	f.IntVar(&rf.disk, "disk", 0, "writable disk in MiB")
+	f.IntVar(&rf.gpus, "gpus", 0, "whole GPUs to give the sandbox, on a server that has them (capability gpu); it then cannot be suspended, snapshotted or resized")
 	f.IntVar(&rf.idle, "idle", 0, "terminate (or, with --on-idle suspend, suspend) after this many idle seconds (default: the server's)")
 	f.StringVar(&rf.onIdle, "on-idle", "", "what --idle does: terminate (default) or suspend, keeping memory and disk; the next command, file or shell resumes it")
 	f.DurationVar(&rf.lifetime, "lifetime", 0, "terminate this long after it starts, busy or not, e.g. 30m (default: the server's limit, if it sets one; never longer)")
@@ -210,7 +212,7 @@ func runSandbox(ctx context.Context, rf *runFlags, rs runSpec) (int, error) {
 	req := api.CreateSandboxRequest{
 		Name: rf.name, Image: rf.image, CPUs: rf.cpus, MemoryMB: rf.memory, DiskMB: rf.disk,
 		IdleTimeoutSecs: rf.idle, IdleAction: rf.onIdle, LifetimeSecs: int(rf.lifetime.Round(time.Second) / time.Second), SnapshotID: rf.fromSnapshot,
-		SnapshotEverySecs: int(rf.snapEvery / time.Second), SnapshotKeep: rf.snapKeep,
+		SnapshotEverySecs: int(rf.snapEvery / time.Second), SnapshotKeep: rf.snapKeep, GPUs: rf.gpus,
 	}
 	if req.MetricsExport = rf.exportReq; req.MetricsExport == nil {
 		if req.MetricsExport, err = rf.export.export(); err != nil {
