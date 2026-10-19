@@ -1,7 +1,7 @@
 # Task 9: GPU sandboxes
 
-**State:** proposed 2026-10-18; phase 1 built and checked without a card the
-same day. Decided: Cloud Hypervisor as the VMM for GPU sandboxes; CUDA compute
+**State:** proposed 2026-10-18; phases 1 and 2 built and checked without a
+card the same day. The operator's page is [docs/gpu.md](../gpu.md). Decided: Cloud Hypervisor as the VMM for GPU sandboxes; CUDA compute
 as the first milestone, a GPU desktop after.
 
 ## Goal
@@ -45,9 +45,10 @@ exception, not a second default.
   policy of `suspend` ends it instead (said at create).
 - **Guest memory is pinned.** VFIO maps all of it for DMA up front, so a GPU
   sandbox's memory is reserved on the host for its whole life, not faulted in.
-- **No jailer.** Cloud Hypervisor has no Firecracker-style jailer. It runs as an
-  unprivileged user in the sandbox's network namespace, with its own seccomp
-  filters and Landlock, the device's VFIO group the only device it is given.
+- **No jailer.** Cloud Hypervisor has no Firecracker-style jailer. It runs as
+  the sandbox's unprivileged uid in its network namespace, with its own seccomp
+  filters (Landlock not yet), the device's VFIO group the only device it is
+  given, and no chroot.
 - **The host gives up the card.** It is bound to `vfio-pci` while the node
   serves GPUs; nothing on the host can use it.
 
@@ -97,7 +98,7 @@ sandboxd, and the guest is the VM in any case.
 |---|---|---|---|
 | 0 | **Host.** IOMMU on; the card and its audio function (one IOMMU group) bound to `vfio-pci`; Cloud Hypervisor installed. A `docs/gpu.md` section and a check script (`sandboxd gpu check <bdf>`): IOMMU group members, driver bound, `/dev/vfio/<group>` | The node can hand the card over | docs, small command |
 | 1 | **GPU kit.** `make gpu-kit`: the guest kernel (Firecracker's CI config, plus `CONFIG_MODULES`, DRM), NVIDIA's open kernel modules built against it, the userspace driver files, `kit.json` | `insmod nvidia.ko` succeeds in a hand-booted Cloud Hypervisor VM with the card | build scripts |
-| 2 | **Backend.** `internal/backend/cloudhv`: create, start, terminate, processes, files over the existing vsock agent; networking, disks and the egress proxy shared with `backend/firecracker` (moved to a common package, not copied). GPU sandboxes only | `sandbox-cli run --gpu -- nvidia-smi` on the node | sandbox-cli |
+| 2 | **Backend.** The Linux backend boots a sandbox whose spec has GPUs on Cloud Hypervisor: the kit's kernel, the kit in its root disk, its devices passed through, the jail's uid under the jailer; processes, files, network, keep and terminate as for any sandbox; suspend, snapshot and resize refused (open question 2 replaced the separate backend first planned) | `Backend.Create` of a sandbox with the GPU, then `nvidia-smi` in it (`TestVMCloudHypervisorBackend`); `sandbox-cli run --gpu` needs phase 3 | sandbox-cli |
 | 3 | **API and scheduling.** `gpus: 1` on create; capability `gpu`; `--gpu BDF` (repeatable) and `--gpu-kit DIR` on sandboxd; whole-GPU allocation and release; policy `max_gpus`; refusals (suspend, snapshot, fork); the gateway places GPU sandboxes on nodes with a free GPU; events record the device | A second `--gpu` create waits for or is refused a GPU, with a clear error; the gateway path works | sandbox-cli |
 | 4 | **CLI, SDK, Studio.** `--gpu` on `run` and `agent`; Studio's launch form and a GPU chip on the sandbox; `sandbox-cli doctor` reports GPUs | — | sandbox-cli |
 | 5 | **A CUDA image.** Base image plus the CUDA runtime; a smoke that runs a CUDA sample | A real workload | images |
@@ -147,8 +148,42 @@ kernel (6.1.155 with Firecracker v1.17.0's config plus modules) and NVIDIA
 - The kit is 389 MB: kernel, two modules, `nvidia-smi`, `libcuda` and the
   libraries CUDA loads, and the GSP firmware.
 
-Next: phase 0 on the node (`scripts/gpu-vfio.sh`), then the same test with
-`SANDBOX_TEST_GPU=0000:01:00.0`, as root.
+Next: phase 0 on the node (`scripts/gpu-vfio.sh`), then the same tests with
+`SANDBOX_TEST_GPU=0000:01:00.0`, as root (docs/gpu.md, step 4).
+
+## What phase 2 built
+
+`internal/backend/firecracker/gpu.go`, and the branches in `Create`, the
+refusals and keep. Checked on 2026-10-18 without a card and without root:
+`TestVMCloudHypervisorBackend` creates a sandbox on Cloud Hypervisor with the
+kit through `Backend.Create`, runs a process, writes and reads a file, is
+refused suspend and snapshot, and terminates; the guest is ready in about
+0.6 s. Firecracker's VM tests pass unchanged.
+
+- **`backend.Spec.GPUs`**: the PCI addresses the server gives a sandbox
+  (phase 3 chooses them). A create checks each is bound to `vfio-pci` and
+  has a VFIO group before anything is built, and refuses a GPU sandbox from a
+  snapshot.
+- **`Config.CloudHypervisor` and `Config.GPUKit`**, both or neither. The kit
+  is summed once at start; its sum is in the root disk's cache key.
+- **Under the jailer** the VMM is not chrooted (Cloud Hypervisor has no
+  jailer), but runs as the uid the jailer would have given the sandbox:
+  `ip netns exec <ns> setpriv --reuid=<uid> … --ambient-caps=+ipc_lock`, in
+  the jail's directory, with the same hard links as a Firecracker jail and the
+  devices' `/dev/vfio/<group>` chowned to that uid until it ends.
+  `CAP_IPC_LOCK` is the one capability kept: VFIO pins all guest memory, which
+  the uid's `RLIMIT_MEMLOCK` would refuse. Checked by the test's root run, not
+  yet run.
+- **Keep**: a GPU sandbox is kept across a restart like any other.
+  `keep.json` carries its GPUs, `vm.args` its command line (read back for the
+  root disk it uses), and a stray `cloud-hypervisor` in the state directory is
+  swept as a stray `firecracker` is.
+- **Refused, as `unsupported`**: suspend, snapshot and resize; a fork needs a
+  snapshot, so it cannot be made either.
+
+Not done: Landlock for the VMM (Cloud Hypervisor's `--landlock`, which would
+stand in for the chroot); the reboot loop phase 1 found; memory accounting
+(open question 4).
 
 ## Open questions
 

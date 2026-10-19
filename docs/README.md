@@ -24,6 +24,7 @@ renders them from here.
 | [sandboxd](sandboxd.md) | The server's flags, the policy file, node mode and metrics |
 | [Studio](studio.md) | The browser view: each screen, how a gateway key's scopes decide them, organizations, the hosted build, its guards |
 | [Desktop](desktop.md) | A sandbox with a screen, a terminal and a browser, used in Studio's Desktop tab; how it reaches you and what it costs |
+| [GPUs](gpu.md) | Sandboxes that own a whole GPU: how they run, what they cost, preparing a node, and what is built so far |
 | [SDKs](../sdk/README.md) | The Python and TypeScript clients, and their gateway calls |
 
 ## Fleet

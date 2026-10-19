@@ -68,6 +68,9 @@ func (j *Jailer) prepare(id, kernel, rootfs, scratch string, volumes []string) (
 	}
 	uid := j.uid(id)
 	for name, src := range map[string]string{"vmlinux": kernel, "rootfs.ext4": rootfs} {
+		if src == "" { // prepareCloudHV's kernel, named where it is
+			continue
+		}
 		dst := filepath.Join(root, name)
 		// A hard link, because the root disk is gigabytes and shared: copying it
 		// per sandbox is the cost the overlay design exists to avoid. It stays

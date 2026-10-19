@@ -84,6 +84,12 @@ export const DOC_SEGMENTS: DocSegment[] = [
         description: "A sandbox with a screen, a terminal and a browser, used from Studio's Desktop tab.",
       },
       {
+        slug: "gpu",
+        source: "docs/gpu.md",
+        title: "GPUs",
+        description: "Sandboxes that own a whole GPU: how they run on Cloud Hypervisor, what they cost, preparing a node, and what is built so far.",
+      },
+      {
         slug: "sdk",
         source: "sdk/README.md",
         title: "SDKs",

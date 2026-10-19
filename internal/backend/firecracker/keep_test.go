@@ -152,6 +152,8 @@ func TestOwnedVMM(t *testing.T) {
 		{"firecracker\n", "/var/lib/sandboxd/sandboxes-old/x", false},
 		{"firecracker\n", "/var/lib/sandboxd/sandboxes", false},
 		{"bash\n", "/var/lib/sandboxd/sandboxes/sbx_0123456789abcdef", false},
+		{"cloud-hyperviso\n", "/var/lib/sandboxd/jail/firecracker/sbx-0123456789abcdef/root", true},
+		{"cloud-hyperviso\n", "/var/lib/other/sandboxes/sbx_0123456789abcdef", false},
 		{"", "", false},
 	} {
 		if got := ownedVMM(c.comm, c.cwd, roots); got != c.want {

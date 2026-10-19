@@ -17,12 +17,14 @@ package firecracker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -83,10 +85,7 @@ func TestVMCloudHypervisor(t *testing.T) {
 		}
 		fc := []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off", "ro", FastBootArgs,
 			"init=" + image.GuestAgentPath, "sbx.overlay=/dev/vdb", fmt.Sprintf("sbx.vsock=%d", guestPort), "sbx.hostname=sbx-test"}
-		bootArgs := cloudHypervisorBootArgs(fc)
-		if !gpuArg {
-			bootArgs = bootArgs[:len(bootArgs)-1] // all but sbx.gpu=1
-		}
+		bootArgs := cloudHypervisorBootArgs(fc, gpuArg)
 		p := vmPaths{Kernel: filepath.Join(kit, "vmlinux"), RootFS: rootfs.Path, Scratch: scratch,
 			VsockUDS: filepath.Join(dir, "v.sock"), APISock: filepath.Join(dir, "api.sock")}
 		args, err := CloudHypervisorArgs(backend.Spec{ID: "sbx_test", CPUs: 2, MemoryMB: 2048}, p, strings.Join(bootArgs, " "), nil, devices)
@@ -194,4 +193,121 @@ func TestVMCloudHypervisor(t *testing.T) {
 		t.Logf("%s", run(t, c, "nvidia-smi", "-L"))
 		t.Logf("%s", run(t, c, "nvidia-smi"))
 	})
+}
+
+// A GPU sandbox through the backend, as sandboxd makes one: Create, a process,
+// files, the refusals, Terminate. Without SANDBOX_TEST_GPU every sandbox runs
+// on Cloud Hypervisor with the kit and no device (cloudHVAll); as root it runs
+// under the jailer, which takes the setpriv path, and with SANDBOX_TEST_GPU
+// the sandbox is given the GPU and runs nvidia-smi.
+func TestVMCloudHypervisorBackend(t *testing.T) {
+	ch, kit := os.Getenv("SANDBOX_TEST_CLOUDHV"), os.Getenv("SANDBOX_TEST_GPU_KIT")
+	if ch == "" || kit == "" {
+		t.Skip("set SANDBOX_TEST_CLOUDHV and SANDBOX_TEST_GPU_KIT")
+	}
+	gpu := os.Getenv("SANDBOX_TEST_GPU")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	state, err := os.MkdirTemp("", "chb") // short: the vsock socket path is limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(state) })
+	agent := os.Getenv("SANDBOX_TEST_AGENT")
+	if agent == "" {
+		agent = filepath.Join(state, "sandbox-guestd")
+		build := exec.Command("go", "build", "-trimpath", "-o", agent, "../../../cmd/sandbox-guestd")
+		build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("building the guest agent: %v\n%s", err, out)
+		}
+	}
+	ref := "debian:bookworm-slim"
+	if r := os.Getenv("SANDBOX_TEST_IMAGE"); r != "" {
+		ref = r
+	}
+	cfg := Config{
+		// Firecracker is not run; the backend only needs it to exist.
+		Firecracker: ch, Kernel: filepath.Join(kit, "vmlinux"), Agent: agent, StateDir: state,
+		Puller:          &image.Puller{Cache: filepath.Join(os.TempDir(), "sandbox-test-images")},
+		CloudHypervisor: ch, GPUKit: kit, BootTimeout: time.Minute, Logf: t.Logf,
+	}
+	if os.Geteuid() == 0 {
+		cfg.Jailer = &Jailer{ChrootBase: filepath.Join(state, "jail"), UIDBase: 990000}
+	}
+	b, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(b.Close)
+	s := backend.Spec{ID: "sbx_0123456789abcdef", Image: ref, CPUs: 2, MemoryMB: 2048, DiskMB: 1024}
+	if gpu != "" {
+		s.GPUs = []string{gpu}
+	} else {
+		b.cloudHVAll = true
+	}
+
+	t0 := time.Now()
+	if err := b.Create(ctx, s); err != nil {
+		t.Fatalf("create: %v\nconsole:\n%s", err, tail(filepath.Join(b.sandboxesDir(), s.ID, "console.log"), 4096))
+	}
+	t.Logf("created in %v", time.Since(t0))
+	run := func(argv ...string) string {
+		t.Helper()
+		var out bytes.Buffer
+		p, err := b.Start(ctx, s.ID, backend.ProcSpec{Argv: argv, Cwd: "/sandbox/home"}, &out, &out)
+		if err != nil {
+			t.Fatalf("%v: %v", argv, err)
+		}
+		p.Stdin().Close()
+		if code := p.Wait(); code != 0 {
+			t.Fatalf("%v: exit %d\n%s", argv, code, out.String())
+		}
+		return out.String()
+	}
+	if got := strings.TrimSpace(run("uname", "-r")); !strings.HasSuffix(got, "-sandbox-gpu") {
+		t.Errorf("kernel %q, want the kit's", got)
+	}
+	if err := b.WriteFile(ctx, s.ID, "/sandbox/home/x", []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.ReadFile(ctx, s.ID, "/sandbox/home/x"); err != nil || string(got) != "hello" {
+		t.Errorf("read back %q, %v", got, err)
+	}
+	if gpu != "" {
+		t.Logf("%s", run("nvidia-smi", "-L"))
+		t.Logf("%s", run("ls", "-l", "/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm"))
+	}
+	if cfg.Jailer != nil {
+		// The VMM is the jail's uid, not root.
+		v, _ := b.get(s.ID)
+		status, _ := os.ReadFile(fmt.Sprintf("/proc/%d/status", v.pid))
+		if !strings.Contains(string(status), fmt.Sprintf("\nUid:\t%d\t", cfg.Jailer.uid(s.ID))) {
+			t.Errorf("the VMM is not the jail's uid:\n%s", status)
+		}
+	}
+	if err := b.Suspend(ctx, s.ID); !errors.Is(err, backend.ErrUnsupported) {
+		t.Errorf("suspend: %v", err)
+	}
+	if _, err := b.Snapshot(ctx, s.ID, "snap_test"); !errors.Is(err, backend.ErrUnsupported) {
+		t.Errorf("snapshot: %v", err)
+	}
+	v, _ := b.get(s.ID)
+	if err := b.Terminate(ctx, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-v.exited:
+	case <-time.After(10 * time.Second):
+		t.Error("the VMM is still running after terminate")
+	}
+	if _, err := os.Stat(v.dir); !os.IsNotExist(err) {
+		t.Errorf("the sandbox's directory is left: %v", err)
+	}
+	if gpu != "" && cfg.Jailer != nil {
+		node, _ := vfioGroup(gpu)
+		if fi, err := os.Stat(node); err != nil || fi.Sys().(*syscall.Stat_t).Uid != 0 {
+			t.Errorf("%s not given back to root", node)
+		}
+	}
 }

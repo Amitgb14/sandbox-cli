@@ -3,9 +3,7 @@
 package firecracker
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/Amitgb14/sandbox-cli/internal/image"
@@ -27,21 +25,12 @@ func (b *Backend) pruneRootDisks(kept []candidate) {
 		if b.cfg.Jailer != nil {
 			continue
 		}
-		data, err := os.ReadFile(c.v.hostPath("vm.json"))
+		p, err := rootDiskOf(c.v)
 		if err != nil {
-			b.cfg.Logf("root disks: not pruned: sandbox %s's disk is not known", c.v.id)
+			b.cfg.Logf("root disks: not pruned: sandbox %s: %v", c.v.id, err)
 			return
 		}
-		var vc VMConfig
-		if json.Unmarshal(data, &vc) != nil {
-			b.cfg.Logf("root disks: not pruned: sandbox %s's vm.json is unreadable", c.v.id)
-			return
-		}
-		for _, d := range vc.Drives {
-			if d.IsRootDevice {
-				inUse[filepath.Clean(d.PathOnHost)] = true
-			}
-		}
+		inUse[filepath.Clean(p)] = true
 	}
 	n, freed, err := image.PruneRootFS(b.cfg.ImageDir, b.cfg.Agent, func(p string) bool { return inUse[filepath.Clean(p)] })
 	if err != nil {

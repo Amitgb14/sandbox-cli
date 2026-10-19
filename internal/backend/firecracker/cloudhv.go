@@ -80,17 +80,21 @@ func CloudHypervisorArgs(s backend.Spec, p vmPaths, bootArgs string, t *tap, dev
 // here; the root device, which Firecracker adds itself for the drive marked
 // root and Cloud Hypervisor does not; sbx.halt=poweroff, because Cloud
 // Hypervisor resets a guest that reboots and exits only when it powers off,
-// so a boot sandbox-guestd fails must power off to end; and sbx.gpu=1, which
-// has sandbox-guestd load the kit's driver.
+// so a boot sandbox-guestd fails must power off to end; and, for a sandbox
+// with a GPU, sbx.gpu=1, which has sandbox-guestd load the kit's driver.
 //
 // A kernel panic still reboots (panic=1), and Cloud Hypervisor starts the
 // guest again; the create's boot timeout is what ends that.
-func cloudHypervisorBootArgs(fcArgs []string) []string {
+func cloudHypervisorBootArgs(fcArgs []string, gpu bool) []string {
 	out := make([]string, 0, len(fcArgs)+3)
 	for _, a := range fcArgs {
 		if a != "pci=off" {
 			out = append(out, a)
 		}
 	}
-	return append(out, "root=/dev/vda", "sbx.halt=poweroff", "sbx.gpu=1")
+	out = append(out, "root=/dev/vda", "sbx.halt=poweroff")
+	if gpu {
+		out = append(out, "sbx.gpu=1")
+	}
+	return out
 }
