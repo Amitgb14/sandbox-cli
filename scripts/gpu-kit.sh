@@ -11,7 +11,11 @@
 #                            kernel, and modules.list, their load order (read
 #                            by sandbox-guestd)
 #     usr/bin, usr/lib/...   NVIDIA's userspace driver of the same version
-#                            (nvidia-smi, libcuda, libnvidia-ml, ...)
+#                            (nvidia-smi, libcuda, libnvidia-ml, ...), and its
+#                            OpenGL, EGL and Vulkan drivers, which the image's
+#                            libglvnd and Vulkan loader find through
+#     usr/share/glvnd/egl_vendor.d/10_nvidia.json
+#     usr/share/vulkan/icd.d/nvidia_icd.json
 #     lib/firmware/nvidia/   the GSP firmware the open modules load
 #   OUT/kit.json           the versions
 #
@@ -122,16 +126,34 @@ for m in $modules; do
   echo "$m.ko" >> "$gpu/modules.list"
 done
 cp "$drv/nvidia-smi" "$root/usr/bin/"
-# What CUDA and nvidia-smi load. Each gets its soname link, as the installer
-# would make; the guest's dynamic loader searches the multiarch directory.
-for l in libcuda libnvidia-ml libnvidia-ptxjitcompiler libnvidia-nvvm libnvidia-gpucomp libnvidia-cfg; do
+# What CUDA and nvidia-smi load, then the graphics drivers: EGL, which a GPU
+# desktop draws through (VirtualGL's EGL back end, with no X server on the
+# card), GLX and GLES, which glvnd dispatches to, and the cores they share;
+# libGLX_nvidia is also the Vulkan driver. Not glvnd itself (libEGL, libGL,
+# libGLX): that is the image's, as on any distribution. Each gets its soname
+# link, as the installer would make; the guest's dynamic loader searches the
+# multiarch directory.
+for l in libcuda libnvidia-ml libnvidia-ptxjitcompiler libnvidia-nvvm libnvidia-gpucomp libnvidia-cfg \
+         libEGL_nvidia libGLX_nvidia libGLESv2_nvidia libGLESv1_CM_nvidia \
+         libnvidia-eglcore libnvidia-glcore libnvidia-glsi libnvidia-tls libnvidia-glvkspirv; do
   f="$drv/$l.so.$NVIDIA_VERSION"
   [ -f "$f" ] || { log "not in the driver: $l.so.$NVIDIA_VERSION (skipped)"; continue; }
   cp "$f" "$lib/"
   soname=$(readelf -d "$f" | sed -n 's/.*SONAME.*\[\(.*\)\]/\1/p')
-  [ -n "$soname" ] && ln -sf "$l.so.$NVIDIA_VERSION" "$lib/$soname"
+  # Some name themselves (libnvidia-glcore.so.<version>): no link, or it
+  # would replace the file with a link to itself.
+  if [ -n "$soname" ] && [ "$soname" != "$l.so.$NVIDIA_VERSION" ]; then
+    ln -sf "$l.so.$NVIDIA_VERSION" "$lib/$soname"
+  fi
+done
+# Every library is a file, and every link reaches one.
+for f in "$lib"/*; do
+  [ -f "$f" ] || { log "$f: a broken link in the kit"; exit 1; }
 done
 ln -sf libcuda.so.1 "$lib/libcuda.so"
+mkdir -p "$root/usr/share/glvnd/egl_vendor.d" "$root/usr/share/vulkan/icd.d"
+cp "$drv/10_nvidia.json" "$root/usr/share/glvnd/egl_vendor.d/"
+cp "$drv/nvidia_icd.json" "$root/usr/share/vulkan/icd.d/"
 cp "$drv"/firmware/*.bin "$fw/"
 chmod -R u=rwX,go=rX "$root"
 

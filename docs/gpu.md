@@ -1,9 +1,9 @@
 # GPU sandboxes
 
 A GPU sandbox owns a whole physical GPU: `nvidia-smi` in it lists the card,
-and a CUDA program runs on it. Apart from the GPU, it is like any other
-sandbox, with the same API, guest agent, network policy, files, processes and
-Studio.
+a CUDA program runs on it, and its desktop draws OpenGL on it. Apart from the
+GPU, it is like any other sandbox, with the same API, guest agent, network
+policy, files, processes and Studio.
 
 ```sh
 sandbox-cli run --gpus 1 --image <an image with glibc> -- nvidia-smi
@@ -14,9 +14,10 @@ sandbox-cli run --gpus 1 --image ghcr.io/amitgb14/sandbox-cuda:edge -- sandbox-c
 
 | | |
 |---|---|
-| Built and tested without a card | The kit; the CUDA image; the VM through sandboxd's Linux backend; `gpus` on create, `sandboxd --gpu`, `sandbox-cli run --gpus`, the SDKs; allocation on a node and placement by a gateway; Studio and `sandbox-cli doctor`; the refusals below |
+| Built and tested without a card | The kit; the CUDA image; the GPU desktop; the VM through sandboxd's Linux backend; `gpus` on create, `sandboxd --gpu`, `sandbox-cli run --gpus`, the SDKs; allocation on a node and placement by a gateway; Studio and `sandbox-cli doctor`; the refusals below |
+| Tested on the card, in a container | The CUDA image and the GPU desktop, with the kit's libraries and the host's own driver (the same version) |
 | Not yet tried | A real card passed through. The node's setup below needs root on it |
-| Not yet built | A GPU desktop |
+| Not yet built | Vulkan windows on the desktop (games on Vulkan and Proton) |
 
 The plan, with what each phase proved, is
 [task 9 in the roadmap](roadmap/task-9-gpu-sandboxes.md).
@@ -47,7 +48,8 @@ boots. The operator builds a **GPU kit** on the node. It has:
 
 - a guest kernel that can load modules;
 - NVIDIA's open kernel modules, built against it;
-- the matching `nvidia-smi`, `libcuda` and firmware.
+- the matching `nvidia-smi`, `libcuda` and firmware;
+- NVIDIA's OpenGL, EGL and Vulkan drivers, for the desktop.
 
 sandboxd adds the kit to a GPU sandbox's read-only root disk, as it adds the
 guest agent. At boot, the guest agent loads the modules as root, before
@@ -59,6 +61,12 @@ CUDA 13.3 compiler and runtime, the release the kit's driver came with, and
 `sandbox-cuda-check`, which runs a kernel on the GPU and checks the result
 ([its page](https://github.com/Amitgb14/sandbox-images/blob/main/docs/cuda.md)).
 A later driver runs it too.
+
+**A GPU desktop.** The workstation image (and agentos, built on it) draws
+OpenGL on the card when the sandbox has one, through VirtualGL and the kit's
+EGL driver, on the same VNC display as without a GPU, so Studio's Desktop tab
+is unchanged
+([its page](https://github.com/Amitgb14/sandbox-images/blob/main/docs/workstation.md#with-a-gpu)).
 
 **Under the jailer**, Cloud Hypervisor runs as the sandbox's own unprivileged
 uid, the one the jailer would have given it, in the sandbox's network
@@ -116,7 +124,7 @@ use. The steps need root.
 checks each against a pinned checksum, and builds the modules. It needs a
 kernel build toolchain (gcc, make, flex, bison, perl, and the libelf and
 openssl headers) and about 6 GB of working space while it builds. It leaves a
-kit of about 400 MB.
+kit of about 600 MB.
 
 ```sh
 scripts/gpu-kit.sh /var/lib/sandboxd/gpu-kit

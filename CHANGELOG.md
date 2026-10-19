@@ -471,6 +471,10 @@ in `_old/` as reference, to be ported where this design still wants it.
   - **`sandbox-cli doctor`** reports the GPU limit and how many are free.
   - **Testing without a card:** `sandboxd --backend fake --gpu …` serves
     pretend GPUs.
+  - **Graphics:** the GPU kit (`scripts/gpu-kit.sh`) also has NVIDIA's
+    OpenGL, EGL and Vulkan drivers, so an image's desktop can draw on the
+    card (sandbox-images' workstation image does, through VirtualGL). Rebuild
+    a kit made before this.
 - **A sandbox's usage can be pushed to your own OpenTelemetry collector.** A
   create or an update may carry `metrics_export: {endpoint, interval_secs,
   headers}` (capability `metrics_export`). The sandbox's CPU, memory, network
