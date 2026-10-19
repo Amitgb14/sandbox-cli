@@ -79,18 +79,28 @@ func (b *Backend) checkGPUs(s backend.Spec) error {
 		return fmt.Errorf("%w: a sandbox with a GPU cannot start from a snapshot", backend.ErrUnsupported)
 	}
 	for _, d := range s.GPUs {
-		if !ValidPCIAddr(d) {
-			return fmt.Errorf("GPU %q is not a PCI address like 0000:01:00.0", d)
-		}
-		drv, err := os.Readlink(filepath.Join("/sys/bus/pci/devices", d, "driver"))
-		if err != nil || filepath.Base(drv) != "vfio-pci" {
-			return fmt.Errorf("GPU %s is not bound to vfio-pci (scripts/gpu-vfio.sh bind %s)", d, d)
-		}
-		if _, err := vfioGroup(d); err != nil {
+		if err := CheckGPU(d); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// CheckGPU reports whether a device is ready to be passed through: a PCI
+// address in sysfs's form, bound to vfio-pci, in an IOMMU group whose VFIO
+// node exists. A create checks each of its devices with it, and sandboxd each
+// of its --gpu devices at start, so a node set up wrong says so when it
+// starts rather than at its first GPU sandbox.
+func CheckGPU(d string) error {
+	if !backend.ValidPCIAddr(d) {
+		return fmt.Errorf("GPU %q is not a PCI address like 0000:01:00.0", d)
+	}
+	drv, err := os.Readlink(filepath.Join("/sys/bus/pci/devices", d, "driver"))
+	if err != nil || filepath.Base(drv) != "vfio-pci" {
+		return fmt.Errorf("GPU %s is not bound to vfio-pci (scripts/gpu-vfio.sh bind %s)", d, d)
+	}
+	_, err = vfioGroup(d)
+	return err
 }
 
 // vfioGroup is a device's VFIO group node, /dev/vfio/<its IOMMU group>.
@@ -179,7 +189,7 @@ func gpusInArgs(args []string) []string {
 			continue
 		}
 		p := strings.TrimSuffix(strings.TrimPrefix(args[i+1], "path=/sys/bus/pci/devices/"), "/")
-		if ValidPCIAddr(p) {
+		if backend.ValidPCIAddr(p) {
 			out = append(out, p)
 		}
 	}

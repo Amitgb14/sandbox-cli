@@ -31,6 +31,8 @@ export interface RunConfig {
   cpus?: number;
   memoryMb?: number;
   diskMb?: number;
+  /** Whole GPUs (--gpus; "gpus"). */
+  gpus?: number;
   name?: string;
   network?: "" | NetworkMode;
   allow?: string[];
@@ -88,6 +90,7 @@ function cliFlags(c: Omit<RunConfig, "command" | "defaultAllow">): string[] {
   if (c.cpus) f.push("--cpus", String(c.cpus));
   if (c.memoryMb) f.push("--memory", String(c.memoryMb));
   if (c.diskMb) f.push("--disk", String(c.diskMb));
+  if (c.gpus) f.push("--gpus", String(c.gpus));
   if (c.name) f.push("--name", c.name);
   if (c.network) f.push("--network", c.network);
   for (const a of c.allow ?? []) f.push("--allow", a);
@@ -129,6 +132,7 @@ function createBody(c: Omit<RunConfig, "command">): Record<string, unknown> {
   if (c.cpus) body.cpus = c.cpus;
   if (c.memoryMb) body.memory_mb = c.memoryMb;
   if (c.diskMb) body.disk_mb = c.diskMb;
+  if (c.gpus) body.gpus = c.gpus;
   if (c.name) body.name = c.name;
   // The API's allow is the whole list: the baseline is spelled out unless the
   // run leaves it out.

@@ -135,6 +135,10 @@ const (
 	// pushed to an OTLP/HTTP endpoint its owner names
 	// (CreateSandboxRequest.MetricsExport). Needs CapMetrics.
 	CapMetricsExport = "metrics_export"
+	// CapGPU: a sandbox can be given whole GPUs (CreateSandboxRequest.GPUs),
+	// passed through to its VM. A sandbox with one cannot be suspended,
+	// snapshotted, forked or resized.
+	CapGPU = "gpu"
 )
 
 // Limits are the largest resources a sandbox may ask for.
@@ -156,6 +160,9 @@ type Limits struct {
 	// MinMetricsExportSecs is the shortest interval a metrics export may
 	// push at.
 	MinMetricsExportSecs int `json:"min_metrics_export_secs,omitempty"`
+	// MaxGPUs is the most GPUs one sandbox may ask for; 0 where the endpoint
+	// has none (capability gpu).
+	MaxGPUs int `json:"max_gpus,omitempty"`
 }
 
 // SnapshotSchedule is a sandbox's scheduled snapshots: one every EverySecs
@@ -222,6 +229,12 @@ type CreateSandboxRequest struct {
 	// MetricsExport pushes the sandbox's usage to an OTLP/HTTP endpoint
 	// (capability metrics_export).
 	MetricsExport *MetricsExport `json:"metrics_export,omitempty"`
+	// GPUs is how many whole GPUs the sandbox is given (capability gpu), at
+	// most limits.max_gpus. A create the node has too few free GPUs for is
+	// refused with unavailable, not queued. Such a sandbox cannot be
+	// suspended, snapshotted or resized, so idle_action suspend, a snapshot
+	// schedule and snapshot_id are refused with it.
+	GPUs int `json:"gpus,omitempty"`
 }
 
 // MetricsExport is where a sandbox's usage is pushed: its CPU, memory,
@@ -376,6 +389,9 @@ type Sandbox struct {
 	Volumes      []VolumeMount     `json:"volumes,omitempty"`
 	// MetricsExport is where its usage is pushed, and how that is going.
 	MetricsExport *MetricsExportStatus `json:"metrics_export,omitempty"`
+	// GPUs are the node's PCI addresses (0000:01:00.0) of the GPUs it was
+	// given, one per GPU; absent for a sandbox without.
+	GPUs []string `json:"gpus,omitempty"`
 }
 
 // Snapshot phases, in order.
@@ -431,6 +447,8 @@ type Event struct {
 	EnvNames []string       `json:"env_names,omitempty"`
 	Snapshot string         `json:"snapshot,omitempty"`
 	Volumes  []VolumeMount  `json:"volumes,omitempty"`
+	// GPUs are the devices a created sandbox was given.
+	GPUs []string `json:"gpus,omitempty"`
 	// IdleTimeoutSecs is the idle timeout after an update that changed it.
 	IdleTimeoutSecs *int `json:"idle_timeout_secs,omitempty"`
 	// IdleAction is the idle action after an update that changed it:
@@ -631,6 +649,8 @@ type NodeResources struct {
 	CPUs     float64 `json:"cpus"`
 	MemoryMB int     `json:"memory_mb"`
 	DiskMB   int     `json:"disk_mb"`
+	// GPUs are whole GPUs; absent on a node with none.
+	GPUs int `json:"gpus,omitempty"`
 }
 
 // CordonRequest is POST /v1/node/cordon.

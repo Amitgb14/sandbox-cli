@@ -164,6 +164,17 @@ func (b *Backend) Size(id string) (api.NodeResources, bool) {
 	return api.NodeResources{CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}, true
 }
 
+// GPUs is the devices a sandbox was created with, for tests.
+func (b *Backend) GPUs(id string) []string {
+	s, err := b.get(id)
+	if err != nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.spec.GPUs...)
+}
+
 func (b *Backend) get(id string) (*sandbox, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

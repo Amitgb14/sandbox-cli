@@ -49,7 +49,8 @@ export default async function globalSetup() {
   // A unix socket, as a local sandboxd serves by default: only its owner can
   // connect, so it needs no token. A TCP port, even on loopback, needs one.
   const sock = join(dir, "d.sock");
-  track(spawn(bin("sandboxd"), ["--backend", "fake", "--state-dir", join(dir, "state"), "--listen", `unix://${sock}`], { env, stdio: "ignore" }));
+  // One pretend GPU (the fake backend's), for the GPU launch test.
+  track(spawn(bin("sandboxd"), ["--backend", "fake", "--state-dir", join(dir, "state"), "--listen", `unix://${sock}`, "--gpu", "0000:01:00.0"], { env, stdio: "ignore" }));
   await waitFor(async () => existsSync(sock), "sandboxd");
   cli(env, "context", "add", "e2e", `unix://${sock}`);
   const token = await startStudio(env, dir, 7181, pids);

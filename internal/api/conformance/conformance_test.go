@@ -21,6 +21,9 @@ func serveFake(t *testing.T, pol spec.Policy, withAudit bool, caps ...string) *a
 	// Usage sampled every second, so the metrics test waits seconds, not
 	// the default ten-second intervals.
 	s := &server.Server{Backend: fake.New(caps...), Policy: pol, Token: "conformance-token", MetricsInterval: time.Second}
+	if capSet(caps...)[api.CapGPU] {
+		s.GPUs = []string{"0000:01:00.0", "0000:41:00.0"}
+	}
 	if withAudit {
 		s.Audit = audit.NewLog(filepath.Join(t.TempDir(), "events.jsonl"))
 	}
@@ -32,7 +35,7 @@ func serveFake(t *testing.T, pol spec.Policy, withAudit bool, caps ...string) *a
 // The suite against the fake, with the default policy and every capability the
 // fake can pretend to have.
 func TestFakeDefaultPolicy(t *testing.T) {
-	caps := []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes, api.CapResize}
+	caps := []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapSuspend, api.CapMemorySnapshot, api.CapVolumes, api.CapResize, api.CapGPU}
 	Run(t, serveFake(t, spec.DefaultPolicyFor(capSet(caps...)), true, caps...))
 }
 

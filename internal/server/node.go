@@ -54,6 +54,7 @@ func (s *Server) nodeStatus() api.NodeStatus {
 		Capacity:     s.Capacity,
 		Labels:       s.NodeLabels,
 	}
+	st.Capacity.GPUs = len(s.GPUs)
 	var used api.NodeResources
 	add := func(cpus float64, mem, disk, n int) {
 		used.CPUs += cpus * float64(n)
@@ -81,6 +82,7 @@ func (s *Server) nodeStatus() api.NodeStatus {
 			st.Running++
 		}
 		add(sb.CPUs, sb.MemoryMB, sb.DiskMB, 1)
+		used.GPUs += len(sb.GPUs)
 	}
 	// Pooled sandboxes are booted VMs, ready or still booting, though no
 	// client sees them; they hold their shape's resources all the same.
@@ -103,6 +105,7 @@ func (s *Server) nodeStatus() api.NodeStatus {
 		CPUs:     math.Max(0, s.Capacity.CPUs-used.CPUs),
 		MemoryMB: max(0, s.Capacity.MemoryMB-used.MemoryMB),
 		DiskMB:   max(0, s.Capacity.DiskMB-used.DiskMB),
+		GPUs:     max(0, st.Capacity.GPUs-used.GPUs),
 	}
 
 	if il, ok := s.Backend.(backend.ImageLister); ok {

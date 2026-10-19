@@ -83,6 +83,9 @@ type LaunchRequest struct {
 	CPUs     float64 `json:"cpus,omitempty"`
 	MemoryMB int     `json:"memory_mb,omitempty"`
 	DiskMB   int     `json:"disk_mb,omitempty"`
+	// GPUs is how many whole GPUs the sandbox is given: the CLI's --gpus,
+	// refused by sandboxd as any client's where it has none or none free.
+	GPUs int `json:"gpus,omitempty"`
 	// Rows and Cols size a console run's terminal before anyone attaches.
 	Rows uint16 `json:"rows,omitempty"`
 	Cols uint16 `json:"cols,omitempty"`

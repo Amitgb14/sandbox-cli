@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useInfo, useSetSnapshotSchedule, useSnapshots } from "@/lib/api/queries";
 import { useCan } from "@/lib/caller";
 import { formatBytes, formatRelative } from "@/lib/format";
+import { GPU_FIXED, hasGPU } from "@/lib/gpu";
 import type { Sandbox } from "@/lib/types";
 
 const INTERVALS = [300, 900, 1800, 3600, 6 * 3600, 24 * 3600];
@@ -47,6 +48,9 @@ export function SandboxSnapshots({ sb }: { sb: Sandbox }) {
 
   if (!takes) {
     return <p className="text-sm text-muted-foreground">This endpoint takes no snapshots.</p>;
+  }
+  if (hasGPU(sb)) {
+    return <p className="text-sm text-muted-foreground">{GPU_FIXED}</p>;
   }
   const canLaunch = can("sandbox:create");
   const mine = (all ?? []).filter((s) => s.sandbox === sb.id).sort((a, b) => b.created_at.localeCompare(a.created_at));

@@ -14,6 +14,7 @@ import { SandboxFiles } from "@/components/sandbox/files";
 import { ProcessOutput } from "@/components/sandbox/output";
 import { SandboxOverview } from "@/components/sandbox/overview";
 import { SnapshotProgressBar } from "@/components/sandbox/snapshot-progress";
+import { hasGPU } from "@/lib/gpu";
 import { AgentActivity, StateDot } from "@/components/sandbox/state-dot";
 import { SandboxTerminal } from "@/components/sandbox/terminal";
 import { TerminateDialog } from "@/components/sandbox/terminate-dialog";
@@ -263,7 +264,7 @@ export function SandboxDetails({
                 Terminal
               </Button>
             )}
-            {caps.suspend && can("sandbox:create") && (
+            {caps.suspend && !hasGPU(sb) && can("sandbox:create") && (
               <Button
                 variant="outline"
                 size="sm"
@@ -276,7 +277,7 @@ export function SandboxDetails({
             {(caps.memory_snapshot || caps.disk_snapshot) && sb.state === "running" && sb.snapshotting ? (
               <SnapshotProgressBar p={sb.snapshotting} className="order-last basis-full" />
             ) : null}
-            {(caps.memory_snapshot || caps.disk_snapshot) && sb.state === "running" && !sb.snapshotting && can("sandbox:create") && (
+            {(caps.memory_snapshot || caps.disk_snapshot) && sb.state === "running" && !sb.snapshotting && !hasGPU(sb) && can("sandbox:create") && (
               <Button
                 variant="outline"
                 className="border-status-running/40 bg-status-running/15 text-status-running hover:bg-status-running/25 hover:text-status-running"

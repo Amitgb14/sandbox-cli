@@ -4,7 +4,6 @@ package firecracker
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/Amitgb14/sandbox-cli/internal/backend"
@@ -17,19 +16,12 @@ import (
 // vsock, which Cloud Hypervisor implements as Firecracker does (a unix socket
 // on the host and CONNECT <port>).
 
-// pciAddr is a PCI device's full address, domain included, as sysfs names it.
-var pciAddr = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
-
-// ValidPCIAddr reports whether a is a PCI address in sysfs's form
-// (0000:01:00.0), the only form a GPU is named in.
-func ValidPCIAddr(a string) bool { return pciAddr.MatchString(a) }
-
 // CloudHypervisorArgs renders a GPU sandbox's Cloud Hypervisor command line,
 // as BuildConfig renders a Firecracker VM's: a pure function of its inputs, and
 // the only place such a VM's resources, disks and devices are decided. The
 // disks are BuildConfig's (root read-only, scratch and writable volumes the
 // only writable ones), and devices are the PCI addresses the sandbox was
-// given, checked by the caller with ValidPCIAddr.
+// given, checked by the caller with backend.ValidPCIAddr.
 //
 // Cloud Hypervisor parses its options as comma-separated key=value lists, so
 // no path given to it may hold a comma; sandboxd's own paths never do, and
@@ -65,7 +57,7 @@ func CloudHypervisorArgs(s backend.Spec, p vmPaths, bootArgs string, t *tap, dev
 	// As Firecracker's: backed by a unix socket, so the CID is the VM's own.
 	args = append(args, "--vsock", fmt.Sprintf("cid=3,socket=%s", p.VsockUDS))
 	for _, d := range devices {
-		if !ValidPCIAddr(d) {
+		if !backend.ValidPCIAddr(d) {
 			return nil, fmt.Errorf("cloud hypervisor: %q is not a PCI address", d)
 		}
 		args = append(args, "--device", "path=/sys/bus/pci/devices/"+d+"/")

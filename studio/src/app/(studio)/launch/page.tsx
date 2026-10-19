@@ -25,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAgents, useEgress, useInfo, useLaunch, useNode, useSandboxes, useSnapshots, useTemplates, useFleetImages } from "@/lib/api/queries";
 import { isAdmin, useCaller } from "@/lib/caller";
 import { cliAgent, snippets } from "@/lib/codegen";
+import { GPU_FIXED } from "@/lib/gpu";
 import { formatMiB, formatRelative, commandArgv } from "@/lib/format";
 import { overLimits } from "@/lib/templates";
 import { cn } from "@/lib/utils";
@@ -109,9 +110,15 @@ function LaunchForm() {
   const [from, setFrom] = useState<"image" | "snapshot">(params.get("snapshot") ? "snapshot" : "image");
   const [image, setImage] = useState(params.get("image") ?? "");
   const [snapshot, setSnapshot] = useState(params.get("snapshot") ?? "");
+  // Whole GPUs, where the endpoint has them. A sandbox with one is never
+  // suspended or snapshotted, so with any those choices step aside rather
+  // than be refused at launch.
+  const maxGPUs = info?.capabilities?.capabilities?.gpu ? (info.capabilities.limits.max_gpus ?? 0) : 0;
+  const [gpuCount, setGPUCount] = useState(0);
+  const gpus = Math.min(gpuCount, maxGPUs);
   const canSnapshot = !!(info?.capabilities?.capabilities?.memory_snapshot || info?.capabilities?.capabilities?.disk_snapshot);
   // Suspending when idle, rather than terminating, where the endpoint can.
-  const canSuspend = !!info?.capabilities?.capabilities?.suspend;
+  const canSuspend = !!info?.capabilities?.capabilities?.suspend && !gpus;
   const [onIdle, setOnIdle] = useState<"terminate" | "suspend">("terminate");
   const idleAction = canSuspend && onIdle === "suspend" ? ("suspend" as const) : undefined;
   // Pushing the sandbox's usage to the user's collector, where the endpoint can.
@@ -132,7 +139,7 @@ function LaunchForm() {
   const { data: sandboxes } = useSandboxes();
   const built = node?.images ?? fleetImages ?? [];
   const inUse = (sandboxes ?? []).map((sb) => sb.image);
-  const fromSnapshot = from === "snapshot" && canSnapshot;
+  const fromSnapshot = from === "snapshot" && canSnapshot && !gpus;
   // A snapshot schedule, within what the server allows (its limits).
   const minEvery = info?.capabilities?.limits.min_snapshot_every_secs ?? 300;
   const maxKeep = info?.capabilities?.limits.max_snapshot_keep ?? 5;
@@ -142,7 +149,9 @@ function LaunchForm() {
   const [keep, setKeep] = useState("3");
   const schedEvery = Number(everySecs || intervals.find((s) => s >= 1800) || intervals[intervals.length - 1]);
   const schedKeep = Math.min(Number(keep), maxKeep);
-  const schedule = scheduled && canSnapshot ? { snapshotEverySecs: schedEvery, snapshotKeep: schedKeep } : {};
+  const schedule = scheduled && canSnapshot && !gpus ? { snapshotEverySecs: schedEvery, snapshotKeep: schedKeep } : {};
+  // No more than the node has, where it says (a gateway's fleet does not).
+  const gpuChoices = node?.capacity.gpus ? Math.min(maxGPUs, node.capacity.gpus) : Math.min(maxGPUs, 8);
   const start = fromSnapshot ? { snapshot: snapshot || undefined } : { image: image.trim() || undefined };
 
   const ceiling = info?.capabilities?.network.ceiling;
@@ -175,6 +184,7 @@ function LaunchForm() {
     ...start,
     ...schedule,
     ...size,
+    gpus: gpus || undefined,
     idleAction,
     name: name || undefined,
     network: egress.network,
@@ -221,6 +231,7 @@ function LaunchForm() {
       req.snapshot_keep = schedule.snapshotKeep;
     }
     if (idleAction) req.idle_action = idleAction;
+    if (gpus) req.gpus = gpus;
     if (metricsExport) {
       const problem = exportProblem(exportForm);
       if (problem) {
@@ -327,10 +338,10 @@ function LaunchForm() {
               <RadioGroupItem value="image" />
               An image
             </Label>
-            <Label className={cn("flex items-center gap-2 font-normal", !canSnapshot && "text-muted-foreground")}>
-              <RadioGroupItem value="snapshot" disabled={!canSnapshot} />
+            <Label className={cn("flex items-center gap-2 font-normal", (!canSnapshot || gpus > 0) && "text-muted-foreground")}>
+              <RadioGroupItem value="snapshot" disabled={!canSnapshot || gpus > 0} />
               A snapshot
-              {!canSnapshot ? <span className="text-xs">(this endpoint takes none)</span> : null}
+              {!canSnapshot ? <span className="text-xs">(this endpoint takes none)</span> : gpus ? <span className="text-xs">(not with a GPU)</span> : null}
             </Label>
           </RadioGroup>
           {fromSnapshot ? (
@@ -372,12 +383,12 @@ function LaunchForm() {
             </p>
           ) : null}
           <div className="flex flex-col gap-2 border-t pt-3">
-            <Label className={cn("flex items-center gap-2 font-normal", !canSnapshot && "text-muted-foreground")}>
-              <Checkbox checked={scheduled && canSnapshot} disabled={!canSnapshot} onCheckedChange={(v) => setScheduled(!!v)} aria-label="Snapshot on a schedule" />
+            <Label className={cn("flex items-center gap-2 font-normal", (!canSnapshot || gpus > 0) && "text-muted-foreground")}>
+              <Checkbox checked={scheduled && canSnapshot && !gpus} disabled={!canSnapshot || gpus > 0} onCheckedChange={(v) => setScheduled(!!v)} aria-label="Snapshot on a schedule" />
               Snapshot it on a schedule
-              {!canSnapshot ? <span className="text-xs">(this endpoint takes no snapshots)</span> : null}
+              {!canSnapshot ? <span className="text-xs">(this endpoint takes no snapshots)</span> : gpus ? <span className="text-xs">(not with a GPU)</span> : null}
             </Label>
-            {scheduled && canSnapshot ? (
+            {scheduled && canSnapshot && !gpus ? (
               <div className="flex flex-wrap items-center gap-2 pl-6 text-sm">
                 <span className="text-muted-foreground">every</span>
                 <Select value={String(schedEvery)} onValueChange={setEverySecs}>
@@ -440,6 +451,35 @@ function LaunchForm() {
               );
             })}
           </RadioGroup>
+          {maxGPUs > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 border-t pt-3 text-sm">
+              <Label htmlFor="gpus" className="font-normal">
+                GPUs
+              </Label>
+              <Select value={String(gpus)} onValueChange={(v) => setGPUCount(Number(v))}>
+                <SelectTrigger id="gpus" size="sm" className="w-24" aria-label="GPUs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: gpuChoices + 1 }, (_, n) => n).map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n === 0 ? "None" : n}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {node?.capacity.gpus ? (
+                <span className="text-xs text-muted-foreground">
+                  {node.free.gpus ?? 0} of {node.capacity.gpus} free on this node
+                </span>
+              ) : null}
+              {gpus ? (
+                <span className="w-full text-xs text-muted-foreground">
+                  Whole GPUs, passed through to its VM, held until it is terminated. {GPU_FIXED}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             Sizes are kept in{" "}
             <Link href="/templates" className="underline underline-offset-2 hover:text-foreground">
@@ -635,6 +675,12 @@ function LaunchForm() {
                   <span className="text-muted-foreground">the server&apos;s default</span>
                 )}
               </dd>
+              {gpus ? (
+                <>
+                  <dt className="text-muted-foreground">GPUs</dt>
+                  <dd className="truncate text-[13px]">{gpus}, whole</dd>
+                </>
+              ) : null}
               {idleAction ? (
                 <>
                   <dt className="text-muted-foreground">When idle</dt>

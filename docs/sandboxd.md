@@ -51,6 +51,9 @@ sudo sandboxd --backend firecracker --kernel /var/lib/sandboxd/vmlinux \
 | `--egress-proxy-port`, `--egress-dns-port` | 3128, 7353 | firecracker: the host ports the egress proxy (TCP) and resolver (UDP) listen on. Move one only if another program on the host holds it; the guest never sees them ([self-hosting.md](self-hosting.md#how-egress-is-enforced)). |
 | `--egress-open` | off | firecracker: offer network mode `open` — TCP to public addresses on any port, never the host's, private, tailnet or link-local ones — to sandboxes the policy's ceiling allows it. Needs `--network` ([self-hosting.md](self-hosting.md#open-egress)). |
 | `--egress-open-port` | 7354 | firecracker: the host TCP port open egress is forwarded through. |
+| `--gpu BDF` | | a GPU to give sandboxes, by PCI address (`0000:01:00.0`, as `lspci -D` prints it), bound to `vfio-pci` (repeatable). A sandbox that asks for GPUs (`gpus` on create) is given free ones, whole, until it is terminated ([gpu.md](gpu.md)). firecracker: needs `--cloud-hypervisor` and `--gpu-kit`. fake: alone, a pretend GPU for trying allocation without a card. |
+| `--cloud-hypervisor FILE` | | firecracker: the Cloud Hypervisor binary, which runs the sandboxes given GPUs (Firecracker cannot pass a device through). |
+| `--gpu-kit DIR` | | firecracker: the GPU kit `scripts/gpu-kit.sh` builds: the kernel GPU sandboxes boot and the driver their root disks carry. |
 | `--container FILE` | `container` | macos: the `container` CLI. |
 
 ### As a node behind a gateway
@@ -96,6 +99,7 @@ pools:                                     # sandboxes booted ahead of time
 | `defaults.cpus`, `.memory_mb`, `.disk_mb`, `.idle_timeout_secs` | 1, 1024, 10240, 1800 | what a request that asks for nothing gets. Each must be within the limits. |
 | `limits.max_cpus`, `.max_memory_mb`, `.max_disk_mb`, `.max_idle_timeout_secs` | 8, 16384, 102400, 604800 (a week) | the most a request may ask for. |
 | `limits.max_lifetime_secs` | 0 (none) | how long any sandbox may exist, busy or not, from its creation. Set, every sandbox gets it unless it asks for less, and a request for more is refused. For a demo or trial server: `1800` ends every sandbox 30 minutes after it starts. On a fleet, give every node the same value: the gateway offers the strictest. A running sandbox's lifetime can be changed (`PATCH /v1/sandboxes/{ref}` `lifetime_secs`, `sandbox-cli update --lifetime`), within this limit; to give some users less than others, use a gateway's [user policies](fleet.md#user-policies) and set this above them. |
+| `limits.max_gpus` | 8 | the most GPUs one sandbox may ask for; `0` gives none. It is never more than the node's own `--gpu` list, and `/v1/capabilities` shows it so capped. Without the capability `gpu` it is 0. |
 | `limits.min_metrics_export_secs` | 10 | how often at most a sandbox's [metrics export](api/v1.md#metrics-export-capability-metrics_export) may push. Each push is a connection this machine makes, per sandbox, to an address its owner chose. On a fleet the gateway offers the largest of its nodes'. |
 | `limits.min_snapshot_every_secs`, `.max_snapshot_keep` | 300 (five minutes), 5 | how often at most a sandbox's schedule may snapshot it, and how many of its scheduled snapshots it may keep. Each is a copy of the sandbox on this machine's disk (about 2 GB of the base image on macOS), so these bound what schedules can cost. At least 1 second. |
 | `network.default` | `{mode: open}` | `mode` is `none`, `allowlist` or `open`; `allow` and `deny` are names, wildcards allowed. `deny` wins over `allow`. The default must itself be something the ceiling permits. |
@@ -146,6 +150,11 @@ page), and the gateway adds the right one to that organization's creates.
 - **A `--metrics-listen` address that is not loopback.**
 - **`--keep-sandboxes` with a backend that cannot keep sandboxes,** and a
   records directory other users can read.
+- **GPU flags that would do half a thing:** `--gpu` with the firecracker
+  backend but without both `--cloud-hypervisor` and `--gpu-kit` (or either
+  without `--gpu`), a `--gpu` that is not a PCI address or is given twice,
+  and any of them on the macOS backend. A GPU not bound to `vfio-pci` is
+  only logged at startup; each create checks it again.
 
 ## Node endpoints
 

@@ -1577,6 +1577,7 @@ Flags:
 | `-e, --env stringArray` |  | KEY=VALUE, or KEY to forward the host's value (repeatable) |
 | `--fallback stringArray` |  | an agent to try next if this one's provider is down (repeatable; agent wrappers only) |
 | `--from-snapshot string` |  | start from a snapshot (sandbox-cli snapshot) instead of the image |
+| `--gpus int` |  | whole GPUs to give the sandbox, on a server that has them (capability gpu); it then cannot be suspended, snapshotted or resized |
 | `--idle int` |  | terminate (or, with --on-idle suspend, suspend) after this many idle seconds (default: the server's) |
 | `--image string` |  | image to run (default: the server's) |
 | `--keep` |  | keep the sandbox when the command ends |

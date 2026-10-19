@@ -80,6 +80,10 @@ func startNodeWith(t *testing.T, name string, wrap func(*fake.Backend) backend.B
 	}
 	s := &server.Server{Backend: be, Policy: pol, Token: tn.token,
 		Audit: audit.NewLog(filepath.Join(t.TempDir(), "events.jsonl"))}
+	if capSet(caps...)[api.CapGPU] {
+		s.GPUs = []string{"0000:01:00.0", "0000:41:00.0"}
+		tn.capacity.GPUs = len(s.GPUs)
+	}
 	tn.h = s.Handler()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/node", tn.status)
@@ -167,6 +171,7 @@ func (tn *testNode) status(w http.ResponseWriter, r *http.Request) {
 		st.Free.CPUs -= sb.CPUs
 		st.Free.MemoryMB -= sb.MemoryMB
 		st.Free.DiskMB -= sb.DiskMB
+		st.Free.GPUs -= len(sb.GPUs)
 	}
 	writeJSON(w, http.StatusOK, st)
 }
