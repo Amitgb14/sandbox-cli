@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"regexp"
 	"time"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
@@ -163,6 +164,14 @@ type SandboxResizer interface {
 type Snapshotter interface {
 	Snapshot(ctx context.Context, id, snapshotID string) (SnapshotInfo, error)
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
+}
+
+// GPUChecker can say whether a device is ready to be passed through (bound
+// to vfio-pci, in an IOMMU group with its VFIO node). The server hands out
+// only devices that are, and counts only those as free, so a card set up
+// wrong is skipped rather than given to every create that asks.
+type GPUChecker interface {
+	CheckGPU(addr string) error
 }
 
 // SnapshotLister can say which snapshots it holds on disk, by id. A server
@@ -353,3 +362,10 @@ func RegistryLoginFrom(ctx context.Context) (RegistryLogin, bool) {
 	l, ok := ctx.Value(registryLoginKey{}).(RegistryLogin)
 	return l, ok
 }
+
+// pciAddr is a PCI device's full address, domain included, as sysfs names it.
+var pciAddr = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
+
+// ValidPCIAddr reports whether a is a PCI address in sysfs's form
+// (0000:01:00.0), the only form a GPU is named in (Spec.GPUs).
+func ValidPCIAddr(a string) bool { return pciAddr.MatchString(a) }

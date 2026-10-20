@@ -70,6 +70,9 @@ type Server struct {
 	// Capacity is what this machine offers sandboxes, reported at GET
 	// /v1/node; Free there is Capacity less what sandboxes are given.
 	Capacity api.NodeResources
+	// GPUs are the node's GPUs, by PCI address (sandboxd --gpu), given whole
+	// to sandboxes that ask (gpu.go). Capacity.GPUs is their count.
+	GPUs []string
 	// NodeLabels describe the node to a gateway (region, disk class, ...).
 	NodeLabels map[string]string
 	// MetricsInterval is how often sandboxes' usage is sampled, where the
@@ -160,6 +163,11 @@ func (s *Server) Handler() http.Handler {
 		s.sandboxes = map[string]*record{}
 	}
 	s.mu.Unlock()
+	// A sandbox can have at most the GPUs this node has. A higher limit would
+	// be advertised and accepted, and the create then refused as unavailable,
+	// "try again", when no wait can help; a gateway would place it here too.
+	// Capped, it is invalid_request, said at the request.
+	s.Policy.Limits.MaxGPUs = min(s.Policy.Limits.MaxGPUs, len(s.GPUs))
 
 	mux := http.NewServeMux()
 	route := func(pattern string, raw bool, h http.HandlerFunc) {
@@ -267,6 +275,7 @@ func (s *Server) caps() api.Capabilities {
 	_, caps[api.CapMetrics] = s.usageReader()
 	_, caps[api.CapImages] = s.imageStore()
 	caps[api.CapMetricsExport] = s.canExport()
+	caps[api.CapGPU] = s.servesGPUs()
 	return api.Capabilities{
 		APIVersion:   api.Version,
 		Backend:      s.Backend.Name(),
@@ -309,6 +318,10 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, status, code, msg)
 			return
 		}
+	}
+	if req.GPUs > 0 && !s.servesGPUs() {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint gives sandboxes no GPUs")
+		return
 	}
 	id := s.newID()
 	bs, err := spec.Resolve(req, s.Policy, id)
@@ -404,6 +417,17 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// GPUs too: each is one sandbox's at a time, and what is free is what
+	// the records not yet terminated do not hold.
+	if req.GPUs > 0 {
+		gpus, why := s.freeGPUsLocked(req.GPUs)
+		if why != "" {
+			s.mu.Unlock()
+			writeErr(w, http.StatusServiceUnavailable, api.CodeUnavailable, why)
+			return
+		}
+		bs.GPUs, rec.sbx.GPUs = gpus, gpus
+	}
 	s.sandboxes[id] = rec
 	s.mu.Unlock()
 
@@ -434,7 +458,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	s.persist(rec)
 	ev := api.Event{Type: api.EventSandboxCreated, Sandbox: id, Name: out.Name, Image: out.Image,
 		Labels: out.Labels, Network: &out.Network, EnvNames: out.EnvNames, Snapshot: req.SnapshotID, Volumes: out.Volumes,
-		Reason: from}
+		GPUs: out.GPUs, Reason: from}
 	if export != nil {
 		ev.MetricsEndpoint = export.URL
 	}
@@ -718,6 +742,10 @@ func (s *Server) updateSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		if action == api.IdleSuspend && !s.canSuspend() {
 			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint cannot suspend a sandbox, so idle_action suspend cannot be had")
+			return
+		}
+		if action == api.IdleSuspend && len(rec.snapshot().GPUs) > 0 {
+			writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, errGPUSuspend)
 			return
 		}
 	}

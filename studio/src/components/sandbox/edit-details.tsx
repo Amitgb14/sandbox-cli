@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useInfo, useUpdateSandbox } from "@/lib/api/queries";
+import { hasGPU } from "@/lib/gpu";
 import type { Sandbox } from "@/lib/types";
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -51,7 +52,7 @@ function Form({ sb, onDone }: { sb: Sandbox; onDone: () => void }) {
   const wasOnIdle = sb.idle_action === "suspend" ? "suspend" : "terminate";
   // Offered where the endpoint can suspend, or to a sandbox that already
   // suspends, so it can be switched back.
-  const canSuspend = !!info?.capabilities?.capabilities?.suspend || wasOnIdle === "suspend";
+  const canSuspend = (!!info?.capabilities?.capabilities?.suspend && !hasGPU(sb)) || wasOnIdle === "suspend";
 
   const choices = [...new Set([...IDLE.filter((s) => !max || s <= max), ...(max ? [] : [0]), sb.idle_timeout_secs])].sort((a, b) => (a || Infinity) - (b || Infinity));
   const keys = rows.map(([k]) => k.trim());

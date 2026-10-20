@@ -1,17 +1,19 @@
-import { Cpu, HardDrive, MemoryStick } from "lucide-react";
+import { Cpu, HardDrive, MemoryStick, Microchip } from "lucide-react";
 import { formatMiB } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Sandbox } from "@/lib/types";
 
 /**
- * What a sandbox was given, as three chips. Allocations, not usage: sandboxd
- * reports no live usage, so nothing here is a gauge.
+ * What a sandbox was given, as three chips, and a fourth for its GPUs when it
+ * has any. Allocations, not usage: sandboxd reports no live usage, so nothing
+ * here is a gauge.
  */
-export function ResourceChips({ sb, className }: { sb: Pick<Sandbox, "cpus" | "memory_mb" | "disk_mb">; className?: string }) {
+export function ResourceChips({ sb, className }: { sb: Pick<Sandbox, "cpus" | "memory_mb" | "disk_mb" | "gpus">; className?: string }) {
   const chips = [
     { icon: Cpu, text: `${sb.cpus} vCPU`, title: "CPUs" },
     { icon: MemoryStick, text: formatMiB(sb.memory_mb), title: "Memory" },
     { icon: HardDrive, text: formatMiB(sb.disk_mb), title: "Disk" },
+    ...(sb.gpus?.length ? [{ icon: Microchip, text: `${sb.gpus.length} GPU`, title: `GPUs: ${sb.gpus.join(", ")}` }] : []),
   ];
   return (
     <div className={cn("flex flex-wrap gap-1.5", className)}>

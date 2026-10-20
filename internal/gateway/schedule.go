@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/Amitgb14/sandbox-cli/internal/api"
 )
@@ -29,6 +30,9 @@ type Want struct {
 	CPUs     float64
 	MemoryMB int
 	DiskMB   int
+	// GPUs are whole GPUs, which only a node with capability gpu and as many
+	// free has.
+	GPUs int
 	// Caps are capabilities the node must have.
 	Caps []string
 	// NetworkMode, when set, must be within the node's ceiling.
@@ -109,19 +113,43 @@ func Schedule(cands []Candidate, w Want) (string, error) {
 }
 
 // Fallback picks the node a request goes to when no node can run it, so the
-// node refuses it: among cands, the uncordoned one sorting first.
-func Fallback(cands []Candidate, exclude []string) (string, bool) {
-	names := []string{}
+// node refuses it: among cands, the uncordoned one that has the most of what
+// w asks for, then the one sorting first. The refusal is then the nearest
+// node's: a request for more GPUs than any node has goes to a node with GPUs,
+// which says how many it can give (invalid_request), not to one without, which
+// would say it gives none (unsupported) — and which of those a caller got
+// would not depend on how the nodes are named.
+func Fallback(cands []Candidate, exclude []string, w Want) (string, bool) {
+	var live []Candidate
 	for _, c := range cands {
 		if !c.Status.Cordoned && !slices.Contains(exclude, c.Name) {
-			names = append(names, c.Name)
+			live = append(live, c)
 		}
 	}
-	if len(names) == 0 {
+	if len(live) == 0 {
 		return "", false
 	}
-	slices.Sort(names)
-	return names[0], true
+	slices.SortFunc(live, func(a, b Candidate) int {
+		if d := nearness(b.Status, w) - nearness(a.Status, w); d != 0 {
+			return d
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return live[0].Name, true
+}
+
+// nearness counts the capabilities w needs that a node has, GPUs among them.
+func nearness(st api.NodeStatus, w Want) int {
+	n := 0
+	for _, c := range w.Caps {
+		if st.Capabilities.Has(c) {
+			n++
+		}
+	}
+	if w.GPUs > 0 && st.Capabilities.Has(api.CapGPU) {
+		n++
+	}
+	return n
 }
 
 func canRun(st api.NodeStatus, w Want) bool {
@@ -134,6 +162,9 @@ func canRun(st api.NodeStatus, w Want) bool {
 		return false
 	}
 	l := st.Capabilities.Limits
+	if w.GPUs > 0 && (!st.Capabilities.Has(api.CapGPU) || w.GPUs > l.MaxGPUs) {
+		return false
+	}
 	return w.CPUs <= l.MaxCPUs && w.MemoryMB <= l.MaxMemoryMB && w.DiskMB <= l.MaxDiskMB
 }
 
@@ -142,15 +173,16 @@ func free(c Candidate) api.NodeResources {
 		CPUs:     c.Status.Free.CPUs - c.Reserved.CPUs,
 		MemoryMB: c.Status.Free.MemoryMB - c.Reserved.MemoryMB,
 		DiskMB:   c.Status.Free.DiskMB - c.Reserved.DiskMB,
+		GPUs:     c.Status.Free.GPUs - c.Reserved.GPUs,
 	}
 }
 
-// hasRoom checks CPUs and memory always, and disk only on a node that
+// hasRoom checks CPUs, memory and GPUs always, and disk only on a node that
 // reports a disk capacity: one that reports none has said nothing about its
 // disk, and refusing on that would refuse every create.
 func hasRoom(c Candidate, w Want) bool {
 	f := free(c)
-	if f.CPUs+1e-9 < w.CPUs || f.MemoryMB < w.MemoryMB {
+	if f.CPUs+1e-9 < w.CPUs || f.MemoryMB < w.MemoryMB || f.GPUs < w.GPUs {
 		return false
 	}
 	return c.Status.Capacity.DiskMB == 0 || f.DiskMB >= w.DiskMB

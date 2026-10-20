@@ -79,18 +79,31 @@ func (b *Backend) checkGPUs(s backend.Spec) error {
 		return fmt.Errorf("%w: a sandbox with a GPU cannot start from a snapshot", backend.ErrUnsupported)
 	}
 	for _, d := range s.GPUs {
-		if !ValidPCIAddr(d) {
-			return fmt.Errorf("GPU %q is not a PCI address like 0000:01:00.0", d)
-		}
-		drv, err := os.Readlink(filepath.Join("/sys/bus/pci/devices", d, "driver"))
-		if err != nil || filepath.Base(drv) != "vfio-pci" {
-			return fmt.Errorf("GPU %s is not bound to vfio-pci (scripts/gpu-vfio.sh bind %s)", d, d)
-		}
-		if _, err := vfioGroup(d); err != nil {
+		if err := CheckGPU(d); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// CheckGPU is backend.GPUChecker: the package's CheckGPU.
+func (b *Backend) CheckGPU(addr string) error { return CheckGPU(addr) }
+
+// CheckGPU reports whether a device is ready to be passed through: a PCI
+// address in sysfs's form, bound to vfio-pci, in an IOMMU group whose VFIO
+// node exists. A create checks each of its devices with it, and sandboxd each
+// of its --gpu devices at start, so a node set up wrong says so when it
+// starts rather than at its first GPU sandbox.
+func CheckGPU(d string) error {
+	if !backend.ValidPCIAddr(d) {
+		return fmt.Errorf("GPU %q is not a PCI address like 0000:01:00.0", d)
+	}
+	drv, err := os.Readlink(filepath.Join("/sys/bus/pci/devices", d, "driver"))
+	if err != nil || filepath.Base(drv) != "vfio-pci" {
+		return fmt.Errorf("GPU %s is not bound to vfio-pci (scripts/gpu-vfio.sh bind %s)", d, d)
+	}
+	_, err = vfioGroup(d)
+	return err
 }
 
 // vfioGroup is a device's VFIO group node, /dev/vfio/<its IOMMU group>.
@@ -179,7 +192,7 @@ func gpusInArgs(args []string) []string {
 			continue
 		}
 		p := strings.TrimSuffix(strings.TrimPrefix(args[i+1], "path=/sys/bus/pci/devices/"), "/")
-		if ValidPCIAddr(p) {
+		if backend.ValidPCIAddr(p) {
 			out = append(out, p)
 		}
 	}
@@ -240,10 +253,11 @@ func unsupportedGPU(what string) error {
 
 // prepareCloudHV is Jailer.prepare for a VMM that is not chrooted: the same
 // links and ownership in the jail's directory, named relative to it (the
-// VMM's working directory), the kernel by its absolute path in the kit, and
-// the directory itself the VMM's, for its sockets.
+// VMM's working directory), and the directory itself the VMM's, for its
+// sockets. The kit's kernel is linked in too: the jail's uid cannot reach it
+// in the kit, under sandboxd's state directory.
 func (j *Jailer) prepareCloudHV(id, kernel, rootfs, scratch string, volumes []string) (vmPaths, error) {
-	p, err := j.prepare(id, "", rootfs, scratch, volumes)
+	p, err := j.prepare(id, kernel, rootfs, scratch, volumes)
 	if err != nil {
 		return vmPaths{}, err
 	}
@@ -252,7 +266,7 @@ func (j *Jailer) prepareCloudHV(id, kernel, rootfs, scratch string, volumes []st
 		return vmPaths{}, err
 	}
 	rel := func(s string) string { return strings.TrimPrefix(s, "/") }
-	p.Kernel, p.RootFS, p.Scratch, p.VsockUDS, p.APISock = kernel, rel(p.RootFS), rel(p.Scratch), rel(p.VsockUDS), "api.sock"
+	p.Kernel, p.RootFS, p.Scratch, p.VsockUDS, p.APISock = rel(p.Kernel), rel(p.RootFS), rel(p.Scratch), rel(p.VsockUDS), "api.sock"
 	for i := range p.Volumes {
 		p.Volumes[i] = rel(p.Volumes[i])
 	}

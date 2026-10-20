@@ -31,7 +31,9 @@ class ClientTest(unittest.TestCase):
             f.write("python-sdk-test-token")
         os.chmod(tok, 0o600)
         cls.proc = subprocess.Popen([SANDBOXD, "--backend", "fake", "--listen", "unix://" + sock, "--token-file", tok,
-                                     "--state-dir", os.path.join(cls.dir, "state")],
+                                     "--state-dir", os.path.join(cls.dir, "state"),
+                                     # One pretend GPU (the fake backend's), for test_gpus.
+                                     "--gpu", "0000:01:00.0"],
                                     stderr=subprocess.DEVNULL)
         for _ in range(100):
             if os.path.exists(sock):
@@ -118,6 +120,21 @@ class ClientTest(unittest.TestCase):
         events = list(self.c.follow_output(sb["id"], p["pid"]))
         self.assertEqual(b"".join(e.get("data", b"") for e in events), b"one\ntwo\n")
         self.assertEqual(events[-1]["exit_code"], 0)
+
+    def test_gpus(self):
+        # The sandboxd has one GPU: the first sandbox to ask gets it, the next
+        # is refused until it is given back.
+        self.assertTrue(self.c.capabilities()["capabilities"]["gpu"])
+        sb = self.c.create_sandbox(gpus=1)
+        try:
+            self.assertEqual(sb["gpus"], ["0000:01:00.0"])
+            with self.assertRaises(ApiError) as e:
+                self.c.create_sandbox(gpus=1)
+            self.assertEqual(e.exception.code, "unavailable")
+        finally:
+            self.c.terminate_sandbox(sb["id"])
+        again = self.new(gpus=1)
+        self.assertEqual(again["gpus"], ["0000:01:00.0"])
 
     def test_snapshot_schedule_needs_snapshots(self):
         # The fake sandboxd takes no snapshots: a schedule is refused, typed,

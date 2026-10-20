@@ -32,6 +32,8 @@ export interface Sandbox {
   cpus: number;
   memory_mb: number;
   disk_mb: number;
+  /** The node's PCI addresses of the GPUs it was given; absent without. */
+  gpus?: string[];
   /** Names only: values are never returned. */
   env_names?: string[];
   network: NetworkPolicy;
@@ -96,6 +98,8 @@ export interface CreateSandboxRequest {
   /** Named volumes to mount (capability `volumes`); one live sandbox at a time. */
   volumes?: VolumeMount[];
   metrics_export?: MetricsExport;
+  /** Whole GPUs (capability `gpu`, at most `limits.max_gpus`); such a sandbox cannot be suspended, snapshotted or resized. Refused `unavailable` when the node has too few free. */
+  gpus?: number;
 }
 
 export interface VolumeMount {

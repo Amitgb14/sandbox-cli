@@ -658,3 +658,38 @@ test("a sandbox with a lifetime says when it ends", async ({ page, request }) =>
   await expect(page.getByText("Ends", { exact: true })).toBeVisible();
   await expect(page.getByText(/^in 29m \d+s$|^in 30m 0s$/)).toBeVisible();
 });
+
+test("the Playground gives a sandbox a GPU, and its screen offers nothing a GPU rules out", async ({ page, request }) => {
+  const api = (path: string, method = "GET") => request.fetch(`/api${path}`, { method, headers: { Authorization: `Bearer ${token}` } });
+  // Said to suspend and snapshot, so the test sees those step aside for the GPU.
+  await page.route("**/api/info", async (route) => {
+    const res = await route.fetch();
+    const info = await res.json();
+    Object.assign(info.capabilities.capabilities, { suspend: true, disk_snapshot: true });
+    await route.fulfill({ response: res, json: info });
+  });
+  await page.goto(`/#token=${token}`);
+  await expect(page.getByText("e2e · fake")).toBeVisible();
+  await page.goto("/launch/");
+  await page.getByText("Command", { exact: true }).first().click();
+  await page.getByRole("textbox", { name: "Command" }).fill("echo on-a-gpu");
+  await expect(page.getByText("1 of 1 free on this node")).toBeVisible();
+  await page.getByRole("combobox", { name: "GPUs" }).click();
+  await page.getByRole("option", { name: "1", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Snapshot on a schedule" })).toBeDisabled();
+  await expect(page.getByText("(not with a GPU)").first()).toBeVisible();
+  const code = page.locator("pre").last();
+  await expect(code).toContainText("sandbox-cli run --gpus 1 -- echo on-a-gpu");
+  await page.locator("form").getByRole("button", { name: "Launch" }).click();
+  await expect(page).toHaveURL(/\/sandbox\/?\?id=sbx_/);
+  const id = new URL(page.url()).searchParams.get("id")!;
+  try {
+    const sb = await (await api(`/v1/sandboxes/${id}`)).json();
+    expect(sb.gpus).toEqual(["0000:01:00.0"]);
+    await expect(page.getByTitle("GPUs: 0000:01:00.0").first()).toContainText("1 GPU");
+    await expect(page.getByRole("button", { name: "Suspend" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Snapshot" })).toHaveCount(0);
+  } finally {
+    await api(`/v1/sandboxes/${id}`, "DELETE");
+  }
+});

@@ -83,6 +83,10 @@ func run(args []string) error {
 	dnsPort := fl.Int("egress-dns-port", 0, "firecracker: host UDP port the egress resolver listens on (default 7353)")
 	egressOpen := fl.Bool("egress-open", false, "firecracker: offer network mode open — TCP to public addresses, never the host's or private ones — to sandboxes the policy's ceiling allows it (needs --network)")
 	openPort := fl.Int("egress-open-port", 0, "firecracker: host TCP port open egress is forwarded through (default 7354)")
+	cloudHV := fl.String("cloud-hypervisor", "", "firecracker: the Cloud Hypervisor binary, which runs sandboxes given GPUs (with --gpu and --gpu-kit)")
+	gpuKit := fl.String("gpu-kit", "", "firecracker: the GPU kit scripts/gpu-kit.sh builds: the kernel and driver GPU sandboxes boot with")
+	var gpus listFlag
+	fl.Var(&gpus, "gpu", "a GPU to give sandboxes, by PCI address (0000:01:00.0), bound to vfio-pci; repeatable. With the fake backend, a pretend one")
 	keep := fl.Bool("keep-sandboxes", false, "on exit, leave sandboxes running for the next sandboxd on this state directory to take back, so an upgrade stops neither them nor their processes (firecracker)")
 	defaultImage := fl.String("default-image", "", "image for requests that name none (overrides the policy file)")
 	var allowedHosts, insecureRegistries listFlag
@@ -127,6 +131,9 @@ func run(args []string) error {
 		// would do nothing is refused rather than ignored.
 		return fmt.Errorf("--egress-open and --egress-open-port are for --backend firecracker")
 	}
+	if err := checkGPUFlags(*backendName, gpus, *cloudHV, *gpuKit); err != nil {
+		return err
+	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "sandboxd: "+format+"\n", a...) }
 
 	pol := spec.DefaultPolicy()
@@ -145,7 +152,8 @@ func run(args []string) error {
 		stateDir: *stateDir, kernel: *kernel, firecracker: *firecracker, jailer: *jailer,
 		agent: *agent, network: *network, proxyPort: *proxyPort, dnsPort: *dnsPort, egressOpen: *egressOpen, openPort: *openPort, keep: *keep,
 		logf: logf, insecureRegistries: insecureRegistries,
-		container: *containerBin,
+		container:       *containerBin,
+		cloudHypervisor: *cloudHV, gpuKit: *gpuKit, gpus: gpus,
 	})
 	if err != nil {
 		return err
@@ -193,7 +201,7 @@ func run(args []string) error {
 	nodeCap := capacity(node, *stateDir)
 	apiSrv := &server.Server{Backend: be, Policy: pol, Token: token, AllowedHosts: allowedHosts,
 		Audit: audit.NewLog(logPath), Logf: logf,
-		NodeID: node.id, NodeLabels: labels, Capacity: nodeCap,
+		NodeID: node.id, NodeLabels: labels, Capacity: nodeCap, GPUs: gpus,
 		MetricsExportAllowPrivate: *exportPrivate}
 	// The records hold sandboxes' environment values, so they exist only
 	// while --keep-sandboxes is on; turning it off deletes them.
@@ -282,6 +290,8 @@ type backendOptions struct {
 	logf                                         func(string, ...any)
 	insecureRegistries                           []string
 	container                                    string
+	cloudHypervisor, gpuKit                      string
+	gpus                                         []string
 }
 
 func defaultStateDir() string {
@@ -299,7 +309,11 @@ func newBackend(name string, o backendOptions) (backend.Backend, error) {
 	switch name {
 	case "fake":
 		// It pulls nothing, so it takes a registry login and has no use for it.
-		return fake.New(api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapVolumes, api.CapRegistryLogin, api.CapResize), nil
+		caps := []string{api.CapNetworkPolicyUpdate, api.CapEgressAllowlist, api.CapVolumes, api.CapRegistryLogin, api.CapResize}
+		if len(o.gpus) > 0 {
+			caps = append(caps, api.CapGPU)
+		}
+		return fake.New(caps...), nil
 	case "firecracker":
 		return newFirecracker(o)
 	case "macos":

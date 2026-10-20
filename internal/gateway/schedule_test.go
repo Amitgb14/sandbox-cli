@@ -117,11 +117,23 @@ func TestScheduleSpreadsWithReservations(t *testing.T) {
 }
 
 func TestFallback(t *testing.T) {
-	if name, ok := Fallback([]Candidate{cand("b", 1), cand("a", 1, func(c *Candidate) { c.Status.Cordoned = true })}, nil); !ok || name != "b" {
+	if name, ok := Fallback([]Candidate{cand("b", 1), cand("a", 1, func(c *Candidate) { c.Status.Cordoned = true })}, nil, Want{}); !ok || name != "b" {
 		t.Fatalf("fallback %q %v", name, ok)
 	}
-	if _, ok := Fallback([]Candidate{cand("a", 1)}, []string{"a"}); ok {
+	if _, ok := Fallback([]Candidate{cand("a", 1)}, []string{"a"}, Want{}); ok {
 		t.Fatal("fallback to an excluded node")
+	}
+	// A request no node can run goes to the node nearest to it, whatever the
+	// names: one with GPUs, for a GPU request.
+	withGPU := func(c *Candidate) {
+		c.Status.Capabilities.Capabilities = map[string]bool{api.CapGPU: true}
+	}
+	cands := []Candidate{cand("a-plain", 1), cand("b-gpu", 1, withGPU)}
+	if name, _ := Fallback(cands, nil, Want{GPUs: 3}); name != "b-gpu" {
+		t.Errorf("a GPU request fell back to %q", name)
+	}
+	if name, _ := Fallback(cands, nil, Want{}); name != "a-plain" {
+		t.Errorf("a plain request fell back to %q", name)
 	}
 }
 
@@ -196,5 +208,56 @@ func TestPollKeepsFreeWhileACreateIsInFlight(t *testing.T) {
 	}
 	if c3, _ := n.candidate(); c3.Status.Free.MemoryMB != c2.Status.Free.MemoryMB-1024 {
 		t.Fatalf("free was held forever: %+v", c3.Status.Free)
+	}
+}
+
+// A GPU sandbox goes only to a node that gives GPUs, has as many free less
+// what the gateway has placed there since its status, and allows as many.
+func TestScheduleGPUs(t *testing.T) {
+	gpus := func(free, max int) func(*Candidate) {
+		return func(c *Candidate) {
+			c.Status.Capabilities.Capabilities = map[string]bool{api.CapGPU: true}
+			c.Status.Capabilities.Limits.MaxGPUs = max
+			c.Status.Capacity.GPUs, c.Status.Free.GPUs = 2, free
+		}
+	}
+	one := want(func(w *Want) { w.GPUs = 1 })
+	two := want(func(w *Want) { w.GPUs = 2 })
+	held := func(c *Candidate) { c.Reserved.GPUs = 1 }
+	for _, c := range []struct {
+		name    string
+		cands   []Candidate
+		w       Want
+		want    string
+		wantErr error
+	}{
+		{"only the GPU node", []Candidate{cand("a", 60000), cand("g", 2000, gpus(1, 8))}, one, "g", nil},
+		{"none gives GPUs", []Candidate{cand("a", 60000)}, one, "", errNoCapable},
+		{"over a node's limit", []Candidate{cand("g", 1000, gpus(2, 1))}, two, "", errNoCapable},
+		{"none free", []Candidate{cand("g", 1000, gpus(0, 8))}, one, "", errNoRoom},
+		{"placed since the status", []Candidate{cand("g", 1000, gpus(1, 8), held)}, one, "", errNoRoom},
+		{"the one with enough", []Candidate{cand("g1", 60000, gpus(1, 8)), cand("g2", 2000, gpus(2, 8))}, two, "g2", nil},
+		{"no GPU asked: any node", []Candidate{cand("a", 2000), cand("g", 60000, gpus(2, 8))}, small, "g", nil},
+	} {
+		got, err := Schedule(c.cands, c.w)
+		if got != c.want || !errors.Is(err, c.wantErr) {
+			t.Errorf("%s: %q, %v; want %q, %v", c.name, got, err, c.want, c.wantErr)
+		}
+	}
+}
+
+// A fleet gives GPUs when one node does, up to the most any node allows: the
+// scheduler sends a GPU sandbox to it, so "every node" would hide it.
+func TestCombineCapabilitiesGPUs(t *testing.T) {
+	plain := cand("a", 1000).Status
+	g := cand("g", 1000).Status
+	g.Capabilities.Capabilities = map[string]bool{api.CapEgressAllowlist: true, api.CapVolumes: true, api.CapGPU: true}
+	g.Capabilities.Limits.MaxGPUs = 2
+	out := CombineCapabilities([]api.NodeStatus{plain, g})
+	if !out.Has(api.CapGPU) || out.Limits.MaxGPUs != 2 {
+		t.Fatalf("mixed fleet: gpu %v, max_gpus %d", out.Has(api.CapGPU), out.Limits.MaxGPUs)
+	}
+	if out := CombineCapabilities([]api.NodeStatus{plain, plain}); out.Has(api.CapGPU) || out.Limits.MaxGPUs != 0 {
+		t.Fatalf("no GPU node: gpu %v, max_gpus %d", out.Has(api.CapGPU), out.Limits.MaxGPUs)
 	}
 }

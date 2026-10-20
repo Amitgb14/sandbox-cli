@@ -68,15 +68,12 @@ func (j *Jailer) prepare(id, kernel, rootfs, scratch string, volumes []string) (
 	}
 	uid := j.uid(id)
 	for name, src := range map[string]string{"vmlinux": kernel, "rootfs.ext4": rootfs} {
-		if src == "" { // prepareCloudHV's kernel, named where it is
-			continue
-		}
 		dst := filepath.Join(root, name)
 		// A hard link, because the root disk is gigabytes and shared: copying it
 		// per sandbox is the cost the overlay design exists to avoid. It stays
 		// owned by root and read-only to the VMM's uid.
 		if err := os.Link(src, dst); err != nil {
-			return vmPaths{}, fmt.Errorf("linking %s into the jail (the jail must be on the same filesystem as the image cache): %w", name, err)
+			return vmPaths{}, fmt.Errorf("linking %s into the jail (the jail must be on the same filesystem as the image cache and the kernel): %w", name, err)
 		}
 	}
 	if scratch != "" {

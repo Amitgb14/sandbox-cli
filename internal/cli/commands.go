@@ -307,11 +307,24 @@ func newDoctorCmd() *cobra.Command {
 				fmt.Fprintf(out, "schedules: a snapshot every %v or longer, at most %d kept\n",
 					time.Duration(caps.Limits.MinSnapshotEverySecs)*time.Second, caps.Limits.MaxSnapshotKeep)
 			}
+			if caps.Has(api.CapGPU) {
+				fmt.Fprintf(out, "gpus:      %s\n", gpuLine(cmd.Context(), c, caps.Limits.MaxGPUs))
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&ctxFlag, "context", "", "which sandboxd to use")
 	return cmd
+}
+
+// gpuLine is doctor's GPU line: the most one sandbox may have and, from a
+// sandboxd (a gateway serves no node status), how many are free now.
+func gpuLine(ctx context.Context, c *api.Client, max int) string {
+	line := fmt.Sprintf("up to %d per sandbox (--gpus)", max)
+	if st, err := c.Node(ctx); err == nil && st.Capacity.GPUs > 0 {
+		line += fmt.Sprintf("; %d of %d free on this node", st.Free.GPUs, st.Capacity.GPUs)
+	}
+	return line
 }
 
 func newSuspendCmds() []*cobra.Command {

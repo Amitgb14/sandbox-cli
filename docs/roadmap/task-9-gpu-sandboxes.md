@@ -1,7 +1,7 @@
 # Task 9: GPU sandboxes
 
-**State:** proposed 2026-10-18; phases 1 and 2 built and checked without a
-card the same day. The operator's page is [docs/gpu.md](../gpu.md). Decided: Cloud Hypervisor as the VMM for GPU sandboxes; CUDA compute
+**State:** proposed 2026-10-18; phases 1 to 6 built the same day, checked
+without a card passed through, and phases 5 and 6 on the card in a container. The operator's page is [docs/gpu.md](../gpu.md). Decided: Cloud Hypervisor as the VMM for GPU sandboxes; CUDA compute
 as the first milestone, a GPU desktop after.
 
 ## Goal
@@ -54,7 +54,7 @@ exception, not a second default.
 
 ## The GPU kit: the driver is the operator's, not the image's
 
-NVIDIA's kernel modules must match the guest kernel build exactly, and its
+The GPU vendor's kernel modules must match the guest kernel build exactly, and its
 userspace driver (`libcuda`, `libnvidia-ml`, `nvidia-smi`) must match the
 modules exactly. An image cannot know which kernel a node boots, so images do
 not carry the driver. The operator provides a **GPU kit**, built together:
@@ -70,7 +70,7 @@ sandboxd boots GPU sandboxes with the kit's kernel and injects the modules and
 driver files into the root disk, as it injects `sandbox-guestd` today (a disk
 per image × agent × kit, cached the same way). An image needs only the CUDA
 runtime or toolkit it builds against; CUDA's forward compatibility covers a
-newer driver. This is the split NVIDIA's container toolkit makes, for the same
+newer driver. This is the split the vendor's own container toolkit makes, for the same
 reason.
 
 The guest kernel today is Firecracker's CI build, with `# CONFIG_MODULES is not
@@ -97,12 +97,12 @@ sandboxd, and the guest is the VM in any case.
 | # | Phase | Proves | Where |
 |---|---|---|---|
 | 0 | **Host.** IOMMU on; the card and its audio function (one IOMMU group) bound to `vfio-pci`; Cloud Hypervisor installed. A `docs/gpu.md` section and a check script (`sandboxd gpu check <bdf>`): IOMMU group members, driver bound, `/dev/vfio/<group>` | The node can hand the card over | docs, small command |
-| 1 | **GPU kit.** `make gpu-kit`: the guest kernel (Firecracker's CI config, plus `CONFIG_MODULES`, DRM), NVIDIA's open kernel modules built against it, the userspace driver files, `kit.json` | `insmod nvidia.ko` succeeds in a hand-booted Cloud Hypervisor VM with the card | build scripts |
+| 1 | **GPU kit.** `make gpu-kit`: the guest kernel (Firecracker's CI config, plus `CONFIG_MODULES`, DRM), the vendor's open kernel modules built against it, the userspace driver files, `kit.json` | `insmod nvidia.ko` succeeds in a hand-booted Cloud Hypervisor VM with the card | build scripts |
 | 2 | **Backend.** The Linux backend boots a sandbox whose spec has GPUs on Cloud Hypervisor: the kit's kernel, the kit in its root disk, its devices passed through, the jail's uid under the jailer; processes, files, network, keep and terminate as for any sandbox; suspend, snapshot and resize refused (open question 2 replaced the separate backend first planned) | `Backend.Create` of a sandbox with the GPU, then `nvidia-smi` in it (`TestVMCloudHypervisorBackend`); `sandbox-cli run --gpu` needs phase 3 | sandbox-cli |
-| 3 | **API and scheduling.** `gpus: 1` on create; capability `gpu`; `--gpu BDF` (repeatable) and `--gpu-kit DIR` on sandboxd; whole-GPU allocation and release; policy `max_gpus`; refusals (suspend, snapshot, fork); the gateway places GPU sandboxes on nodes with a free GPU; events record the device | A second `--gpu` create waits for or is refused a GPU, with a clear error; the gateway path works | sandbox-cli |
-| 4 | **CLI, SDK, Studio.** `--gpu` on `run` and `agent`; Studio's launch form and a GPU chip on the sandbox; `sandbox-cli doctor` reports GPUs | — | sandbox-cli |
+| 3 | **API and scheduling.** `gpus: 1` on create; capability `gpu`; `--gpu BDF` (repeatable), `--cloud-hypervisor` and `--gpu-kit DIR` on sandboxd; whole-GPU allocation and release; policy `max_gpus`; refusals (suspend, snapshot, fork, resize); the gateway places GPU sandboxes on nodes with a free GPU; events record the device; `--gpus` on the CLI and in the SDKs | A second create is refused a GPU with a clear error (`503`); the gateway path works | sandbox-cli |
+| 4 | **Studio, doctor.** Studio's launch form and a GPU chip on the sandbox; `sandbox-cli doctor` reports GPUs | — | sandbox-cli |
 | 5 | **A CUDA image.** Base image plus the CUDA runtime; a smoke that runs a CUDA sample | A real workload | images |
-| 6 | **GPU desktop.** Xorg on the NVIDIA card, served over VNC like today's desktop; then games | Studio's Desktop tab drawn by the GPU | later |
+| 6 | **GPU desktop.** OpenGL on the card through VirtualGL's EGL back end, on the same VNC display as today's desktop (not Xorg on the card: see what phase 6 built); then games | Studio's Desktop tab drawn by the GPU | images, kit |
 
 Phase 0 needs root on the node, so it is the operator's; phases 1–3 are the
 spike, on one node with one card, before anything is polished.
@@ -122,7 +122,7 @@ spike, on one node with one card, before anything is polished.
 ## What phase 1 found
 
 Checked on the node on 2026-10-18 with Cloud Hypervisor v54.0, the kit's
-kernel (6.1.155 with Firecracker v1.17.0's config plus modules) and NVIDIA
+kernel (6.1.155 with Firecracker v1.17.0's config plus modules) and driver
 610.43.02's open modules, without the card (`TestVMCloudHypervisor`):
 
 - The kit's kernel boots under Cloud Hypervisor and the guest agent answers
@@ -185,9 +185,127 @@ Not done: Landlock for the VMM (Cloud Hypervisor's `--landlock`, which would
 stand in for the chroot); the reboot loop phase 1 found; memory accounting
 (open question 4).
 
+## What phase 3 built
+
+The API and scheduling, checked against the fake backend: server tests,
+the conformance suite (a GPU section, run with fake GPUs, through a gateway,
+and against an endpoint without them), the gateway's scheduler, and the
+Python SDK against a `sandboxd --backend fake --gpu`.
+
+- **API.**
+  - Create takes `gpus` (a count). The sandbox lists its devices in `gpus`.
+  - Capability `gpu`; `limits.max_gpus` (policy key, default 8, 0 without
+    the capability, and never more than the node's `--gpu` count).
+  - `NodeResources.gpus` in a node's capacity and free.
+  - `sandbox.created` names the devices.
+  - Refused, `400`: idle suspend, a snapshot schedule or `snapshot_id` with
+    `gpus`, and more than the limit.
+  - Refused, `501`: suspend, snapshot, schedule, resize and a later idle
+    suspend of such a sandbox.
+- **Allocation is the node's.** `server.Server.GPUs` is the node's list
+  (`sandboxd --gpu`).
+  - A create takes free ones under the lock that registers its record, so
+    two creates cannot share one. Ten at once for two GPUs get exactly two.
+  - What is free is read from the records not yet terminated, as the rest of
+    a node's resources are. So a terminate, a reap or a failed create gives
+    GPUs back, and a kept sandbox keeps its GPUs across a restart.
+  - None free is `503 unavailable`, not a queue: a GPU sandbox runs for as
+    long as it runs, and a waiting create would hold a request open for that
+    long.
+  - A GPU sandbox never claims a pooled VM.
+- **The gateway.**
+  - `Want.GPUs`: a node needs the capability, a high enough `max_gpus`, and
+    as many free GPUs less what it has placed since the node's last status.
+  - The fleet offers `gpu` when any node does, not when every node does.
+  - A terminate's credit gives back no GPU (the store keeps none), so a GPU
+    comes free at the node's next status.
+- **sandboxd** takes `--gpu` (repeatable), `--cloud-hypervisor` and
+  `--gpu-kit`, all three together or none, and `--gpu` alone with the fake
+  backend.
+- **Clients.** `--gpus` on `run` and the agent commands, `gpus` in both SDKs.
+
+The CLI flag is `--gpus N`, after the API's field, where the goal above said
+`--gpu`.
+
+Not done:
+- a non-GPU sandbox is not kept off a GPU node's CPUs and memory;
+- an idle policy of suspend is refused with `gpus`, not turned into
+  terminate.
+
+## What phase 4 built
+
+- **Studio.**
+  - **The Playground:** a GPUs choice in the Size step, offered where the
+    endpoint has the capability, up to `max_gpus` and the node's own count,
+    with how many are free. With a GPU chosen, a snapshot schedule, starting
+    from a snapshot and suspend-when-idle are disabled and say why, rather
+    than being refused at launch. The code it shows has `--gpus` and
+    `"gpus"`.
+  - **A sandbox:** a GPU chip beside its resources, with its devices on
+    hover. No Suspend or Snapshot button, Resize says why it cannot, the
+    Snapshots tab says so, and "suspend it" is not offered when idle.
+  - **The admin Nodes screen** counts GPUs in use.
+  - **Studio's server** passes `gpus` to the run, locally and hosted.
+- **`sandbox-cli doctor`** prints a `gpus:` line: the limit, and the node's
+  free GPUs where the endpoint is a sandboxd.
+- **Checked:** the Studio e2e suite, whose plain sandboxd now has a pretend
+  GPU. It launches with one and checks the chip and the missing buttons. Go
+  tests cover doctor, `run --gpus` and the launch request.
+
+## What phase 5 built
+
+`ghcr.io/<owner>/sandbox-cuda`, in sandbox-images (`images/cuda`,
+`docs/cuda.md` there): the base image with CUDA 13.3's `nvcc` and runtime,
+`python3-venv`, and `sandbox-cuda-check`, which prints the driver and the
+device, runs a SAXPY kernel and checks the result (exit 2 with no driver or no
+device). amd64 only. It carries no driver: the smoke test fails on a
+`libcuda`, `libnvidia-ml` or `nvidia-smi` in the image.
+
+- **CUDA 13.3** is the release driver 610.43.02 came with; the kit's
+  `libcuda` reports 13.3 through `cudaDriverGetVersion`.
+- **The kit's `libcuda` is found without `ldconfig`.** The root disk is built
+  after the image's loader cache, which does not list it, but Debian's
+  loader searches `/usr/lib/x86_64-linux-gnu` itself.
+- **Checked** on 2026-10-18 without a card: the smoke test with the node's kit
+  added as `copyTree` adds it (the driver found, no device), and a Firecracker
+  sandbox from the image, without `--gpus`, building with `nvcc` and getting
+  exit 2 from the check. With the card: e2e check 87.
+
+## What phase 6 built
+
+- **VirtualGL, not Xorg on the card.** Xorg with the vendor's X driver would need
+  `nvidia-modeset` and `nvidia-drm`, a monitor faked on a card with none, and
+  root to open the display; and a second X server beside the one VNC serves.
+  VirtualGL's EGL back end draws a program's OpenGL on the card with no X
+  server there and puts each frame on the existing Xvnc display, so the port,
+  `sandbox-desktop`'s contract and Studio's Desktop tab do not change. It is
+  what TurboVNC's `-vgl` does.
+- **The kit** (`scripts/gpu-kit.sh`) has the vendor's OpenGL, EGL and Vulkan
+  drivers (`libEGL_nvidia`, `libGLX_nvidia`, their cores), glvnd's
+  `egl_vendor.d/10_nvidia.json` and the Vulkan ICD; the image keeps its own
+  glvnd. About 600 MB. Building it found that four of the vendor's libraries are
+  named by their own soname (`libnvidia-glcore.so.610.43.02`): the soname
+  link replaced each with a link to itself. They are now skipped, and the
+  script fails on any link in the kit that reaches no file.
+- **The workstation image** (sandbox-images) installs VirtualGL 3.1.5;
+  `sandbox-desktop` asks the card for a renderer once Xvnc is up and, when
+  one answers, runs the session through `vglrun +wm`
+  (`SANDBOX_DESKTOP_GPU=auto|on|off`). agentos is built on it.
+- **Checked** on 2026-10-18 on the node's RTX 5070 Ti, in a container: the
+  host runs the kit's driver version (610.43.02), so the image with the kit
+  added and the host's `/dev/nvidia*` (the nodes sandbox-guestd makes) is the
+  GPU sandbox's userspace on the real card. The desktop's renderer was the
+  card, `glxspheres64` drew about 2000 frames a second against about 120 with
+  llvmpipe, and `sandbox-cuda-check` (phase 5) ran right at about 600 GB/s.
+- **What does not draw on the card:** Chromium and Chrome (their GPU process
+  refuses VirtualGL's visual and falls back to software), Flatpak apps (their
+  runtime's Mesa), and a Vulkan window (the vendor's driver cannot present to
+  Xvnc; `vkcube` fails to make its swapchain). Vulkan windows, and with them
+  games on Vulkan and Proton, are what is left of "then games".
+
 ## Open questions
 
-1. **Kernel version.** Firecracker's 6.1 config is what boots today; NVIDIA's
+1. **Kernel version.** Firecracker's 6.1 config is what boots today; the vendor's
    current open modules support it, but 6.18 (Firecracker's newer CI config)
    may be the better base for a new kernel. Decide in phase 1 by what builds.
 2. ~~One process or two VMMs per node.~~ **Decided:** one backend, two VMMs.
@@ -196,8 +314,8 @@ stand in for the chroot); the reboot loop phase 1 found; memory accounting
    the backend's already and do not depend on the VMM
    (`internal/backend/firecracker/cloudhv.go`). No routing between backends is
    needed.
-3. **Driver distribution.** NVIDIA's userspace driver may be redistributed under
-   its license only as NVIDIA ships it; the kit is built on the node from
-   NVIDIA's own files, never published by us.
+3. **Driver distribution.** The GPU vendor's userspace driver may be redistributed under
+   its license only as the vendor ships it; the kit is built on the node from
+   the vendor's own files, never published by us.
 4. **Memory accounting.** Pinned memory should count against the node's
    capacity differently from Firecracker's overcommitted memory.

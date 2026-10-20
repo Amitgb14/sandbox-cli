@@ -105,7 +105,10 @@ func DefaultPolicy() Policy {
 		// about 2 GB of the base image on macOS — so how often, and how many,
 		// is the operator's to bound.
 		Limits: api.Limits{MaxCPUs: 8, MaxMemoryMB: 16384, MaxDiskMB: 102400, MaxIdleTimeoutSecs: 7 * 24 * 3600,
-			MinSnapshotEverySecs: 300, MaxSnapshotKeep: 5, MinMetricsExportSecs: DefaultMinMetricsExportSecs},
+			MinSnapshotEverySecs: 300, MaxSnapshotKeep: 5, MinMetricsExportSecs: DefaultMinMetricsExportSecs,
+			// Bounded in practice by the node's own GPUs (sandboxd --gpu);
+			// FitTo makes it 0 on an endpoint without any.
+			MaxGPUs: 8},
 		Network: NetworkPolicy{
 			Default:  api.NetworkPolicy{Mode: api.NetworkOpen},
 			Ceiling:  api.NetworkOpen,
@@ -130,6 +133,9 @@ func (p Policy) Validate() error {
 	}
 	if api.NetworkRank(p.Network.Ceiling) < 0 {
 		return fmt.Errorf("policy: network ceiling %q is not a mode", p.Network.Ceiling)
+	}
+	if p.Limits.MaxGPUs < 0 {
+		return fmt.Errorf("policy: limits.max_gpus must not be negative")
 	}
 	if p.Limits.MaxLifetimeSecs < 0 {
 		return fmt.Errorf("policy: max_lifetime_secs must not be negative")
@@ -208,6 +214,9 @@ func (p Policy) FitTo(caps map[string]bool) (Policy, []string) {
 		}
 	}
 	p.Network = n
+	if !caps[api.CapGPU] {
+		p.Limits.MaxGPUs = 0
+	}
 	return p, notes
 }
 
@@ -398,6 +407,9 @@ func Resolve(req api.CreateSandboxRequest, pol Policy, id string) (backend.Spec,
 	case s.DiskMB < 0 || s.DiskMB > pol.Limits.MaxDiskMB:
 		return backend.Spec{}, invalid("disk_mb %d: must be between 0 and %d", s.DiskMB, pol.Limits.MaxDiskMB)
 	}
+	if err := checkGPUs(req, pol.Limits); err != nil {
+		return backend.Spec{}, err
+	}
 
 	switch idle := req.IdleTimeoutSecs; {
 	case idle < 0:
@@ -472,6 +484,29 @@ func ResolveEnv(in map[string]string) (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// checkGPUs checks a create's GPU count against the limit and against what a
+// passed-through device rules out. The devices themselves are the server's
+// to choose, from the node's free ones.
+func checkGPUs(req api.CreateSandboxRequest, l api.Limits) error {
+	switch n := req.GPUs; {
+	case n == 0:
+		return nil
+	case n < 0:
+		return invalid("gpus must not be negative")
+	case l.MaxGPUs == 0:
+		return invalid("gpus %d: this endpoint gives sandboxes no GPUs", n)
+	case n > l.MaxGPUs:
+		return invalid("gpus %d: at most %d", n, l.MaxGPUs)
+	case req.IdleAction == api.IdleSuspend:
+		return invalid("a sandbox with a GPU cannot be suspended, so idle_action suspend cannot be had with gpus")
+	case req.SnapshotEverySecs > 0:
+		return invalid("a sandbox with a GPU cannot be snapshotted, so a snapshot schedule cannot be had with gpus")
+	case req.SnapshotID != "":
+		return invalid("a sandbox with a GPU cannot start from a snapshot")
+	}
+	return nil
 }
 
 // ResolveIdleAction checks an idle_action, at create or in an update, and

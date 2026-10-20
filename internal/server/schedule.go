@@ -55,6 +55,10 @@ func (s *Server) setSnapshotSchedule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, status, code, msg)
 		return
 	}
+	if sched.EverySecs > 0 && len(rec.snapshot().GPUs) > 0 {
+		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, errSnapshotGPU.Error())
+		return
+	}
 	rec.mu.Lock()
 	rec.sbx.SnapshotEverySecs, rec.sbx.SnapshotKeep = sched.EverySecs, sched.Keep
 	rec.lastScheduled = s.now()

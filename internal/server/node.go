@@ -54,6 +54,7 @@ func (s *Server) nodeStatus() api.NodeStatus {
 		Capacity:     s.Capacity,
 		Labels:       s.NodeLabels,
 	}
+	st.Capacity.GPUs = len(s.GPUs)
 	var used api.NodeResources
 	add := func(cpus float64, mem, disk, n int) {
 		used.CPUs += cpus * float64(n)
@@ -104,6 +105,10 @@ func (s *Server) nodeStatus() api.NodeStatus {
 		MemoryMB: max(0, s.Capacity.MemoryMB-used.MemoryMB),
 		DiskMB:   max(0, s.Capacity.DiskMB-used.DiskMB),
 	}
+	// Free GPUs are the ones a create would be given (gpu.go), so a card not
+	// ready to be passed through is not offered to a gateway.
+	free, _ := s.freeGPUsOf(recs)
+	st.Free.GPUs = len(free)
 
 	if il, ok := s.Backend.(backend.ImageLister); ok {
 		st.Images = il.CachedImages()

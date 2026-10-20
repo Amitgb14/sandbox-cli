@@ -40,6 +40,8 @@ type Backend struct {
 	installedAt map[string]time.Time
 	// logins is the registry login each create carried, for tests.
 	logins map[string]backend.RegistryLogin
+	// notReady are pretend GPUs CheckGPU refuses (SetGPUReady), for tests.
+	notReady map[string]bool
 }
 
 // fakeVolume holds a volume's files by path relative to its mount point. A
@@ -162,6 +164,38 @@ func (b *Backend) Size(id string) (api.NodeResources, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return api.NodeResources{CPUs: s.spec.CPUs, MemoryMB: s.spec.MemoryMB, DiskMB: s.spec.DiskMB}, true
+}
+
+// SetGPUReady says whether CheckGPU passes a pretend GPU, for tests. Every
+// device is ready until said otherwise.
+func (b *Backend) SetGPUReady(addr string, ready bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.notReady == nil {
+		b.notReady = map[string]bool{}
+	}
+	b.notReady[addr] = !ready
+}
+
+// CheckGPU is backend.GPUChecker.
+func (b *Backend) CheckGPU(addr string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.notReady[addr] {
+		return fmt.Errorf("GPU %s is not bound to vfio-pci", addr)
+	}
+	return nil
+}
+
+// GPUs is the devices a sandbox was created with, for tests.
+func (b *Backend) GPUs(id string) []string {
+	s, err := b.get(id)
+	if err != nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.spec.GPUs...)
 }
 
 func (b *Backend) get(id string) (*sandbox, error) {

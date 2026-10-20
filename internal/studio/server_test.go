@@ -168,6 +168,7 @@ func TestLaunchValidates(t *testing.T) {
 		"a command from an image":           {Command: []string{"true"}, Image: "img:1"},
 		"a command from a snapshot":         {Command: []string{"true"}, Snapshot: "snp_1"},
 		"a command with a schedule":         {Command: []string{"true"}, SnapshotEverySecs: 1800, SnapshotKeep: 3},
+		"a command with a GPU":              {Command: []string{"true"}, GPUs: 1},
 	} {
 		if r, body := call(t, st.URL, "POST", "/api/runs", testToken, "", req); r.StatusCode != http.StatusCreated {
 			t.Errorf("%s: %d %v", name, r.StatusCode, body)
@@ -175,7 +176,7 @@ func TestLaunchValidates(t *testing.T) {
 		// What was asked for reaches the launcher, which hands it to sandboxd
 		// to decide on, as the CLI's --image and --from-snapshot do.
 		if last.Image != req.Image || last.Snapshot != req.Snapshot ||
-			last.SnapshotEverySecs != req.SnapshotEverySecs || last.SnapshotKeep != req.SnapshotKeep {
+			last.SnapshotEverySecs != req.SnapshotEverySecs || last.SnapshotKeep != req.SnapshotKeep || last.GPUs != req.GPUs {
 			t.Errorf("%s: launched %+v", name, last)
 		}
 	}

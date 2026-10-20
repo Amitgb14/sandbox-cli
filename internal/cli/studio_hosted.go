@@ -224,7 +224,7 @@ func hostedLauncher() studio.Launcher {
 			Name: req.Name, Image: req.Image, SnapshotID: req.Snapshot,
 			SnapshotEverySecs: req.SnapshotEverySecs, SnapshotKeep: req.SnapshotKeep, IdleAction: req.IdleAction,
 			MetricsExport: req.MetricsExport,
-			CPUs:          req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB,
+			CPUs:          req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, GPUs: req.GPUs,
 			Env: map[string]string{},
 		}
 		// The agent's constant settings only. Its EnvAllow names are values

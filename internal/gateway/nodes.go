@@ -147,6 +147,7 @@ func (n *node) candidate() (Candidate, bool) {
 		c.Reserved.CPUs += p.res.CPUs
 		c.Reserved.MemoryMB += p.res.MemoryMB
 		c.Reserved.DiskMB += p.res.DiskMB
+		c.Reserved.GPUs += p.res.GPUs
 	}
 	return c, true
 }

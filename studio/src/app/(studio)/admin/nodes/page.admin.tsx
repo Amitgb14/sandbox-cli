@@ -25,7 +25,8 @@ function used(n: Node): string {
   const s = n.status;
   if (!s) return DASH;
   const cpus = +(s.capacity.cpus - s.free.cpus).toFixed(1);
-  return `${cpus}/${s.capacity.cpus} cpus · ${formatMiB(s.capacity.memory_mb - s.free.memory_mb)}/${formatMiB(s.capacity.memory_mb)}`;
+  const gpus = s.capacity.gpus ? ` · ${s.capacity.gpus - (s.free.gpus ?? 0)}/${s.capacity.gpus} GPUs` : "";
+  return `${cpus}/${s.capacity.cpus} cpus · ${formatMiB(s.capacity.memory_mb - s.free.memory_mb)}/${formatMiB(s.capacity.memory_mb)}${gpus}`;
 }
 
 /**

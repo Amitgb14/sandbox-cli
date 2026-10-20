@@ -12,11 +12,13 @@ import { useInfo, useResize, useResizeInPlace, useTemplates } from "@/lib/api/qu
 import { formatMiB } from "@/lib/format";
 import { overLimits } from "@/lib/templates";
 import { cn } from "@/lib/utils";
+import { GPU_FIXED, hasGPU } from "@/lib/gpu";
 import type { Sandbox } from "@/lib/types";
 
 /** Why a sandbox cannot be resized here, or "" when it can. */
 export function resizeBlocked(sb: Sandbox, caps?: Record<string, boolean>, backend?: string): string {
   const who = backend ?? "This endpoint";
+  if (hasGPU(sb)) return GPU_FIXED;
   if (caps?.resize) return sb.state === "running" ? "" : "Only a running sandbox is resized.";
   if (!caps?.disk_snapshot)
     return `${caps?.memory_snapshot ? `${who} takes memory snapshots, whose copies keep the original's size` : `${who} takes no snapshots to copy it from`}, and a running VM's vCPUs and memory are fixed. Start a new sandbox at the size you need.`;
