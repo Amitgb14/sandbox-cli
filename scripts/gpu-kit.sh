@@ -1,5 +1,6 @@
 #!/bin/sh
-# Build a GPU kit: what a node needs to give a sandbox an NVIDIA GPU
+# Build a GPU kit: what a node needs to give a sandbox a GPU (the vendor whose open kernel
+# modules and driver are fetched below)
 # (docs/roadmap/task-9-gpu-sandboxes.md). Everything in it is built together,
 # because each part must match the others exactly:
 #
@@ -7,10 +8,10 @@
 #                          kernel, with module support added
 #   OUT/rootfs/            what sandboxd adds to a GPU sandbox's root disk, at
 #                          these paths under the guest's /:
-#     usr/lib/sandbox-gpu/   NVIDIA's open kernel modules, built against that
+#     usr/lib/sandbox-gpu/   the vendor's open kernel modules, built against that
 #                            kernel, and modules.list, their load order (read
 #                            by sandbox-guestd)
-#     usr/bin, usr/lib/...   NVIDIA's userspace driver of the same version
+#     usr/bin, usr/lib/...   the vendor's userspace driver of the same version
 #                            (nvidia-smi, libcuda, libnvidia-ml, ...), and its
 #                            OpenGL, EGL and Vulkan drivers, which the image's
 #                            libglvnd and Vulkan loader find through
@@ -22,8 +23,8 @@
 #   scripts/gpu-kit.sh OUT [WORKDIR]
 #
 # Every download is checked against the checksum below before it is used.
-# Nothing here needs root. The kit holds NVIDIA's files as NVIDIA ships them;
-# it is built on the node and never published (NVIDIA's license).
+# Nothing here needs root. The kit holds the vendor's files as it ships them;
+# it is built on the node and never published (the vendor's license).
 #
 # Needs: curl, tar, xz, gcc, make, flex, bison, bc,
 # perl, libelf and openssl headers. About 6 GB in WORKDIR while it builds.
@@ -75,7 +76,7 @@ if [ ! -d "$ksrc" ]; then
 fi
 cp "$work/fc-$FC_TAG-6.1.config" "$ksrc/.config"
 # What the CI config leaves out and a GPU driver needs: loadable modules (the
-# NVIDIA driver is one), and DRM for nvidia-drm and a GPU desktop later.
+# GPU driver is one), and DRM for nvidia-drm and a GPU desktop later.
 # Module signing stays off: the modules are the operator's, loaded by
 # sandbox-guestd only, from the kit.
 (cd "$ksrc" && ./scripts/config \
@@ -88,20 +89,20 @@ for opt in MODULES PVH VIRTIO_PCI VIRTIO_VSOCKETS DRM; do
   grep -q "^CONFIG_$opt=y" "$ksrc/.config" || { log "the kernel config lost CONFIG_$opt"; exit 1; }
 done
 log "building the kernel ($jobs jobs)"
-# modules too, not only modules_prepare: NVIDIA's build checks against the
+# modules too, not only modules_prepare: the vendor's build checks against the
 # Module.symvers that writes.
 make -s -C "$ksrc" -j"$jobs" vmlinux modules
 release=$(make -s -C "$ksrc" kernelrelease)
 
-# --- NVIDIA's open kernel modules ------------------------------------------------
+# --- the vendor's open kernel modules --------------------------------------------
 fetch "https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$NVIDIA_VERSION.tar.gz" \
   "open-gpu-kernel-modules-$NVIDIA_VERSION.tar.gz" "${NVIDIA_OPEN_SHA256:-}"
 osrc="$work/open-gpu-kernel-modules-$NVIDIA_VERSION"
 [ -d "$osrc" ] || tar -C "$work" -xzf "$work/open-gpu-kernel-modules-$NVIDIA_VERSION.tar.gz"
-log "building NVIDIA's open kernel modules against $release"
+log "building the open kernel modules against $release"
 make -s -C "$osrc" -j"$jobs" modules SYSSRC="$ksrc" SYSOUT="$ksrc" >/dev/null
 
-# --- NVIDIA's userspace driver and firmware ---------------------------------------
+# --- the userspace driver and firmware ----------------------------------------
 run="NVIDIA-Linux-x86_64-$NVIDIA_VERSION.run"
 fetch "https://download.nvidia.com/XFree86/Linux-x86_64/$NVIDIA_VERSION/$run" "$run" "$NVIDIA_RUN_SHA256"
 drv="$work/NVIDIA-Linux-x86_64-$NVIDIA_VERSION"
@@ -168,4 +169,4 @@ cat > "$new/kit.json" <<EOF
 EOF
 rm -rf "$out"
 mv "$new" "$out"
-log "kit in $out: kernel $release, NVIDIA $NVIDIA_VERSION"
+log "kit in $out: kernel $release, driver $NVIDIA_VERSION"

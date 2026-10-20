@@ -450,18 +450,22 @@ in `_old/` as reference, to be ported where this design still wants it.
     default 8, and never more than the node has).
   - **Where it runs:** on Cloud Hypervisor rather than Firecracker, with the
     card passed through. sandboxd boots it with the operator's GPU kit,
-    which supplies the kernel and NVIDIA's driver, so images carry no
+    which supplies the kernel and the GPU vendor's driver, so images carry no
     driver.
   - **Serving GPUs:** `sandboxd --gpu 0000:01:00.0 --cloud-hypervisor …
     --gpu-kit …` serves them, all three flags together.
   - **One sandbox per GPU:** each GPU goes to one sandbox at a time and comes
     back when that sandbox is terminated. A create the node has too few free
-    GPUs for is refused `503 unavailable`, not queued.
+    GPUs for is refused `503 unavailable`, not queued. A GPU not ready to be
+    passed through (not bound to `vfio-pci`) is skipped and not counted free,
+    and the refusal says which. `gpu` is offered only by a node given GPUs.
   - **Seeing them:** the sandbox lists its GPUs' PCI addresses in `gpus`, its
     `sandbox.created` event names them, and `GET /v1/node` counts the GPUs
     the node has and how many are free.
   - **A gateway** places a GPU create only on a node with a free GPU, and
-    offers `gpu` when any node has it.
+    offers `gpu` when any node has it. A node that turns out to have none free
+    is skipped for the next GPU node. A negative `cpus`, `memory_mb`,
+    `disk_mb` or `gpus` is refused by the gateway itself (`400`).
   - **Not allowed:** a GPU sandbox cannot be suspended, snapshotted, forked
     or resized. Those requests are `501`, and `idle_action: suspend` or a
     snapshot schedule on the create is `400`.
@@ -471,7 +475,7 @@ in `_old/` as reference, to be ported where this design still wants it.
   - **`sandbox-cli doctor`** reports the GPU limit and how many are free.
   - **Testing without a card:** `sandboxd --backend fake --gpu …` serves
     pretend GPUs.
-  - **Graphics:** the GPU kit (`scripts/gpu-kit.sh`) also has NVIDIA's
+  - **Graphics:** the GPU kit (`scripts/gpu-kit.sh`) also has the vendor's
     OpenGL, EGL and Vulkan drivers, so an image's desktop can draw on the
     card (sandbox-images' workstation image does, through VirtualGL). Rebuild
     a kit made before this.

@@ -82,7 +82,6 @@ func (s *Server) nodeStatus() api.NodeStatus {
 			st.Running++
 		}
 		add(sb.CPUs, sb.MemoryMB, sb.DiskMB, 1)
-		used.GPUs += len(sb.GPUs)
 	}
 	// Pooled sandboxes are booted VMs, ready or still booting, though no
 	// client sees them; they hold their shape's resources all the same.
@@ -105,8 +104,11 @@ func (s *Server) nodeStatus() api.NodeStatus {
 		CPUs:     math.Max(0, s.Capacity.CPUs-used.CPUs),
 		MemoryMB: max(0, s.Capacity.MemoryMB-used.MemoryMB),
 		DiskMB:   max(0, s.Capacity.DiskMB-used.DiskMB),
-		GPUs:     max(0, st.Capacity.GPUs-used.GPUs),
 	}
+	// Free GPUs are the ones a create would be given (gpu.go), so a card not
+	// ready to be passed through is not offered to a gateway.
+	free, _ := s.freeGPUsOf(recs)
+	st.Free.GPUs = len(free)
 
 	if il, ok := s.Backend.(backend.ImageLister); ok {
 		st.Images = il.CachedImages()

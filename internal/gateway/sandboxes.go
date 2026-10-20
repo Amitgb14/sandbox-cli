@@ -118,6 +118,13 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, err.Error())
 	}
 
+	// Refused here, not left to the node: a negative size reserved on a node
+	// (res, below) would add to its free room while the create is in
+	// flight, and a concurrent create could be placed on room that is not
+	// there.
+	if req.CPUs < 0 || req.MemoryMB < 0 || req.DiskMB < 0 || req.GPUs < 0 {
+		return api.Sandbox{}, failWith(http.StatusBadRequest, api.CodeInvalidRequest, "cpus, memory_mb, disk_mb and gpus must not be negative")
+	}
 	want := Want{Image: req.Image, CPUs: req.CPUs, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, GPUs: req.GPUs, Spread: spread}
 	if want.CPUs == 0 {
 		want.CPUs = g.cfg.Defaults.CPUs
@@ -257,14 +264,17 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 	// A node refusing the name (409, someone else's sandbox there has it)
 	// is not the end: names are per user, so the next node is tried. Only an
 	// unpinned create can meet that, since a node's other conflicts are about
-	// volumes, which pin it.
+	// volumes, which pin it. So is a node refusing a GPU create as unavailable
+	// (503): its GPUs were taken, or found not ready, since the status it was
+	// chosen by, and another node's may be free. A node refuses that before
+	// it creates anything, so trying the next makes no second sandbox.
 	var tried []string
-	var conflict []byte // the last node's refusal of the name
+	var refusal *createFail // the last node's refusal another node may not give
 	for {
 		n, pl, err := g.place(want, tried, res)
 		t.mark("placing")
-		if err != nil && conflict != nil {
-			return api.Sandbox{}, &createFail{status: http.StatusConflict, body: conflict}
+		if err != nil && refusal != nil {
+			return api.Sandbox{}, refusal
 		}
 		if err != nil {
 			g.metrics.refused.Inc(refusedCapacity)
@@ -294,10 +304,11 @@ func (g *Gateway) createSpread(ctx context.Context, p Principal, req api.CreateS
 			n.finishIf(pl, false)
 			return api.Sandbox{}, transientFail(http.StatusBadGateway, api.CodeInternal, "node "+n.cfg.Name+" did not answer")
 		}
-		if resp.StatusCode == http.StatusConflict && req.Name != "" && want.Node == "" {
+		if want.Node == "" && ((resp.StatusCode == http.StatusConflict && req.Name != "") ||
+			(resp.StatusCode == http.StatusServiceUnavailable && want.GPUs > 0)) {
 			n.finishIf(pl, false)
 			tried = append(tried, n.cfg.Name)
-			conflict = data
+			refusal = &createFail{status: resp.StatusCode, body: data}
 			continue
 		}
 		if resp.StatusCode != http.StatusCreated {

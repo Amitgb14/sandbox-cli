@@ -54,7 +54,7 @@ exception, not a second default.
 
 ## The GPU kit: the driver is the operator's, not the image's
 
-NVIDIA's kernel modules must match the guest kernel build exactly, and its
+The GPU vendor's kernel modules must match the guest kernel build exactly, and its
 userspace driver (`libcuda`, `libnvidia-ml`, `nvidia-smi`) must match the
 modules exactly. An image cannot know which kernel a node boots, so images do
 not carry the driver. The operator provides a **GPU kit**, built together:
@@ -70,7 +70,7 @@ sandboxd boots GPU sandboxes with the kit's kernel and injects the modules and
 driver files into the root disk, as it injects `sandbox-guestd` today (a disk
 per image × agent × kit, cached the same way). An image needs only the CUDA
 runtime or toolkit it builds against; CUDA's forward compatibility covers a
-newer driver. This is the split NVIDIA's container toolkit makes, for the same
+newer driver. This is the split the vendor's own container toolkit makes, for the same
 reason.
 
 The guest kernel today is Firecracker's CI build, with `# CONFIG_MODULES is not
@@ -97,7 +97,7 @@ sandboxd, and the guest is the VM in any case.
 | # | Phase | Proves | Where |
 |---|---|---|---|
 | 0 | **Host.** IOMMU on; the card and its audio function (one IOMMU group) bound to `vfio-pci`; Cloud Hypervisor installed. A `docs/gpu.md` section and a check script (`sandboxd gpu check <bdf>`): IOMMU group members, driver bound, `/dev/vfio/<group>` | The node can hand the card over | docs, small command |
-| 1 | **GPU kit.** `make gpu-kit`: the guest kernel (Firecracker's CI config, plus `CONFIG_MODULES`, DRM), NVIDIA's open kernel modules built against it, the userspace driver files, `kit.json` | `insmod nvidia.ko` succeeds in a hand-booted Cloud Hypervisor VM with the card | build scripts |
+| 1 | **GPU kit.** `make gpu-kit`: the guest kernel (Firecracker's CI config, plus `CONFIG_MODULES`, DRM), the vendor's open kernel modules built against it, the userspace driver files, `kit.json` | `insmod nvidia.ko` succeeds in a hand-booted Cloud Hypervisor VM with the card | build scripts |
 | 2 | **Backend.** The Linux backend boots a sandbox whose spec has GPUs on Cloud Hypervisor: the kit's kernel, the kit in its root disk, its devices passed through, the jail's uid under the jailer; processes, files, network, keep and terminate as for any sandbox; suspend, snapshot and resize refused (open question 2 replaced the separate backend first planned) | `Backend.Create` of a sandbox with the GPU, then `nvidia-smi` in it (`TestVMCloudHypervisorBackend`); `sandbox-cli run --gpu` needs phase 3 | sandbox-cli |
 | 3 | **API and scheduling.** `gpus: 1` on create; capability `gpu`; `--gpu BDF` (repeatable), `--cloud-hypervisor` and `--gpu-kit DIR` on sandboxd; whole-GPU allocation and release; policy `max_gpus`; refusals (suspend, snapshot, fork, resize); the gateway places GPU sandboxes on nodes with a free GPU; events record the device; `--gpus` on the CLI and in the SDKs | A second create is refused a GPU with a clear error (`503`); the gateway path works | sandbox-cli |
 | 4 | **Studio, doctor.** Studio's launch form and a GPU chip on the sandbox; `sandbox-cli doctor` reports GPUs | — | sandbox-cli |
@@ -122,7 +122,7 @@ spike, on one node with one card, before anything is polished.
 ## What phase 1 found
 
 Checked on the node on 2026-10-18 with Cloud Hypervisor v54.0, the kit's
-kernel (6.1.155 with Firecracker v1.17.0's config plus modules) and NVIDIA
+kernel (6.1.155 with Firecracker v1.17.0's config plus modules) and driver
 610.43.02's open modules, without the card (`TestVMCloudHypervisor`):
 
 - The kit's kernel boots under Cloud Hypervisor and the guest agent answers
@@ -273,17 +273,17 @@ device). amd64 only. It carries no driver: the smoke test fails on a
 
 ## What phase 6 built
 
-- **VirtualGL, not Xorg on the card.** Xorg with NVIDIA's X driver would need
+- **VirtualGL, not Xorg on the card.** Xorg with the vendor's X driver would need
   `nvidia-modeset` and `nvidia-drm`, a monitor faked on a card with none, and
   root to open the display; and a second X server beside the one VNC serves.
   VirtualGL's EGL back end draws a program's OpenGL on the card with no X
   server there and puts each frame on the existing Xvnc display, so the port,
   `sandbox-desktop`'s contract and Studio's Desktop tab do not change. It is
   what TurboVNC's `-vgl` does.
-- **The kit** (`scripts/gpu-kit.sh`) has NVIDIA's OpenGL, EGL and Vulkan
+- **The kit** (`scripts/gpu-kit.sh`) has the vendor's OpenGL, EGL and Vulkan
   drivers (`libEGL_nvidia`, `libGLX_nvidia`, their cores), glvnd's
   `egl_vendor.d/10_nvidia.json` and the Vulkan ICD; the image keeps its own
-  glvnd. About 600 MB. Building it found that four of NVIDIA's libraries are
+  glvnd. About 600 MB. Building it found that four of the vendor's libraries are
   named by their own soname (`libnvidia-glcore.so.610.43.02`): the soname
   link replaced each with a link to itself. They are now skipped, and the
   script fails on any link in the kit that reaches no file.
@@ -299,13 +299,13 @@ device). amd64 only. It carries no driver: the smoke test fails on a
   llvmpipe, and `sandbox-cuda-check` (phase 5) ran right at about 600 GB/s.
 - **What does not draw on the card:** Chromium and Chrome (their GPU process
   refuses VirtualGL's visual and falls back to software), Flatpak apps (their
-  runtime's Mesa), and a Vulkan window (NVIDIA's driver cannot present to
+  runtime's Mesa), and a Vulkan window (the vendor's driver cannot present to
   Xvnc; `vkcube` fails to make its swapchain). Vulkan windows, and with them
   games on Vulkan and Proton, are what is left of "then games".
 
 ## Open questions
 
-1. **Kernel version.** Firecracker's 6.1 config is what boots today; NVIDIA's
+1. **Kernel version.** Firecracker's 6.1 config is what boots today; the vendor's
    current open modules support it, but 6.18 (Firecracker's newer CI config)
    may be the better base for a new kernel. Decide in phase 1 by what builds.
 2. ~~One process or two VMMs per node.~~ **Decided:** one backend, two VMMs.
@@ -314,8 +314,8 @@ device). amd64 only. It carries no driver: the smoke test fails on a
    the backend's already and do not depend on the VMM
    (`internal/backend/firecracker/cloudhv.go`). No routing between backends is
    needed.
-3. **Driver distribution.** NVIDIA's userspace driver may be redistributed under
-   its license only as NVIDIA ships it; the kit is built on the node from
-   NVIDIA's own files, never published by us.
+3. **Driver distribution.** The GPU vendor's userspace driver may be redistributed under
+   its license only as the vendor ships it; the kit is built on the node from
+   the vendor's own files, never published by us.
 4. **Memory accounting.** Pinned memory should count against the node's
    capacity differently from Firecracker's overcommitted memory.

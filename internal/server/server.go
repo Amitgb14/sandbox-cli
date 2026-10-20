@@ -275,6 +275,7 @@ func (s *Server) caps() api.Capabilities {
 	_, caps[api.CapMetrics] = s.usageReader()
 	_, caps[api.CapImages] = s.imageStore()
 	caps[api.CapMetricsExport] = s.canExport()
+	caps[api.CapGPU] = s.servesGPUs()
 	return api.Capabilities{
 		APIVersion:   api.Version,
 		Backend:      s.Backend.Name(),
@@ -318,7 +319,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.GPUs > 0 && !s.Backend.Capabilities()[api.CapGPU] {
+	if req.GPUs > 0 && !s.servesGPUs() {
 		writeErr(w, http.StatusNotImplemented, api.CodeUnsupported, "this endpoint gives sandboxes no GPUs")
 		return
 	}

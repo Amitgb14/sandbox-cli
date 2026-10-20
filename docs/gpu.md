@@ -42,14 +42,14 @@ sandboxd ── Firecracker ──────────────── a s
                          the card, bound to vfio-pci
 ```
 
-**The driver is the node's, not the image's.** NVIDIA's kernel modules must
+**The driver is the node's, not the image's.** The GPU vendor's kernel modules must
 match the guest kernel exactly, and an image cannot know which kernel a node
 boots. The operator builds a **GPU kit** on the node. It has:
 
 - a guest kernel that can load modules;
-- NVIDIA's open kernel modules, built against it;
+- the vendor's open kernel modules, built against it;
 - the matching `nvidia-smi`, `libcuda` and firmware;
-- NVIDIA's OpenGL, EGL and Vulkan drivers, for the desktop.
+- the vendor's OpenGL, EGL and Vulkan drivers, for the desktop.
 
 sandboxd adds the kit to a GPU sandbox's read-only root disk, as it adds the
 guest agent. At boot, the guest agent loads the modules as root, before
@@ -120,7 +120,7 @@ You need an amd64 Linux node with KVM, the IOMMU on (`amd_iommu` is on by
 default; Intel needs `intel_iommu=on`), and a GPU the host's display does not
 use. The steps need root.
 
-**1. Build the kit.** This downloads the kernel source and NVIDIA's driver,
+**1. Build the kit.** This downloads the kernel source and the GPU vendor's driver,
 checks each against a pinned checksum, and builds the modules. It needs a
 kernel build toolchain (gcc, make, flex, bison, perl, and the libelf and
 openssl headers) and about 6 GB of working space while it builds. It leaves a

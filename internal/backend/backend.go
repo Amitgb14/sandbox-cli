@@ -166,6 +166,14 @@ type Snapshotter interface {
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
 }
 
+// GPUChecker can say whether a device is ready to be passed through (bound
+// to vfio-pci, in an IOMMU group with its VFIO node). The server hands out
+// only devices that are, and counts only those as free, so a card set up
+// wrong is skipped rather than given to every create that asks.
+type GPUChecker interface {
+	CheckGPU(addr string) error
+}
+
 // SnapshotLister can say which snapshots it holds on disk, by id. A server
 // that keeps its records across a restart pairs them with its own and deletes
 // the rest: a snapshot no record names is one nobody can use or remove.

@@ -86,6 +86,9 @@ func (b *Backend) checkGPUs(s backend.Spec) error {
 	return nil
 }
 
+// CheckGPU is backend.GPUChecker: the package's CheckGPU.
+func (b *Backend) CheckGPU(addr string) error { return CheckGPU(addr) }
+
 // CheckGPU reports whether a device is ready to be passed through: a PCI
 // address in sysfs's form, bound to vfio-pci, in an IOMMU group whose VFIO
 // node exists. A create checks each of its devices with it, and sandboxd each

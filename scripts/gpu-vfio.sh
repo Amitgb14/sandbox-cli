@@ -27,7 +27,7 @@ members=$(ls "/sys/kernel/iommu_groups/$group/devices")
 
 driver() { [ -e "/sys/bus/pci/devices/$1/driver" ] && basename "$(readlink "/sys/bus/pci/devices/$1/driver")" || echo none; }
 
-# Who has the card open: its NVIDIA nodes, and its DRM nodes.
+# Who has the card open: its /dev/nvidia* nodes, and its DRM nodes.
 users() {
   nodes=""
   for n in /dev/nvidia[0-9]* /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-modeset; do

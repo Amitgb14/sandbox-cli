@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -166,6 +167,16 @@ func TestNoGPUs(t *testing.T) {
 	if err != nil || caps.Has(api.CapGPU) || caps.Limits.MaxGPUs != 0 {
 		t.Fatalf("capabilities: gpu %v, max_gpus %d, %v", caps.Has(api.CapGPU), caps.Limits.MaxGPUs, err)
 	}
+
+	// A backend that can pass GPUs through, given none to pass, is the same:
+	// no gpu advertised, and a request for one unsupported, not invalid.
+	_, c, _ = gpuServer(t, nil, api.CapGPU)
+	if _, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: 1}); !api.IsCode(err, api.CodeUnsupported) {
+		t.Fatalf("gpus on a GPU backend given none: %v", err)
+	}
+	if caps, err := c.Capabilities(ctx); err != nil || caps.Has(api.CapGPU) || caps.Limits.MaxGPUs != 0 {
+		t.Fatalf("a GPU backend given none: gpu %v, max_gpus %d, %v", caps.Has(api.CapGPU), caps.Limits.MaxGPUs, err)
+	}
 }
 
 // A restart that keeps sandboxes keeps their GPUs held: the record names
@@ -221,5 +232,34 @@ func TestMaxGPUsIsTheNodesCount(t *testing.T) {
 	}
 	if _, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: len(testGPUs) + 1}); !api.IsCode(err, api.CodeInvalidRequest) {
 		t.Errorf("more GPUs than the node has: %v, want invalid_request", err)
+	}
+}
+
+// A GPU the backend says is not ready to be passed through is skipped: a
+// create gets the next one, the node counts it as not free, and a create that
+// finds only it says why rather than handing it out to fail.
+func TestGPUNotReadyIsSkipped(t *testing.T) {
+	be, c, _ := gpuServer(t, testGPUs, api.CapGPU)
+	be.SetGPUReady(testGPUs[0], false)
+	ctx := context.Background()
+	node, err := c.Node(ctx)
+	if err != nil || node.Capacity.GPUs != 2 || node.Free.GPUs != 1 {
+		t.Fatalf("with one not ready: capacity %d, free %d, %v", node.Capacity.GPUs, node.Free.GPUs, err)
+	}
+	sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sb.GPUs, testGPUs[1:]) {
+		t.Fatalf("given %v, want the ready one, %v", sb.GPUs, testGPUs[1:])
+	}
+	_, err = c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: 1})
+	if !api.IsCode(err, api.CodeUnavailable) || !strings.Contains(err.Error(), "not ready to be passed through") {
+		t.Fatalf("with only the unready one left: %v", err)
+	}
+	// Bound since, it is handed out.
+	be.SetGPUReady(testGPUs[0], true)
+	if sb, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: 1}); err != nil || !slices.Equal(sb.GPUs, testGPUs[:1]) {
+		t.Fatalf("once ready: %v, %v", sb.GPUs, err)
 	}
 }
