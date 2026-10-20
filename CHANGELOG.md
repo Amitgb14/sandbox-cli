@@ -475,6 +475,19 @@ in `_old/` as reference, to be ported where this design still wants it.
     OpenGL, EGL and Vulkan drivers, so an image's desktop can draw on the
     card (sandbox-images' workstation image does, through VirtualGL). Rebuild
     a kit made before this.
+  - **Metrics of a GPU sandbox:** its samples (`GET …/metrics`) carry a
+    `guest` object with the GPUs' utilisation, memory, temperature and power
+    and the memory the guest uses. The host cannot see into a passed-through
+    card, and holds a GPU sandbox's memory whole from boot, so its
+    `memory_bytes` was always the full allocation (a flat 16 GiB for a
+    16 GiB sandbox) and there were no GPU figures at all. These come from
+    the guest, which could say anything: sandboxd keeps only figures that
+    could be true of what it gave the sandbox, and they are kept apart from
+    what the host measures. Studio's metrics dialog charts them, and labels
+    its memory as the guest's in-use figure with all of it held on the host.
+    It needs the new `sandbox-guestd` (protocol 5) in the sandbox's root
+    disk; an older one gives none. The metrics export does not push them
+    yet.
 - **A sandbox's usage can be pushed to your own OpenTelemetry collector.** A
   create or an update may carry `metrics_export: {endpoint, interval_secs,
   headers}` (capability `metrics_export`). The sandbox's CPU, memory, network

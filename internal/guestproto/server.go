@@ -2,6 +2,7 @@ package guestproto
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,10 @@ type Server struct {
 	// SetClock, when set, sets the guest's wall clock (OpSetClock). Nil
 	// where the agent is not the guest's own (tests), which refuses it.
 	SetClock func(time.Time) error
+	// Stats, when set, is the guest's account of its memory and GPUs
+	// (OpStats). Nil where the agent is not the guest's own (tests), which
+	// refuses it.
+	Stats func(ctx context.Context) (Stats, error)
 
 	smu      sync.Mutex
 	sessions map[string]*session // kept processes, by id (session.go)
@@ -121,6 +126,21 @@ func (s *Server) ServeConn(c io.ReadWriteCloser) {
 			}
 			reply(c, Response{OK: true})
 		}
+	case OpStats:
+		if s.Stats == nil {
+			reply(c, fail(CodeBadRequest, "this guest agent does not report stats"))
+			return
+		}
+		// Bounded here as well as by the host's deadline: the driver's tool is
+		// a process, and a wedged one must not hold the connection open.
+		ctx, cancel := context.WithTimeout(context.Background(), StatsTimeout)
+		defer cancel()
+		st, err := s.Stats(ctx)
+		if err != nil {
+			reply(c, fail(CodeInternal, err.Error()))
+			return
+		}
+		reply(c, Response{OK: true, Stats: &st})
 	default:
 		reply(c, fail(CodeBadRequest, "unknown op "+req.Op))
 	}

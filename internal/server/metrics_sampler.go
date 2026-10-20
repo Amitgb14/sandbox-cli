@@ -12,12 +12,14 @@ import (
 // A sandbox's usage over the last hour, sampled here from what the backend
 // reads on the host — the runtime's own counters on macOS, the VMM's process
 // and tap device on Linux — so nothing in it is the guest's account of
-// itself. One reading per interval for every running sandbox; an hour of
-// samples kept with each, in this process's memory and nowhere else — not in
-// the state directory, not in a record kept across a restart (keep.go). They
-// stay with a terminated sandbox's record, readable, until that record is
-// dropped among the newest keepTerminated, and are gone when sandboxd
-// restarts. A sample is 88 bytes: an hour, about 63 KB a sandbox.
+// itself, except a GPU sandbox's Guest, kept apart under its own name. One
+// reading per interval for every running sandbox; an hour of samples kept
+// with each, in this process's memory and nowhere else — not in the state
+// directory, not in a record kept across a restart (keep.go). They stay with
+// a terminated sandbox's record, readable, until that record is dropped
+// among the newest keepTerminated, and are gone when sandboxd restarts. A
+// sample is 88 bytes, about 63 KB an hour a sandbox; a GPU sandbox's guest
+// account adds some 200 bytes a sample with one GPU, about 150 KB an hour.
 
 // defaultMetricsInterval is how often usage is sampled when the server's
 // MetricsInterval is unset: an hour is 720 samples.
@@ -112,6 +114,7 @@ func (m *metricsState) add(now time.Time, u backend.Usage, cpus float64) {
 		NetRxBytes: u.NetRxBytes, NetTxBytes: u.NetTxBytes,
 		DiskReadBytes: u.DiskReadBytes, DiskWriteBytes: u.DiskWriteBytes,
 		Processes: u.Processes,
+		Guest:     u.Guest,
 	})
 	cut := 0
 	for cut < len(m.samples) && now.Sub(m.samples[cut].Time) > metricsWindow {

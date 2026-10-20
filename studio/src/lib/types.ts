@@ -609,6 +609,30 @@ export interface MetricSample {
   disk_read_bytes: number;
   disk_write_bytes: number;
   processes?: number;
+  /**
+   * A GPU sandbox's guest's own account — the host cannot see into a
+   * passed-through card, and holds such a sandbox's memory whole, so
+   * memory_bytes there is always the limit. The guest's word, bounded by
+   * sandboxd; absent from a sample it did not answer in time.
+   */
+  guest?: GuestSample;
+}
+
+export interface GuestSample {
+  /** What the guest's kernel counts as in use, of memory_total_bytes. */
+  memory_used_bytes?: number;
+  memory_total_bytes?: number;
+  gpus?: GPUSample[];
+}
+
+/** One GPU, from its driver in the guest; a field it did not report is absent. */
+export interface GPUSample {
+  index: number;
+  utilization_percent?: number;
+  memory_used_bytes?: number;
+  memory_total_bytes?: number;
+  temperature_c?: number;
+  power_watts?: number;
 }
 
 export interface MetricsList {

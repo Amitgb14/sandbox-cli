@@ -146,3 +146,41 @@ func TestAnEndedSandboxKeepsItsMetrics(t *testing.T) {
 		t.Fatalf("after it ended: %d samples, %v; want the 2 it had", len(m.Samples), err)
 	}
 }
+
+// A GPU sandbox's sample carries its guest's account apart from the host's
+// reading — memory the host holds whole, beside what the guest uses, and its
+// GPU — and a sandbox without a GPU carries none.
+func TestAGPUSandboxsSampleCarriesItsGuestsAccount(t *testing.T) {
+	be := fake.New(api.CapGPU)
+	s := &Server{Backend: be, Policy: spec.DefaultPolicyFor(be.Capabilities()), Capacity: testCapacity, GPUs: testGPUs[:1],
+		MetricsInterval: time.Hour}
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	c, _ := api.NewClient(ts.URL, "")
+	ctx := context.Background()
+	gpu, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{GPUs: 1, MemoryMB: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := c.CreateSandbox(ctx, api.CreateSandboxRequest{MemoryMB: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sampleMetrics(ctx)
+
+	m, err := c.Metrics(ctx, gpu.ID)
+	if err != nil || len(m.Samples) != 1 {
+		t.Fatalf("GPU sandbox: %+v, %v", m, err)
+	}
+	got := m.Samples[0]
+	if got.MemoryBytes != 4096<<20 || got.Guest == nil || got.Guest.MemoryUsedBytes <= 0 || got.Guest.MemoryUsedBytes >= got.MemoryBytes {
+		t.Fatalf("memory: host %d, guest %+v; want the whole 4 GiB held and less in use", got.MemoryBytes, got.Guest)
+	}
+	if len(got.Guest.GPUs) != 1 || got.Guest.GPUs[0].UtilizationPercent == nil {
+		t.Fatalf("GPUs: %+v", got.Guest.GPUs)
+	}
+	m, err = c.Metrics(ctx, plain.ID)
+	if err != nil || len(m.Samples) != 1 || m.Samples[0].Guest != nil {
+		t.Fatalf("a sandbox without a GPU: %+v, %v", m, err)
+	}
+}

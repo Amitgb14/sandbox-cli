@@ -32,11 +32,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 // Version is sent in a ping reply, so the host can tell an out-of-date guest
 // agent from a broken one.
-const Version = "4"
+const Version = "5"
 
 // Ops.
 const (
@@ -69,7 +70,22 @@ const (
 	// otherwise wake up a night behind — tokens it thinks are fresh, files
 	// dated in the past. Since protocol 4.
 	OpSetClock = "set_clock"
+	// OpStats asks the guest for its own account of its memory and GPUs
+	// (Response.Stats). The host measures everything else about a sandbox
+	// itself; it asks this only of a sandbox with GPUs, which the host cannot
+	// see into (the card is passed through) and whose memory the host holds
+	// whole from boot. Since protocol 5.
+	OpStats = "stats"
 )
+
+// StatsSince is the first protocol Version that has OpStats; an older guest
+// answers it as an unknown op, and the host goes without.
+const StatsSince = 5
+
+// StatsTimeout is how long the guest gives OpStats. The driver's tool can
+// take a second or two to wake an idle card, and a sample is taken every few
+// seconds, so a slower answer is dropped rather than waited for.
+const StatsTimeout = 3 * time.Second
 
 // SetClockSince is the first protocol Version that has OpSetClock; an
 // older guest keeps the clock it had.
@@ -139,6 +155,31 @@ type Response struct {
 	Entries []DirEntry `json:"entries,omitempty"`
 	// Sessions answers OpSessions.
 	Sessions []SessionInfo `json:"sessions,omitempty"`
+	// Stats answers OpStats.
+	Stats *Stats `json:"stats,omitempty"`
+}
+
+// Stats is the guest's account of itself (OpStats). The guest can say
+// anything here, so the host bounds every number before it uses one, and
+// none of it is text: nothing the guest chooses is printed.
+type Stats struct {
+	// From /proc/meminfo: MemTotal and MemAvailable, in bytes.
+	MemTotalBytes     int64 `json:"mem_total_bytes"`
+	MemAvailableBytes int64 `json:"mem_available_bytes"`
+	// GPUs, from the driver; absent where the guest has none or the driver
+	// did not answer.
+	GPUs []GPUStats `json:"gpus,omitempty"`
+}
+
+// GPUStats is one GPU as its driver reports it. A field the driver does not
+// report for this card ("[N/A]") is absent.
+type GPUStats struct {
+	Index              int      `json:"index"`
+	UtilizationPercent *float64 `json:"utilization_percent,omitempty"`
+	MemoryUsedBytes    *int64   `json:"memory_used_bytes,omitempty"`
+	MemoryTotalBytes   *int64   `json:"memory_total_bytes,omitempty"`
+	TemperatureC       *float64 `json:"temperature_c,omitempty"`
+	PowerWatts         *float64 `json:"power_watts,omitempty"`
 }
 
 // DirEntry is one entry of a listing.

@@ -10,6 +10,12 @@ of its own: entries land under `Unreleased` and move under the version of
 
 ## Unreleased
 
+- **A GPU sandbox's metrics show its GPUs, and memory it actually uses.**
+  The dialog has a tile for each GPU (busy %, memory, temperature, power)
+  and charts of its use and memory. The memory chart now shows what the guest
+  uses, not the flat full size the host holds for a GPU sandbox. Both are the
+  guest's figures and are labelled so. See the main
+  [CHANGELOG.md](../CHANGELOG.md).
 - **The Agent tab draws the agent's replies as Markdown.** Tables, lists,
   bold and code showed as their source — rows of pipes, words in stars. HTML
   in a reply stays text, a link is one only to an absolute web or mail

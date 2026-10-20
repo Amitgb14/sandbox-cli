@@ -689,6 +689,34 @@ test("the Playground gives a sandbox a GPU, and its screen offers nothing a GPU 
     await expect(page.getByTitle("GPUs: 0000:01:00.0").first()).toContainText("1 GPU");
     await expect(page.getByRole("button", { name: "Suspend" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Snapshot" })).toHaveCount(0);
+
+    // Its metrics: memory is what the guest says it uses, since the host holds
+    // all of it from boot, and the GPU is read from its driver. Fixed samples,
+    // so the test does not wait on the sampler.
+    const GiB = 1 << 30;
+    const sample = (time: string, util: number) => ({
+      time, cpu_percent: 12, memory_bytes: 4 * GiB, memory_limit_bytes: 4 * GiB,
+      net_rx_bytes: 0, net_tx_bytes: 0, disk_read_bytes: 0, disk_write_bytes: 0, processes: 2,
+      guest: {
+        memory_used_bytes: 1.5 * GiB, memory_total_bytes: 3.8 * GiB,
+        gpus: [{ index: 0, utilization_percent: util, memory_used_bytes: 2 * GiB, memory_total_bytes: 16 * GiB, temperature_c: 45, power_watts: 118.5 }],
+      },
+    });
+    await page.route(`**/v1/sandboxes/${id}/metrics`, (route) =>
+      route.fulfill({ json: { interval_secs: 5, samples: [sample("2026-10-19T09:00:00Z", 20), sample("2026-10-19T09:00:05Z", 37)] } }),
+    );
+    await page.getByRole("button", { name: `Metrics of ${id}` }).first().click();
+    const metrics = page.getByRole("dialog");
+    await expect(metrics.getByText("Memory in use", { exact: true })).toBeVisible();
+    await expect(metrics.getByText("1.5 GiB", { exact: true }).first()).toBeVisible();
+    await expect(metrics.getByText("of 4 GiB, all held on the host")).toBeVisible();
+    await expect(metrics.getByText(/^Memory in use, as the guest reports it, of 4 GiB/)).toBeVisible();
+    await expect(metrics.getByText("GPU 0", { exact: true })).toBeVisible();
+    await expect(metrics.getByText("37%", { exact: true })).toBeVisible();
+    await expect(metrics.getByText("2 GiB of 16 GiB · 45 °C · 119 W")).toBeVisible();
+    await expect(metrics.getByText("GPU, % busy, from its driver in the guest")).toBeVisible();
+    await expect(metrics.getByText("GPU memory, of 16 GiB")).toBeVisible();
+    await page.keyboard.press("Escape");
   } finally {
     await api(`/v1/sandboxes/${id}`, "DELETE");
   }
