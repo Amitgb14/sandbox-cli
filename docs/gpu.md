@@ -101,6 +101,14 @@ is how many whole GPUs the sandbox gets.
   counts each node's GPUs in use.
 - **`sandbox-cli doctor`** says `gpus: up to 8 per sandbox (--gpus); 1 of 1
   free on this node`.
+- **Its metrics:** each sample of `GET …/metrics` has a `guest` object with
+  every GPU's utilisation, memory, temperature and power, and the memory the
+  guest uses ([api/v1.md](api/v1.md#metrics-capability-metrics)). The host
+  can't read these, so the guest agent asks the driver, running `nvidia-smi`
+  as the sandbox user. They are the guest's word and only bounded, so they are
+  fit for watching a sandbox, not for billing or limits. Studio's metrics
+  dialog charts them. They need a `sandbox-guestd` of protocol 5 or later in
+  the root disk; with an older one, there are none.
 
 ## What a GPU sandbox costs
 
@@ -109,7 +117,11 @@ is how many whole GPUs the sandbox gets.
   passed-through device's state, so these are refused as `unsupported`.
 - **Its memory is reserved on the host for its whole life.** VFIO pins all of
   it at boot. A Firecracker sandbox's memory is only used as the guest touches
-  it.
+  it. So the host's figure for a GPU sandbox (`memory_bytes`) is always its
+  full size: a 16 GiB sandbox shows 16 GiB from its first second. What the
+  guest actually uses is in its metrics' `guest.memory_used_bytes`. Give it
+  only the memory its work needs, since that is what the host sets aside, and
+  a GPU sandbox can't be resized later.
 - **The host gives up the card.** While the node serves the GPU, the card is
   bound to `vfio-pci`, so nothing on the host can use it. A display has to run
   on another GPU.

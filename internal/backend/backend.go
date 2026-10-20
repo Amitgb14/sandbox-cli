@@ -335,11 +335,16 @@ type Usage struct {
 	DiskReadBytes    int64
 	DiskWriteBytes   int64
 	Processes        int
+	// Guest is the guest's account of itself, for a sandbox with GPUs, already
+	// bounded by the backend; nil for every other sandbox, and when the guest
+	// did not answer.
+	Guest *api.GuestSample
 }
 
 // UsageReader can say how much of the host each of its running sandboxes is
-// using, from outside the guest. All at once: one reading per sample, however
-// many sandboxes there are.
+// using, from outside the guest — except Usage.Guest, which a GPU sandbox's
+// guest is asked for. All at once: one reading per sample, however many
+// sandboxes there are.
 type UsageReader interface {
 	Usage(ctx context.Context) (map[string]Usage, error)
 }

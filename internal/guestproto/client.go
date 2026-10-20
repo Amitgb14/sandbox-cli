@@ -203,6 +203,24 @@ func (c *Client) SetClock(ctx context.Context, t time.Time) error {
 	return err
 }
 
+// Stats asks the guest for its account of its memory and GPUs (OpStats).
+// What comes back is the guest's word: the caller bounds it before use.
+func (c *Client) Stats(ctx context.Context) (Stats, error) {
+	cn, done, err := c.open(ctx, Request{Op: OpStats})
+	if err != nil {
+		return Stats{}, err
+	}
+	defer done()
+	resp, err := cn.response()
+	if err != nil {
+		return Stats{}, err
+	}
+	if resp.Stats == nil {
+		return Stats{}, &Error{Code: CodeInternal, Message: "the guest agent answered stats with none"}
+	}
+	return *resp.Stats, nil
+}
+
 // List lists a guest directory.
 func (c *Client) List(ctx context.Context, path string) ([]DirEntry, error) {
 	cn, done, err := c.open(ctx, Request{Op: OpList, Path: path})

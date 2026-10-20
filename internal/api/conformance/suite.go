@@ -1745,4 +1745,49 @@ func testGPU(t *testing.T, e *env) {
 	if res := e.run(t, sb.ID, api.RunRequest{Argv: []string{"true"}}); res.ExitCode != 0 {
 		t.Fatalf("true in a GPU sandbox: exit %d", res.ExitCode)
 	}
+	if e.caps.Has(api.CapMetrics) {
+		testGPUMetrics(t, e, sb)
+	}
+}
+
+// testGPUMetrics: a GPU sandbox's samples carry its guest's account — the
+// host can see neither into the card nor how much of the memory it holds the
+// guest uses — and what reaches a client is within what the sandbox was
+// given. The guest's GPUs may be missing from a sample (a driver slow to
+// wake); its memory may not.
+func testGPUMetrics(t *testing.T, e *env, sb api.Sandbox) {
+	ctx := ctxT(t)
+	var guest *api.GuestSample
+	var limit int64
+	for deadline := time.Now().Add(30 * time.Second); guest == nil; {
+		m, err := e.c.Metrics(ctx, sb.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range m.Samples {
+			if s.Guest != nil {
+				guest, limit = s.Guest, s.MemoryLimitBytes
+			}
+		}
+		if guest == nil {
+			if time.Now().After(deadline) {
+				t.Fatalf("no sample of a GPU sandbox carried its guest's account in 30 s (%d samples)", len(m.Samples))
+			}
+			time.Sleep(time.Duration(max(m.IntervalSecs, 1)) * time.Second / 2)
+		}
+	}
+	if guest.MemoryTotalBytes <= 0 || guest.MemoryUsedBytes < 0 || guest.MemoryUsedBytes > guest.MemoryTotalBytes ||
+		(limit > 0 && guest.MemoryTotalBytes > limit) {
+		t.Fatalf("guest memory %d of %d, limit %d", guest.MemoryUsedBytes, guest.MemoryTotalBytes, limit)
+	}
+	if len(guest.GPUs) > len(sb.GPUs) {
+		t.Fatalf("%d GPUs reported for a sandbox given %d", len(guest.GPUs), len(sb.GPUs))
+	}
+	for _, g := range guest.GPUs {
+		if g.Index < 0 || g.Index >= len(sb.GPUs) ||
+			(g.UtilizationPercent != nil && (*g.UtilizationPercent < 0 || *g.UtilizationPercent > 100)) ||
+			(g.MemoryUsedBytes != nil && (g.MemoryTotalBytes == nil || *g.MemoryUsedBytes > *g.MemoryTotalBytes)) {
+			t.Fatalf("GPU sample out of bounds: %+v", g)
+		}
+	}
 }

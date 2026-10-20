@@ -1105,6 +1105,33 @@ type MetricSample struct {
 	DiskReadBytes  int64 `json:"disk_read_bytes"`
 	DiskWriteBytes int64 `json:"disk_write_bytes"`
 	Processes      int   `json:"processes,omitempty"`
+	// Guest is the guest's own account, for a sandbox with GPUs only: the
+	// host cannot see into a passed-through card, and holds such a sandbox's
+	// memory whole from boot, so MemoryBytes there is always the limit. It
+	// is the guest's word, bounded but not checked, and absent from a
+	// sample the guest did not answer in time.
+	Guest *GuestSample `json:"guest,omitempty"`
+}
+
+// GuestSample is what a GPU sandbox's guest says of itself.
+type GuestSample struct {
+	// MemoryUsedBytes is what the guest's kernel counts as in use (total
+	// less available), within MemoryTotalBytes; both absent if it did not say.
+	MemoryUsedBytes  int64       `json:"memory_used_bytes,omitempty"`
+	MemoryTotalBytes int64       `json:"memory_total_bytes,omitempty"`
+	GPUs             []GPUSample `json:"gpus,omitempty"`
+}
+
+// GPUSample is one GPU, from its driver in the guest. A field the driver
+// did not report, or reported out of bounds, is absent.
+type GPUSample struct {
+	// Index is the GPU's number in the guest (nvidia-smi's index), from 0.
+	Index              int      `json:"index"`
+	UtilizationPercent *float64 `json:"utilization_percent,omitempty"`
+	MemoryUsedBytes    *int64   `json:"memory_used_bytes,omitempty"`
+	MemoryTotalBytes   *int64   `json:"memory_total_bytes,omitempty"`
+	TemperatureC       *float64 `json:"temperature_c,omitempty"`
+	PowerWatts         *float64 `json:"power_watts,omitempty"`
 }
 
 // Image is one image a server has, or is installing: GET /v1/images.

@@ -861,6 +861,23 @@ func firstOr(s []string, def string) string {
 	return s[0]
 }
 
+// fakeGuest is a GPU sandbox's guest account, made up as the rest of Usage
+// is: each GPU a 16 GiB card, busier and fuller with each running process.
+func fakeGuest(used, total int64, gpus, running int) *api.GuestSample {
+	g := &api.GuestSample{MemoryUsedBytes: used, MemoryTotalBytes: total}
+	for i := range gpus {
+		util := float64(min(5+30*running, 100))
+		memUsed, memTotal := int64(256+1024*running)<<20, int64(16)<<30
+		temp, power := 35+util/4, 20+util*2
+		g.GPUs = append(g.GPUs, api.GPUSample{
+			Index: i, UtilizationPercent: &util,
+			MemoryUsedBytes: &memUsed, MemoryTotalBytes: &memTotal,
+			TemperatureC: &temp, PowerWatts: &power,
+		})
+	}
+	return g
+}
+
 // Usage is backend.UsageReader with made-up but steady numbers: no VM runs
 // here, so there is nothing to measure, and the server's sampling and the
 // API's shape still need something to carry. CPU time grows by 2% of one
@@ -887,7 +904,14 @@ func (b *Backend) Usage(context.Context) (map[string]backend.Usage, error) {
 			if limit > 0 && mem > limit {
 				mem = limit
 			}
-			out[id] = backend.Usage{CPUUsec: s.used, MemoryBytes: mem, MemoryLimitBytes: limit, Processes: 1 + running}
+			u := backend.Usage{CPUUsec: s.used, MemoryBytes: mem, MemoryLimitBytes: limit, Processes: 1 + running}
+			if len(s.spec.GPUs) > 0 {
+				// As on Linux: the host holds a GPU sandbox's memory whole, and
+				// the guest says what it uses.
+				u.MemoryBytes = limit
+				u.Guest = fakeGuest(mem, limit, len(s.spec.GPUs), running)
+			}
+			out[id] = u
 		}
 		s.mu.Unlock()
 	}

@@ -128,6 +128,7 @@ func serve(args []string) error {
 	}
 	if *root == "/" {
 		s.SetClock = setClock
+		s.Stats = statsFunc(*uid, *gid)
 	}
 	switch {
 	case *stdio:

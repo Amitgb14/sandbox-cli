@@ -20,9 +20,10 @@ const clockTicks = 100
 // Usage is backend.UsageReader, read on the host: the VMM's process for CPU
 // time, resident memory and disk I/O (a guest's memory and disk are the
 // VMM's), and the tap device for network, counted from the guest's side.
-// Nothing here comes from inside the guest. A VM whose counters cannot be
-// read is left out of the reading rather than reported as idle.
-func (b *Backend) Usage(context.Context) (map[string]backend.Usage, error) {
+// Nothing here comes from inside the guest, except a GPU sandbox's Guest
+// (guest_stats.go), asked of its guest and bounded. A VM whose counters
+// cannot be read is left out of the reading rather than reported as idle.
+func (b *Backend) Usage(ctx context.Context) (map[string]backend.Usage, error) {
 	b.mu.Lock()
 	vms := make([]*vm, 0, len(b.vms))
 	for _, v := range b.vms {
@@ -30,10 +31,14 @@ func (b *Backend) Usage(context.Context) (map[string]backend.Usage, error) {
 	}
 	b.mu.Unlock()
 	out := map[string]backend.Usage{}
+	live := vms[:0]
 	for _, v := range vms {
-		if v.pid <= 1 || v.suspended {
-			continue
+		if v.pid > 1 && !v.suspended {
+			live = append(live, v)
 		}
+	}
+	guest := guestUsage(ctx, live)
+	for _, v := range live {
 		u, err := processUsage(fmt.Sprintf("/proc/%d", v.pid))
 		if err != nil {
 			continue
@@ -50,6 +55,7 @@ func (b *Backend) Usage(context.Context) (map[string]backend.Usage, error) {
 				u.NetRxBytes = int64(n)
 			}
 		}
+		u.Guest = guest[v.id]
 		out[v.id] = u
 	}
 	return out, nil
